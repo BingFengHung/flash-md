@@ -1,4 +1,4 @@
-use egui::{Color32, FontId, Stroke, Visuals};
+use egui::{Color32, Stroke, Visuals};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppTheme {
@@ -79,9 +79,9 @@ impl AppTheme {
         visuals.override_text_color = Some(self.text_primary());
         visuals.panel_fill = self.bg_color();
         visuals.window_fill = self.bg_color();
-        visuals.window_stroke = Stroke::new(1.0, self.border_color());
+        visuals.window_stroke = Stroke::new(1.0_f32, self.border_color());
         visuals.widgets.noninteractive.bg_fill = self.card_bg_color();
-        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.border_color());
+        visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, self.border_color());
         visuals.widgets.inactive.bg_fill = self.card_bg_color();
         visuals.widgets.hovered.bg_fill = match self {
             AppTheme::Dark => Color32::from_rgb(50, 50, 56),

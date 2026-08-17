@@ -1,19 +1,19 @@
-use std::path::PathBuf;
 use log::{debug, warn};
-use windows::core::{BSTR, VARIANT};
-use windows::Win32::Foundation::{HWND, MAX_PATH};
+use std::path::PathBuf;
+use windows::core::VARIANT;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_LOCAL_SERVER,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED,
 };
-use windows::Win32::System::Ole::IDispatch;
 use windows::Win32::UI::Shell::{
-    CLSID_ShellWindows, IShellBrowser, IShellFolderViewDual, IShellWindows,
-    FolderItems,
+    FolderItems, IShellFolderViewDual, IShellWindows, ShellWindows, SWC_DESKTOP,
+    SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowTextW,
+    GetClassNameW, GetForegroundWindow, GetParent, GetShellWindow,
 };
+use windows_core::Interface;
 
 /// 取得目前前景視窗（Windows 檔案總管或桌面）中所選取的檔案路徑
 pub fn get_selected_file_from_explorer() -> Option<PathBuf> {
@@ -45,7 +45,7 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
 
     // 建立 ShellWindows 實例
     let shell_windows: IShellWindows = match CoCreateInstance(
-        &CLSID_ShellWindows,
+        &ShellWindows,
         None,
         CLSCTX_LOCAL_SERVER,
     ) {
@@ -83,15 +83,14 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     let shell_hwnd = GetShellWindow();
     if class_str == "Progman" || class_str == "WorkerW" || foreground_hwnd == shell_hwnd {
         debug!("前景為 Windows 桌面，嘗試查詢桌面選取項目...");
-        // 透過 ShellWindows 尋找桌面視窗 (通常索引為 CSIDL_DESKTOP)
         let pvar_loc = VARIANT::from(0i32); // CSIDL_DESKTOP
         let mut phwnd = 0i32;
         if let Ok(desktop_disp) = shell_windows.FindWindowSW(
             &pvar_loc,
             &VARIANT::default(),
-            windows::Win32::UI::Shell::SWC_DESKTOP.0 as i32,
+            SWC_DESKTOP,
             &mut phwnd,
-            windows::Win32::UI::Shell::SWFO_NEEDDISPATCH.0 as i32,
+            SWFO_NEEDDISPATCH,
         ) {
             if let Some(path) = extract_selected_from_folder_view(&desktop_disp) {
                 return Some(path);
@@ -137,7 +136,10 @@ unsafe fn is_child_or_same(child: HWND, parent: HWND) -> bool {
         if curr == parent {
             return true;
         }
-        curr = windows::Win32::UI::WindowsAndMessaging::GetParent(curr);
+        match GetParent(curr) {
+            Ok(p) if p.0 != 0 as _ => curr = p,
+            _ => break,
+        }
     }
     false
 }

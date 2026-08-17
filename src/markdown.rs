@@ -1,12 +1,12 @@
 use crate::theme::AppTheme;
 use egui::{
-    text::LayoutJob, Align, Color32, FontFamily, FontId, Frame, Layout, Margin, Pos2, Rect,
-    Response, RichText, Rounding, Stroke, TextStyle, Ui, Vec2,
+    text::LayoutJob, Align, Color32, FontId, Frame, Layout, Margin,
+    RichText, Rounding, Stroke, Ui, Vec2,
 };
 use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
+use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -305,7 +305,7 @@ impl RenderContext {
                 .fill(self.theme.card_bg_color())
                 .inner_margin(Margin::symmetric(10.0, 6.0))
                 .rounding(Rounding::same(4.0))
-                .stroke(Stroke::new(3.0, self.theme.quote_bar_color()))
+                .stroke(Stroke::new(3.0_f32, self.theme.quote_bar_color()))
                 .show(ui, |ui| {
                     self.render_inline_spans(ui, inlines);
                 });
@@ -326,7 +326,7 @@ impl RenderContext {
                     Frame::none()
                         .fill(bg)
                         .rounding(Rounding::same(4.0))
-                        .stroke(Stroke::new(1.0, border))
+                        .stroke(Stroke::new(1.0_f32, border))
                         .inner_margin(Margin::symmetric(4.0, 1.0))
                         .show(ui, |ui| {
                             ui.label(
@@ -428,7 +428,7 @@ impl RenderContext {
         Frame::none()
             .fill(self.theme.code_bg_color())
             .rounding(Rounding::same(6.0))
-            .stroke(Stroke::new(1.0, self.theme.border_color()))
+            .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
             .inner_margin(Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
                 // 程式碼標頭工具列 (語言名稱 + 複製按鈕)
@@ -530,7 +530,7 @@ impl RenderContext {
         Frame::none()
             .fill(self.theme.card_bg_color())
             .rounding(Rounding::same(6.0))
-            .stroke(Stroke::new(1.0, self.theme.border_color()))
+            .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
             .inner_margin(Margin::same(8.0))
             .show(ui, |ui| {
                 egui::Grid::new("markdown_table_grid")
@@ -539,9 +539,8 @@ impl RenderContext {
                     .show(ui, |ui| {
                         // Header
                         if !self.table_headers.is_empty() {
-                            for (i, header) in self.table_headers.iter().enumerate() {
-                                let align = self.table_alignments.get(i).copied().unwrap_or(Alignment::None);
-                                let mut text = RichText::new(header)
+                            for (_i, header) in self.table_headers.iter().enumerate() {
+                                let text = RichText::new(header)
                                     .strong()
                                     .size(13.5 * self.font_scale)
                                     .color(self.theme.text_primary());
@@ -552,7 +551,7 @@ impl RenderContext {
 
                         // Rows
                         for row in &self.table_rows {
-                            for (i, cell) in row.iter().enumerate() {
+                            for (_i, cell) in row.iter().enumerate() {
                                 let text = RichText::new(cell)
                                     .size(13.0 * self.font_scale)
                                     .color(self.theme.text_secondary());

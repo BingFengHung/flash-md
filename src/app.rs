@@ -6,10 +6,9 @@ use crate::tray::TrayMenuAction;
 use crate::watcher::{FileWatcher, WatcherEvent};
 use crossbeam_channel::Receiver;
 use egui::{
-    Align, Align2, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding,
-    ScrollArea, Stroke, TextEdit, Ui, Vec2, Window,
+    Align, Frame, Layout, Margin, RichText, ScrollArea, Stroke, TextEdit,
 };
-use log::{debug, error, info};
+use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -307,7 +306,7 @@ impl eframe::App for MdPreviewApp {
             .frame(
                 Frame::none()
                     .fill(self.theme.card_bg_color())
-                    .stroke(Stroke::new(1.0, self.theme.border_color()))
+                    .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
                     .inner_margin(Margin::symmetric(14.0, 10.0)),
             )
             .show(ctx, |ui| {
@@ -470,7 +469,7 @@ impl eframe::App for MdPreviewApp {
             .frame(
                 Frame::none()
                     .fill(self.theme.card_bg_color())
-                    .stroke(Stroke::new(1.0, self.theme.border_color()))
+                    .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
                     .inner_margin(Margin::symmetric(14.0, 6.0)),
             )
             .show(ctx, |ui| {
@@ -556,11 +555,9 @@ impl eframe::App for MdPreviewApp {
 }
 
 fn rfd_open_file() -> Option<PathBuf> {
-    // 呼叫 Win32 或輕量對話框選擇檔案
     #[cfg(windows)]
     {
         use std::process::Command;
-        // 使用 powershell OpenFileDialog 作為輕量免額外 C++ 綁定之對話框
         let output = Command::new("powershell")
             .args(&[
                 "-NoProfile",

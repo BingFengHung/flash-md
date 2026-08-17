@@ -1,10 +1,8 @@
 use crossbeam_channel::Sender;
-use log::{error, info};
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use log::error;
+use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use std::thread;
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayMenuAction {
@@ -95,6 +93,7 @@ fn create_default_tray_icon() -> Icon {
 
     for y in 0..height {
         for x in 0..width {
+            // 外框圓角方形與青藍色背景
             let is_border = x == 0 || x == width - 1 || y == 0 || y == height - 1;
             let is_inside = x >= 3 && x < width - 3 && y >= 3 && y < height - 3;
 

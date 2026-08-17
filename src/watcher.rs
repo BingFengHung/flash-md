@@ -2,7 +2,6 @@ use crossbeam_channel::Sender;
 use log::{debug, error, info};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::channel;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
