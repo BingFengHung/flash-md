@@ -7,7 +7,7 @@ use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::UI::Shell::{
-    FolderItems, IShellFolderViewDual, IShellWindows, ShellWindows, SWC_DESKTOP,
+    IShellFolderViewDual, IShellWindows, ShellWindows, SWC_DESKTOP,
     SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{

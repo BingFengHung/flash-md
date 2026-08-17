@@ -819,7 +819,7 @@ impl eframe::App for MdPreviewApp {
                                     let mut text = self.content.clone();
                                     ui.add(
                                         TextEdit::multiline(&mut text)
-                                            .font(font_id)
+                                            .font(font_id.clone())
                                             .layouter(&mut layouter)
                                             .text_color(text_color)
                                             .frame(false)
