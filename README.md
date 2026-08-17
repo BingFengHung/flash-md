@@ -42,7 +42,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ## 📦 Installation & Usage
 
 ### Option 1: Download Pre-built Binary (Recommended)
-Download the latest `flash-md-windows-x86_64.zip` from [GitHub Releases](https://github.com/your-username/flash-md/releases), extract it, and run `flash-md.exe`.
+Download the latest `flash-md-windows-x86_64.zip` from [GitHub Releases](https://github.com/BingFengHung/flash-md/releases), extract it, and run `flash-md.exe`.
 
 ### Option 2: CLI Usage
 ```powershell

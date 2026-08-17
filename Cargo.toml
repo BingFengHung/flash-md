@@ -6,7 +6,7 @@ authors = ["flash-md contributors"]
 description = "A blazing-fast macOS Quick Look style Markdown preview tool for Windows built with Rust & egui."
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/your-username/flash-md"
+repository = "https://github.com/BingFengHung/flash-md"
 keywords = ["markdown", "preview", "quicklook", "windows", "flash-md"]
 categories = ["command-line-utilities", "gui"]
 

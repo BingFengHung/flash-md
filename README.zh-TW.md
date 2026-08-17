@@ -42,7 +42,7 @@
 ## 📦 安裝與使用方式 (Installation & Usage)
 
 ### 方式 1：直接下載發布執行檔 (推薦)
-前往 [GitHub Releases](https://github.com/your-username/flash-md/releases) 頁面下載最新版 `flash-md-windows-x86_64.zip`，解壓縮後執行 `flash-md.exe` 即可常駐於系統匣中。
+前往 [GitHub Releases](https://github.com/BingFengHung/flash-md/releases) 頁面下載最新版 `flash-md-windows-x86_64.zip`，解壓縮後執行 `flash-md.exe` 即可常駐於系統匣中。
 
 ### 方式 2：透過命令列執行
 ```powershell
