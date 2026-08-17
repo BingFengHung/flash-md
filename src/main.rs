@@ -14,7 +14,7 @@ use app::MdPreviewApp;
 use clap::Parser;
 use crossbeam_channel::unbounded;
 use eframe::egui::ViewportBuilder;
-use log::{error, info};
+use log::info;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};

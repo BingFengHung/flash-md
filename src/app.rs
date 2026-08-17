@@ -396,7 +396,10 @@ impl eframe::App for MdPreviewApp {
         }
 
         // 頂部新版本升級橫幅 (若有新版本)
+        let mut dismiss_update = false;
+        let mut do_self_update = false;
         if let Some(ref release) = self.available_update {
+            let release_tag = release.tag_name.clone();
             egui::TopBottomPanel::top("update_banner")
                 .frame(
                     Frame::none()
@@ -407,7 +410,7 @@ impl eframe::App for MdPreviewApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(format!("🎉 發現全新版本 {} (目前為 v{})！", release.tag_name, CURRENT_VERSION))
+                            RichText::new(format!("🎉 發現全新版本 {} (目前為 v{})！", release_tag, CURRENT_VERSION))
                                 .color(self.theme.accent_color())
                                 .strong()
                                 .size(12.5),
@@ -415,18 +418,25 @@ impl eframe::App for MdPreviewApp {
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.button(RichText::new("✕ 稍後").size(11.0)).clicked() {
-                                self.available_update = None;
+                                dismiss_update = true;
                             }
 
                             if ui
                                 .button(RichText::new(" 🚀 一鍵自動升級 ").strong().size(12.0).color(Color32::WHITE))
                                 .clicked()
                             {
-                                self.trigger_self_update();
+                                do_self_update = true;
                             }
                         });
                     });
                 });
+        }
+
+        if dismiss_update {
+            self.available_update = None;
+        }
+        if do_self_update {
+            self.trigger_self_update();
         }
 
         // 頂部現代精緻導航列 (Fluent / macOS 玻璃質感風格)

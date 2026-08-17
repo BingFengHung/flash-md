@@ -1,7 +1,5 @@
-use log::{error, info, warn};
+use log::{info, warn};
 use std::env;
-use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,7 +20,6 @@ pub fn check_latest_release() -> Option<ReleaseInfo> {
 
     #[cfg(windows)]
     {
-        // 透過 PowerShell 查詢 GitHub API (避免額外引入肥重 HTTP/TLS crate)
         let ps_script = format!(
             r#"$ProgressPreference = 'SilentlyContinue';
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
@@ -57,12 +54,12 @@ try {{
                 let html_url = parts[2].trim().to_string();
                 let changelog = parts[3].replace("<BR>", "\n").trim().to_string();
 
-                let remote_ver = tag_name.trim_start_matches('v');
-                if is_newer_version(CURRENT_VERSION, remote_ver) {
+                let remote_ver = tag_name.trim_start_matches('v').to_string();
+                if is_newer_version(CURRENT_VERSION, &remote_ver) {
                     info!("🎉 發現新版本: {} (當前版本: v{})", tag_name, CURRENT_VERSION);
                     return Some(ReleaseInfo {
                         tag_name,
-                        version: remote_ver.to_string(),
+                        version: remote_ver,
                         download_url,
                         html_url,
                         changelog,
@@ -107,7 +104,6 @@ pub fn perform_self_update(release: &ReleaseInfo) -> Result<(), String> {
     }
 
     let current_exe = env::current_exe().map_err(|e| format!("無法取得當前執行檔路徑: {}", e))?;
-    let exe_dir = current_exe.parent().ok_or("無法取得執行檔目錄")?;
 
     info!("開始下載並自動更新至 {}...", release.tag_name);
 

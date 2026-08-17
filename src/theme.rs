@@ -1,5 +1,5 @@
 use egui::{
-    Color32, FontData, FontDefinitions, FontFamily, Margin, Rounding, Stroke, Visuals,
+    Color32, FontData, FontDefinitions, FontFamily, Rounding, Stroke, Visuals,
 };
 use log::{info, warn};
 
