@@ -1,4 +1,4 @@
-use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
+use crate::explorer::{hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
 use crate::markdown::MarkdownRenderer;
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
@@ -231,10 +231,9 @@ impl MdPreviewApp {
         }
     }
 
-    pub fn trigger_hotkey_preview(&mut self, ctx: &Context) {
-        // 從檔案總管或桌面取得選取檔案
-        if let Some(selected_path) = get_selected_file_from_explorer() {
-            info!("快捷鍵觸發，偵測到選取檔案: {:?}", selected_path);
+    pub fn handle_hotkey_preview(&mut self, maybe_path: Option<PathBuf>) {
+        if let Some(selected_path) = maybe_path {
+            info!("快捷鍵觸發，處理選取檔案: {:?}", selected_path);
             if self.visible && self.current_file.as_deref() == Some(&selected_path) {
                 // 如果已經在預覽同一檔案且視窗開啟中，則隱藏 (Quick Look 體驗)
                 self.visible = false;
@@ -253,8 +252,6 @@ impl MdPreviewApp {
                 self.set_toast("⚡ 已開啟 flash-md！(在檔案總管點選 .md 或 .txt 檔案後按 Alt+Space 可直接預覽)".to_string());
             }
         }
-
-        ctx.request_repaint();
     }
 
     pub fn set_toast(&mut self, msg: String) {
@@ -358,8 +355,11 @@ impl eframe::App for MdPreviewApp {
 
         // 處理全域快捷鍵事件
         while let Ok(event) = self.hotkey_rx.try_recv() {
-            if event == HotkeyEvent::TriggerPreview {
-                self.trigger_hotkey_preview(ctx);
+            match event {
+                HotkeyEvent::TriggerPreviewWithFile(maybe_path) => {
+                    self.handle_hotkey_preview(maybe_path);
+                    ctx.request_repaint();
+                }
             }
         }
 

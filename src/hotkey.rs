@@ -1,6 +1,8 @@
+use crate::explorer::{get_selected_file_from_explorer, show_and_focus_app_window};
 use crossbeam_channel::Sender;
 use egui::Context;
 use log::{debug, error, info};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -12,9 +14,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HotkeyEvent {
-    TriggerPreview,
+    TriggerPreviewWithFile(Option<PathBuf>),
 }
 
 static mut GLOBAL_HOTKEY_SENDER: Option<Sender<HotkeyEvent>> = None;
@@ -44,14 +46,20 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
                 if alt_pressed {
                     if is_key_down {
-                        debug!("⚡ 成功攔截 Alt + Space！發送預覽事件...");
+                        debug!("⚡ 成功攔截 Alt + Space！正在讀取選取檔案並喚醒視窗...");
 
-                        // 1. 發送預覽事件至主迴圈 (保持前景焦點在檔案總管以供路徑讀取)
+                        // 1. 先在檔案總管仍處於焦點時提取選取檔案
+                        let selected_file = get_selected_file_from_explorer();
+
+                        // 2. 透過 Win32 原生 ShowWindow(SW_SHOW) 強制喚醒 OS 視窗與 winit 事件迴圈
+                        show_and_focus_app_window();
+
+                        // 3. 發送帶有檔案路徑的預覽事件至主佇列
                         if let Some(ref sender) = GLOBAL_HOTKEY_SENDER {
-                            let _ = sender.send(HotkeyEvent::TriggerPreview);
+                            let _ = sender.send(HotkeyEvent::TriggerPreviewWithFile(selected_file));
                         }
 
-                        // 2. 喚醒 egui 繪製迴圈
+                        // 4. 喚醒 egui 繪製迴圈
                         if let Some(ref ctx_holder) = GLOBAL_CTX_HOLDER {
                             if let Ok(guard) = ctx_holder.lock() {
                                 if let Some(ref ctx) = *guard {
