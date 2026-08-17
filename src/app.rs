@@ -106,6 +106,11 @@ impl MdPreviewApp {
             status_toast: None,
         };
 
+        if !is_visible {
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            hide_app_window();
+        }
+
         // 啟動時在背景默默檢查是否有新版本發布
         let bg_tx = update_tx.clone();
         let bg_ctx_holder = ctx_holder.clone();
@@ -463,8 +468,9 @@ impl eframe::App for MdPreviewApp {
         // 快捷鍵監聽
         self.handle_shortcuts(ctx);
 
-        // 如果視窗處於隱藏狀態，則不進行後續完整 Panel 渲染以節省資源
+        // 如果視窗處於隱藏狀態，則確保 OS 視窗不顯現並直接 return 節省資源
         if !self.visible && !self.is_standalone {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
         }
 

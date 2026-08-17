@@ -91,7 +91,7 @@ fn main() -> eframe::Result<()> {
     // 建立檔案監視器
     let file_watcher = FileWatcher::new(watcher_tx, ctx_holder.clone());
 
-    // 設定 eframe 原生視窗選項 (背景模式下完全隱藏，只有在按下 Alt + Space 時彈出)
+    // 設定 eframe 原生視窗選項 (背景模式下完全不顯示黑框與視窗，真正安靜常駐)
     let native_options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("flash-md - 快捷鍵 Markdown 預覽")
@@ -99,7 +99,8 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([500.0, 400.0])
             .with_decorations(true)
             .with_transparent(false)
-            .with_visible(is_standalone), // 預設背景常駐模式隱藏！
+            .with_visible(is_standalone)
+            .with_active(is_standalone),
         ..Default::default()
     };
 
