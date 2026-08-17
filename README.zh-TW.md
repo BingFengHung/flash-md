@@ -14,8 +14,9 @@
 
 - ⚡ **原生極速渲染**：基於 `egui` 與 `pulldown-cmark` 純 Rust 打造，無 Electron / Chromium 肥大負擔，開檔即顯。
 - 🔍 **智慧檔案總管偵測**：背景常駐並透過 Windows Shell COM 介面，在觸發 `Alt + Space` 時自動取得檔案總管或桌面選取的檔案路徑。
+- 💻 **全語言程式碼語法高亮**：支援 Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, SQL 等 100+ 種程式碼檔案，內建專業行號欄 (Line Numbers Gutter) 與語法著色！
+- 📝 **Markdown / 程式碼 / 純文字智慧三軌分流**：依檔案類型自動選用最佳渲染器，並可隨時按 `Ctrl + M` 一鍵切換。
 - 🎨 **現代深淺色主題**：支援深色 (Dark) 與淺色 (Light) 主題一鍵切換，內建 GitHub 風格精緻排版與語法邊框。
-- 💻 **程式碼語法高亮**：整合 `syntect` 語法高亮引擎，支援 Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, YAML 等數十種語言，並支援一鍵複製程式碼區塊。
 - 🔄 **檔案變更即時熱重載 (Live Reload)**：若預覽中的檔案在 VSCode、Obsidian 或其他編輯器被修改儲存，預覽視窗將自動即時更新。
 - 📌 **視窗置頂與快速控制**：支援 `Esc` 快速隱藏、`Ctrl + P` 視窗置頂、`Ctrl + O` 在系統預設編輯器中開啟、`Ctrl + + / -` 即時縮放文字大小。
 - 📥 **系統匣常駐 (System Tray)**：常駐於 Windows 工作列右下角系統匣，提供豐富捷徑選單。
@@ -29,8 +30,9 @@
 | :--- | :--- |
 | **`Alt + Space`** | **全域快捷鍵**：預覽檔案總管/桌面當前選取的檔案（再次按下可快速收起視窗） |
 | **`Esc`** | 快速隱藏預覽視窗 / 關閉搜尋欄 |
+| **`Ctrl + M`** | **切換檢視模式**：在 Markdown 渲染、程式碼高亮、純文字模式之間循環切換 |
 | **`Ctrl + O`** | 在系統預設應用程式 (如 VSCode / 記事本) 中開啟目前預覽的檔案 |
-| **`Ctrl + Shift + C`** | 一鍵複製目前文件的完整 Markdown 內文至剪貼簿 |
+| **`Ctrl + Shift + C`** | 一鍵複製目前文件的完整內文至剪貼簿 |
 | **`Ctrl + P`** | 切換視窗是否置頂 (Always on Top) |
 | **`Ctrl + +` / `Ctrl + =`** | 放大預覽文字字級 |
 | **`Ctrl + -`** | 縮小預覽文字字級 |

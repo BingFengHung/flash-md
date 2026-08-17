@@ -1,6 +1,6 @@
 use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
-use crate::markdown::MarkdownRenderer;
+use crate::markdown::{get_language_badge, is_code_extension, render_code_viewer, MarkdownRenderer};
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
 use crate::updater::{check_latest_release, perform_self_update, ReleaseInfo, CURRENT_VERSION};
@@ -17,9 +17,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewMode {
     Markdown,
+    Code { lang: String },
     PlainText,
 }
 
@@ -195,14 +196,17 @@ impl MdPreviewApp {
             return;
         }
 
-        // 依據副檔名自動切換為 Markdown 模式或純文字模式
+        // 智慧識別檔案類型：Markdown / 全語言程式碼語法高亮 / 純文字
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+
         if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
             self.view_mode = ViewMode::Markdown;
+        } else if is_code_extension(&ext) {
+            self.view_mode = ViewMode::Code { lang: ext.clone() };
         } else {
             self.view_mode = ViewMode::PlainText;
         }
@@ -235,11 +239,15 @@ impl MdPreviewApp {
                 self.visible = true;
                 show_and_focus_app_window();
                 let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                let mode_name = match self.view_mode {
-                    ViewMode::Markdown => "Markdown 渲染",
-                    ViewMode::PlainText => "純文字模式",
+                let mode_desc = match self.view_mode {
+                    ViewMode::Markdown => "Markdown 渲染".to_string(),
+                    ViewMode::Code { ref lang } => {
+                        let (name, emoji) = get_language_badge(lang);
+                        format!("{} {} 語法高亮", emoji, name)
+                    }
+                    ViewMode::PlainText => "純文字模式".to_string(),
                 };
-                self.set_toast(format!("⚡ 已開啟: {} ({})", fname, mode_name));
+                self.set_toast(format!("⚡ 已開啟: {} ({})", fname, mode_desc));
             }
             Err(e) => {
                 error!("讀取檔案失敗 {:?}: {:?}", path, e);
@@ -272,6 +280,8 @@ impl MdPreviewApp {
                 hide_app_window();
             } else {
                 self.load_file(&selected_path);
+                self.visible = true;
+                show_and_focus_app_window();
             }
         } else {
             // 沒有在檔案總管選取特定檔案
@@ -281,7 +291,7 @@ impl MdPreviewApp {
             } else {
                 self.visible = true;
                 show_and_focus_app_window();
-                self.set_toast("⚡ 已開啟 flash-md！(在檔案總管點選 .md 或 .txt 檔案後按 Alt+Space 可直接預覽)".to_string());
+                self.set_toast("⚡ 已開啟 flash-md！(在檔案總管點選 .md、程式碼或純文字檔案後按 Alt+Space 可直接預覽)".to_string());
             }
         }
     }
@@ -325,14 +335,34 @@ impl MdPreviewApp {
             }
         }
 
-        // Ctrl + M: 切換 Markdown 預覽 / 純文字模式
+        // Ctrl + M: 切換 Markdown 預覽 / 程式碼語法高亮 / 純文字模式
         if input.modifiers.command && input.key_pressed(egui::Key::M) {
+            let ext = self
+                .current_file
+                .as_ref()
+                .and_then(|p| p.extension())
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
             self.view_mode = match self.view_mode {
-                ViewMode::Markdown => ViewMode::PlainText,
+                ViewMode::Markdown => {
+                    if is_code_extension(&ext) {
+                        ViewMode::Code { lang: ext }
+                    } else {
+                        ViewMode::PlainText
+                    }
+                }
+                ViewMode::Code { .. } => ViewMode::PlainText,
                 ViewMode::PlainText => ViewMode::Markdown,
             };
+
             self.set_toast(match self.view_mode {
                 ViewMode::Markdown => "已切換至 Markdown 渲染模式 📄".to_string(),
+                ViewMode::Code { ref lang } => {
+                    let (name, emoji) = get_language_badge(lang);
+                    format!("已切換至 {} {} 語法高亮模式", emoji, name)
+                }
                 ViewMode::PlainText => "已切換至純文字模式 📝".to_string(),
             });
         }
@@ -565,25 +595,45 @@ impl eframe::App for MdPreviewApp {
                         }
                     }
 
-                    // 模式徽章 (可點擊切換 Markdown / 純文字)
+                    // 模式徽章 (支援 Markdown / 語言語法高亮 / 純文字切換)
                     if !self.content.is_empty() {
-                        let (mode_badge, mode_tip) = match self.view_mode {
-                            ViewMode::Markdown => ("📄 Markdown", "目前為 Markdown 渲染模式 (點擊切換為純文字模式 Ctrl+M)"),
-                            ViewMode::PlainText => ("📝 純文字", "目前為純文字模式 (點擊切換為 Markdown 渲染模式 Ctrl+M)"),
+                        let (badge_text, badge_tip) = match self.view_mode {
+                            ViewMode::Markdown => ("📄 Markdown".to_string(), "目前為 Markdown 渲染模式 (點擊切換 Ctrl+M)".to_string()),
+                            ViewMode::Code { ref lang } => {
+                                let (name, emoji) = get_language_badge(lang);
+                                (format!("{} {}", emoji, name), format!("目前為 {} 語法高亮模式 (點擊切換 Ctrl+M)", name))
+                            }
+                            ViewMode::PlainText => ("📝 純文字".to_string(), "目前為純文字模式 (點擊切換 Ctrl+M)".to_string()),
                         };
+
                         let mode_btn = ui.button(
-                            RichText::new(mode_badge)
+                            RichText::new(badge_text)
                                 .size(11.0)
                                 .color(self.theme.accent_color()),
                         );
                         if mode_btn.clicked() {
+                            let ext = self
+                                .current_file
+                                .as_ref()
+                                .and_then(|p| p.extension())
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+
                             self.view_mode = match self.view_mode {
-                                ViewMode::Markdown => ViewMode::PlainText,
+                                ViewMode::Markdown => {
+                                    if is_code_extension(&ext) {
+                                        ViewMode::Code { lang: ext }
+                                    } else {
+                                        ViewMode::PlainText
+                                    }
+                                }
+                                ViewMode::Code { .. } => ViewMode::PlainText,
                                 ViewMode::PlainText => ViewMode::Markdown,
                             };
                         }
                         if mode_btn.hovered() {
-                            mode_btn.on_hover_text(mode_tip);
+                            mode_btn.on_hover_text(badge_tip);
                         }
 
                         // 檔案屬性標籤 (行數、大小、修改時間)
@@ -703,7 +753,7 @@ impl eframe::App for MdPreviewApp {
                         // 開啟檔案按鈕
                         if ui
                             .button(RichText::new(" 📂 開啟... ").size(12.0).color(self.theme.text_secondary()))
-                            .on_hover_text("開啟本機 Markdown 或文字檔案")
+                            .on_hover_text("開啟本機 Markdown 或程式碼檔案")
                             .clicked()
                         {
                             self.open_file_dialog();
@@ -776,7 +826,7 @@ impl eframe::App for MdPreviewApp {
                 });
             });
 
-        // 主預覽渲染檢視區域 (Markdown / 純文字模式)
+        // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 純文字模式)
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
@@ -796,6 +846,14 @@ impl eframe::App for MdPreviewApp {
                                 .show(ui, |ui| {
                                     let renderer = MarkdownRenderer::new(self.theme, self.font_scale);
                                     renderer.render(ui, &self.content);
+                                });
+                        }
+                        ViewMode::Code { ref lang } => {
+                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排)
+                            ScrollArea::both()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang);
                                 });
                         }
                         ViewMode::PlainText => {
@@ -843,7 +901,7 @@ impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!(
-                "flash-md v{}  •  快捷鍵: Alt + Space (快速預覽)  •  Esc (隱藏)  •  Ctrl + M (切換 MD/純文字)  •  Ctrl + O (外部開啟)",
+                "flash-md v{}  •  快捷鍵: Alt + Space (快速預覽)  •  Esc (隱藏)  •  Ctrl + M (切換模式)  •  Ctrl + O (外部開啟)",
                 CURRENT_VERSION
             ))
             .color(self.theme.text_secondary())
@@ -886,7 +944,7 @@ impl MdPreviewApp {
 
                         ui.add_space(8.0);
                         ui.label(
-                            RichText::new("在檔案總管或桌面選取 Markdown 或純文字檔案，按下快捷鍵即可秒開預覽")
+                            RichText::new("在檔案總管或桌面選取 Markdown、程式碼或純文字檔案，按下快捷鍵即可秒開預覽")
                                 .size(13.5)
                                 .color(self.theme.text_secondary()),
                         );
@@ -927,7 +985,7 @@ impl MdPreviewApp {
                         // 特色小標
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new("⚡ 純 Rust 毫秒級渲染  •  📄 Markdown 渲染  •  📝 純文字 TXT  •  🔄 即時熱重載")
+                                RichText::new("⚡ 純 Rust 毫秒級渲染  •  📄 Markdown 渲染  •  💻 全語言程式碼高亮  •  🔄 即時熱重載")
                                     .size(11.5)
                                     .color(self.theme.text_secondary()),
                             );
@@ -963,7 +1021,7 @@ fn rfd_open_file() -> Option<PathBuf> {
             .args(&[
                 "-NoProfile",
                 "-Command",
-                r#"[System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = "Markdown & Text (*.md;*.markdown;*.txt;*.log;*.json;*.toml;*.rs)|*.md;*.markdown;*.txt;*.log;*.json;*.toml;*.rs|All files (*.*)|*.*"; if($d.ShowDialog() -eq "OK"){ Write-Output $d.FileName }"#,
+                r#"[System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = "Markdown & Code Files (*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt)|*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt|All files (*.*)|*.*"; if($d.ShowDialog() -eq "OK"){ Write-Output $d.FileName }"#,
             ])
             .output();
 

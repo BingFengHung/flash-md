@@ -563,3 +563,161 @@ impl RenderContext {
             });
     }
 }
+
+/// 支援全語法高亮 + 行號的獨立程式碼檢視器
+pub fn render_code_viewer(
+    ui: &mut Ui,
+    theme: AppTheme,
+    font_scale: f32,
+    code: &str,
+    extension_or_lang: &str,
+) {
+    let syntax_set = get_syntax_set();
+    let theme_set = get_theme_set();
+
+    let syntect_theme = match theme {
+        AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
+        AppTheme::Light => &theme_set.themes["InspiredGitHub"],
+    };
+
+    let syntax = syntax_set
+        .find_syntax_by_extension(extension_or_lang)
+        .or_else(|| syntax_set.find_syntax_by_token(extension_or_lang))
+        .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
+
+    let mut highlighter = HighlightLines::new(syntax, syntect_theme);
+
+    let line_count = code.lines().count().max(1);
+    let gutter_digits = format!("{}", line_count).len().max(2);
+
+    let font_id = FontId::monospace(13.5 * font_scale);
+    let gutter_color = theme.text_secondary().gamma_multiply(0.6);
+    let border_color = theme.border_color();
+
+    // 容器卡片外框
+    Frame::none()
+        .fill(theme.card_bg_color())
+        .rounding(Rounding::same(8.0))
+        .stroke(Stroke::new(1.0_f32, border_color))
+        .inner_margin(Margin::symmetric(16.0, 14.0))
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                // 1. 行號欄 (Line Numbers Gutter)
+                ui.vertical(|ui| {
+                    let mut gutter_job = LayoutJob::default();
+                    for (i, _) in code.lines().enumerate() {
+                        let line_num_str = format!("{:>width$}\n", i + 1, width = gutter_digits);
+                        gutter_job.append(
+                            &line_num_str,
+                            0.0,
+                            egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color: gutter_color,
+                                line_height: Some(21.0 * font_scale),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    ui.label(gutter_job);
+                });
+
+                // 分隔垂直線
+                ui.add_space(8.0);
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, ui.available_height()), egui::Sense::hover());
+                ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0_f32, border_color));
+                ui.add_space(8.0);
+
+                // 2. 程式碼語法高亮區域
+                ui.vertical(|ui| {
+                    let mut code_job = LayoutJob::default();
+                    for line in code.lines() {
+                        let ranges = highlighter
+                            .highlight_line(line, syntax_set)
+                            .unwrap_or_default();
+
+                        for (style, text) in ranges {
+                            let color = Color32::from_rgb(
+                                style.foreground.r,
+                                style.foreground.g,
+                                style.foreground.b,
+                            );
+
+                            code_job.append(
+                                text,
+                                0.0,
+                                egui::TextFormat {
+                                    font_id: font_id.clone(),
+                                    color,
+                                    line_height: Some(21.0 * font_scale),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                        code_job.append(
+                            "\n",
+                            0.0,
+                            egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color: theme.text_primary(),
+                                line_height: Some(21.0 * font_scale),
+                                ..Default::default()
+                            },
+                        );
+                    }
+
+                    ui.label(code_job);
+                });
+            });
+        });
+}
+
+/// 判斷特定副檔名是否為程式碼/設定檔類型
+pub fn is_code_extension(ext: &str) -> bool {
+    let syntax_set = get_syntax_set();
+    if syntax_set.find_syntax_by_extension(ext).is_some() {
+        return true;
+    }
+    matches!(
+        ext.to_lowercase().as_str(),
+        "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "json" | "toml" | "yaml" | "yml"
+            | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "cs" | "go" | "java" | "kt"
+            | "html" | "css" | "scss" | "sass" | "sql" | "sh" | "bash" | "ps1" | "bat"
+            | "cmd" | "xml" | "svg" | "lua" | "php" | "rb" | "swift" | "dart" | "vue" | "svelte"
+    )
+}
+
+/// 取得語言的美觀顯示名稱與 Emoji 徽章
+pub fn get_language_badge(ext: &str) -> (String, &'static str) {
+    match ext.to_lowercase().as_str() {
+        "rs" => ("Rust".to_string(), "🦀"),
+        "py" => ("Python".to_string(), "🐍"),
+        "js" => ("JavaScript".to_string(), "⚡"),
+        "jsx" => ("React JSX".to_string(), "⚛️"),
+        "ts" => ("TypeScript".to_string(), "🔷"),
+        "tsx" => ("React TSX".to_string(), "⚛️"),
+        "json" => ("JSON".to_string(), "📦"),
+        "toml" => ("TOML".to_string(), "⚙️"),
+        "yaml" | "yml" => ("YAML".to_string(), "📄"),
+        "c" => ("C".to_string(), "📘"),
+        "cpp" | "cc" | "cxx" | "hpp" => ("C++".to_string(), "💠"),
+        "cs" => ("C#".to_string(), "🟣"),
+        "go" => ("Go".to_string(), "🐹"),
+        "java" => ("Java".to_string(), "☕"),
+        "kt" => ("Kotlin".to_string(), "🎯"),
+        "html" => ("HTML".to_string(), "🌐"),
+        "css" => ("CSS".to_string(), "🎨"),
+        "scss" | "sass" => ("SCSS".to_string(), "🎨"),
+        "sql" => ("SQL".to_string(), "🗄️"),
+        "sh" | "bash" => ("Shell".to_string(), "🐚"),
+        "ps1" => ("PowerShell".to_string(), "💻"),
+        "bat" | "cmd" => ("Batch".to_string(), "📜"),
+        "xml" | "svg" => ("XML".to_string(), "📑"),
+        "lua" => ("Lua".to_string(), "🌙"),
+        "php" => ("PHP".to_string(), "🐘"),
+        "rb" => ("Ruby".to_string(), "💎"),
+        "swift" => ("Swift".to_string(), "🐦"),
+        "dart" => ("Dart".to_string(), "🎯"),
+        _ => (ext.to_uppercase(), "💻"),
+    }
+}
+
