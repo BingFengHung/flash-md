@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use windows::core::{w, VARIANT};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_LOCAL_SERVER,
+    CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::UI::Shell::{
@@ -29,13 +29,13 @@ pub fn get_app_hwnd() -> Option<HWND> {
     } else {
         // 嘗試以視窗標題尋找 flash-md HWND
         unsafe {
-            let hwnd = FindWindowW(None, w!("flash-md - 快捷鍵 Markdown 預覽"));
-            if hwnd.0 != 0 as _ {
-                APP_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
-                Some(hwnd)
-            } else {
-                None
+            if let Ok(hwnd) = FindWindowW(None, w!("flash-md - 快捷鍵 Markdown 預覽")) {
+                if hwnd.0 != 0 as _ {
+                    APP_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
+                    return Some(hwnd);
+                }
             }
+            None
         }
     }
 }
