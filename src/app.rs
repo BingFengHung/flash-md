@@ -71,6 +71,8 @@ impl MdPreviewApp {
 
         let (update_tx, update_rx) = unbounded();
 
+        let is_visible = initial_file.is_some() || is_standalone;
+
         let mut app = Self {
             current_file: None,
             content: String::new(),
@@ -80,7 +82,7 @@ impl MdPreviewApp {
             theme,
             font_scale: 1.0,
             always_on_top: false,
-            visible: initial_file.is_some() || is_standalone,
+            visible: is_visible,
             is_standalone,
             search_open: false,
             search_query: String::new(),
@@ -159,7 +161,27 @@ impl MdPreviewApp {
     }
 
     pub fn load_file(&mut self, path: &Path) {
-        info!("載入檔案: {:?}", path);
+        info!("嘗試載入檔案: {:?}", path);
+
+        if path.is_dir() {
+            self.set_toast("已選取資料夾，請在資料夾內選取 Markdown 或文字檔案預覽 📁".to_string());
+            self.visible = true;
+            show_and_focus_app_window();
+            return;
+        }
+
+        let path_str = path.to_string_lossy().to_string();
+        if !path.exists() {
+            if path_str.to_lowercase().contains(".zip\\") || path_str.to_lowercase().contains(".zip/") {
+                self.set_toast("⚠️ 提示：請先將 ZIP 壓縮檔解壓縮後再進行檔案預覽 📦".to_string());
+            } else {
+                self.set_toast(format!("找不到檔案: {:?}", path));
+            }
+            self.visible = true;
+            show_and_focus_app_window();
+            return;
+        }
+
         match fs::read_to_string(path) {
             Ok(text) => {
                 self.line_count = text.lines().count();
@@ -188,11 +210,13 @@ impl MdPreviewApp {
                 self.visible = true;
                 show_and_focus_app_window();
                 let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                self.set_toast(format!("已開啟預覽: {}", fname));
+                self.set_toast(format!("⚡ 已開啟預覽: {}", fname));
             }
             Err(e) => {
                 error!("讀取檔案失敗 {:?}: {:?}", path, e);
                 self.set_toast(format!("無法讀取檔案: {}", e));
+                self.visible = true;
+                show_and_focus_app_window();
             }
         }
     }
@@ -217,8 +241,6 @@ impl MdPreviewApp {
                 hide_app_window();
             } else {
                 self.load_file(&selected_path);
-                self.visible = true;
-                show_and_focus_app_window();
             }
         } else {
             // 沒有在檔案總管選取特定檔案
@@ -358,8 +380,6 @@ impl eframe::App for MdPreviewApp {
             match action {
                 TrayMenuAction::OpenFile => {
                     self.open_file_dialog();
-                    self.visible = true;
-                    show_and_focus_app_window();
                 }
                 TrayMenuAction::ToggleTheme => {
                     self.theme.toggle();

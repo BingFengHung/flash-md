@@ -249,12 +249,77 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
         Err(_) => return None,
     };
 
-    let path_str = path_bstr.to_string();
-    if path_str.is_empty() {
+    let raw_path = path_bstr.to_string();
+    if raw_path.is_empty() {
         return None;
     }
 
-    let path = PathBuf::from(path_str);
-    info!("✅ 成功取得選取檔案路徑: {:?}", path);
+    // 將 Windows COM 可能傳回的 file:/// 或 URL 百分比編碼字串還原為正規系統檔案路徑
+    let path = normalize_explorer_path(&raw_path);
+    info!("✅ 成功解析選取檔案路徑: {:?} (原始字串: {})", path, raw_path);
     Some(path)
+}
+
+/// 正規化檔案總管傳回的路徑（支援 file:/// 去除、URL 百分比解碼如 %20、路徑引號去除）
+pub fn normalize_explorer_path(raw: &str) -> PathBuf {
+    let mut s = raw.trim();
+
+    // 去除前後引號
+    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+        s = &s[1..s.len() - 1];
+    }
+
+    // 去除 file:/// 或 file:// 前綴
+    if s.starts_with("file:///") {
+        s = &s[8..];
+    } else if s.starts_with("file://") {
+        s = &s[7..];
+    }
+
+    // URL 百分比解碼 (%20 -> 空格, %28 -> (, %29 -> ), 等)
+    let decoded = url_decode(s);
+    let decoded_path = PathBuf::from(&decoded);
+
+    if decoded_path.exists() {
+        return decoded_path;
+    }
+
+    let raw_path = PathBuf::from(s);
+    if raw_path.exists() {
+        return raw_path;
+    }
+
+    // 如果都不存在，以解碼後的路徑為準
+    decoded_path
+}
+
+fn url_decode(input: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut chars = input.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                let hex_str = std::str::from_utf8(&[h1, h2]).unwrap_or("");
+                if let Ok(val) = u8::from_str_radix(hex_str, 16) {
+                    bytes.push(val);
+                    continue;
+                } else {
+                    bytes.push(b'%');
+                    bytes.push(h1);
+                    bytes.push(h2);
+                    continue;
+                }
+            } else {
+                bytes.push(b'%');
+                if let Some(h1) = h1 {
+                    bytes.push(h1);
+                }
+                continue;
+            }
+        }
+        bytes.push(b);
+    }
+    String::from_utf8_lossy(&bytes).to_string()
 }

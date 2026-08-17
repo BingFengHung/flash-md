@@ -82,7 +82,7 @@ fn main() -> eframe::Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let ctx_holder = Arc::new(Mutex::new(None));
 
-    // 啟動全域快捷鍵監聽 (Alt + Space 與備用快捷鍵)
+    // 啟動全域快捷鍵掛鉤監聽 (WH_KEYBOARD_LL 攔截並吞噬 Alt + Space)
     let _hotkey_handle = hotkey::start_hotkey_listener(hotkey_tx, ctx_holder.clone(), running.clone());
 
     // 建立系統匣常駐圖示
@@ -91,7 +91,7 @@ fn main() -> eframe::Result<()> {
     // 建立檔案監視器
     let file_watcher = FileWatcher::new(watcher_tx, ctx_holder.clone());
 
-    // 設定 eframe 原生視窗選項 (預設先建立視窗，確保 HWND 註冊與訊息佇列正常運作)
+    // 設定 eframe 原生視窗選項 (背景模式下完全隱藏，只有在按下 Alt + Space 時彈出)
     let native_options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("flash-md - 快捷鍵 Markdown 預覽")
@@ -99,7 +99,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([500.0, 400.0])
             .with_decorations(true)
             .with_transparent(false)
-            .with_visible(true),
+            .with_visible(is_standalone), // 預設背景常駐模式隱藏！
         ..Default::default()
     };
 
