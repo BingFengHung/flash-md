@@ -477,7 +477,7 @@ impl MdPreviewApp {
             }
         }
 
-        // Ctrl + M: 切換 Markdown 預覽 / 程式碼語法高亮 / 純文字模式
+        // Ctrl + M: 切換 Markdown 預覽 / 程式碼語法高亮 / 純文字模式 / 圖片檢視模式
         if input.modifiers.command && input.key_pressed(egui::Key::M) {
             let ext = self
                 .current_file
@@ -489,14 +489,35 @@ impl MdPreviewApp {
 
             self.view_mode = match self.view_mode {
                 ViewMode::Markdown => {
-                    if is_code_extension(&ext) {
+                    if is_image_extension(&ext) {
+                        ViewMode::Image { format: ext }
+                    } else if is_code_extension(&ext) {
                         ViewMode::Code { lang: ext }
                     } else {
                         ViewMode::PlainText
                     }
                 }
-                ViewMode::Code { .. } => ViewMode::PlainText,
-                ViewMode::PlainText => ViewMode::Markdown,
+                ViewMode::Code { .. } => {
+                    if is_image_extension(&ext) {
+                        ViewMode::Image { format: ext }
+                    } else {
+                        ViewMode::PlainText
+                    }
+                }
+                ViewMode::PlainText => {
+                    if is_image_extension(&ext) {
+                        ViewMode::Image { format: ext }
+                    } else {
+                        ViewMode::Markdown
+                    }
+                }
+                ViewMode::Image { .. } => {
+                    if ext == "svg" || !self.content.is_empty() {
+                        ViewMode::Code { lang: "xml".to_string() }
+                    } else {
+                        ViewMode::PlainText
+                    }
+                }
             };
 
             self.set_toast(match self.view_mode {
@@ -506,6 +527,10 @@ impl MdPreviewApp {
                     format!("已切換至 {} {} 語法高亮模式", emoji, name)
                 }
                 ViewMode::PlainText => "已切換至純文字模式 📝".to_string(),
+                ViewMode::Image { ref format } => {
+                    let (name, emoji) = get_image_badge(format);
+                    format!("已切換至 {} {} 預覽模式", emoji, name)
+                }
             });
         }
 
@@ -1331,7 +1356,7 @@ impl MdPreviewApp {
                             let max_h = (available.y - 24.0).max(100.0);
                             img = img.max_size(Vec2::new(max_w, max_h));
                         } else {
-                            img = img.scale(self.image_zoom);
+                            img = img.fit_to_original_size(self.image_zoom);
                         }
 
                         ui.add(img);
