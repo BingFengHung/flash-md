@@ -6,13 +6,16 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED,
 };
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Shell::{
     IShellFolderViewDual, IShellWindows, ShellWindows, SWC_DESKTOP,
     SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow, GetParent, GetShellWindow,
-    SetForegroundWindow, ShowWindow, GA_ROOT, GA_ROOTOWNER, SW_HIDE, SW_RESTORE, SW_SHOW,
+    BringWindowToTop, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow, GetParent,
+    GetShellWindow, GetWindowThreadProcessId, SetForegroundWindow, SetWindowPos, ShowWindow,
+    GA_ROOT, GA_ROOTOWNER, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SW_HIDE, SW_RESTORE, SW_SHOW,
 };
 use windows_core::Interface;
 
@@ -41,13 +44,55 @@ pub fn get_app_hwnd() -> Option<HWND> {
     }
 }
 
-/// 透過 Win32 原生 API 強制顯示並聚焦 flash-md 視窗
+/// 透過 Win32 原生 API 強制將 flash-md 視窗跳至最上層並取得焦點 (破除 Windows 前景鎖定限制)
 pub fn show_and_focus_app_window() {
     if let Some(hwnd) = get_app_hwnd() {
         unsafe {
+            let fg_hwnd = GetForegroundWindow();
+            let fg_thread = if fg_hwnd.0 != 0 as _ {
+                GetWindowThreadProcessId(fg_hwnd, None)
+            } else {
+                0
+            };
+            let cur_thread = GetCurrentThreadId();
+
+            // 1. 綁定執行緒輸入權限 (獲得 Windows 前景焦點切換許可)
+            if fg_thread != 0 && fg_thread != cur_thread {
+                let _ = AttachThreadInput(cur_thread, fg_thread, true);
+            }
+
+            // 2. 顯示並還原視窗
             let _ = ShowWindow(hwnd, SW_RESTORE);
             let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = BringWindowToTop(hwnd);
+
+            // 3. 瞬間切換為 TOPMOST 彈至最前端，再還原為一般層級
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            );
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            );
+
+            // 4. 設定為前景焦點視窗
             let _ = SetForegroundWindow(hwnd);
+
+            // 5. 解除輸入綁定
+            if fg_thread != 0 && fg_thread != cur_thread {
+                let _ = AttachThreadInput(cur_thread, fg_thread, false);
+            }
         }
     }
 }
