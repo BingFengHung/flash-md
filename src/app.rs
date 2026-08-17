@@ -1,12 +1,13 @@
 use crate::explorer::get_selected_file_from_explorer;
 use crate::hotkey::HotkeyEvent;
 use crate::markdown::MarkdownRenderer;
-use crate::theme::AppTheme;
+use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
 use crate::watcher::{FileWatcher, WatcherEvent};
 use crossbeam_channel::Receiver;
 use egui::{
-    Align, Frame, Layout, Margin, RichText, ScrollArea, Stroke, TextEdit,
+    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
+    TextEdit, Vec2,
 };
 use log::{error, info};
 use std::fs;
@@ -46,6 +47,9 @@ impl MdPreviewApp {
         tray_rx: Receiver<TrayMenuAction>,
         file_watcher: FileWatcher,
     ) -> Self {
+        // 載入 Windows 繁體中文與 Emoji 系統字型 (徹底解決方塊字問題)
+        setup_system_cjk_fonts(&cc.egui_ctx);
+
         let theme = AppTheme::Dark;
         theme.apply_to_ctx(&cc.egui_ctx);
 
@@ -84,7 +88,7 @@ impl MdPreviewApp {
                 self.content = text;
                 self.current_file = Some(path.to_path_buf());
 
-                // 檔案資訊
+                // 檔案元資訊計算
                 if let Ok(metadata) = fs::metadata(path) {
                     let len = metadata.len();
                     self.file_size_str = if len < 1024 {
@@ -104,7 +108,8 @@ impl MdPreviewApp {
                 // 啟動變更監視
                 self.file_watcher.watch_file(path);
                 self.visible = true;
-                self.set_toast(format!("已載入: {}", path.file_name().and_then(|f| f.to_str()).unwrap_or("")));
+                let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                self.set_toast(format!("已開啟: {}", fname));
             }
             Err(e) => {
                 error!("讀取檔案失敗 {:?}: {:?}", path, e);
@@ -118,7 +123,7 @@ impl MdPreviewApp {
             if let Ok(text) = fs::read_to_string(&path) {
                 self.line_count = text.lines().count();
                 self.content = text;
-                self.set_toast("檔案已自動即時重新整理 ⚡".to_string());
+                self.set_toast("檔案已自動即時同步更新 ⚡".to_string());
             }
         }
     }
@@ -147,7 +152,6 @@ impl MdPreviewApp {
                     self.visible = true;
                 }
             } else {
-                // 若為其他檔案或無副檔名，依舊嘗試以文字/Markdown 預覽
                 if self.visible && self.current_file.as_deref() == Some(&selected_path) {
                     self.visible = false;
                 } else {
@@ -156,7 +160,6 @@ impl MdPreviewApp {
                 }
             }
         } else if self.visible {
-            // 沒有選取檔案但視窗開啟中，按下快捷鍵則隱藏視窗
             self.visible = false;
         }
     }
@@ -199,11 +202,11 @@ impl MdPreviewApp {
             }
         }
 
-        // Ctrl + C: 複製全文
+        // Ctrl + Shift + C: 複製全文
         if input.modifiers.command && input.modifiers.shift && input.key_pressed(egui::Key::C) {
             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                 let _ = clipboard.set_text(self.content.clone());
-                self.set_toast("已複製全文到剪貼簿 📋".to_string());
+                self.set_toast("已複製完整 Markdown 內文至剪貼簿 📋".to_string());
             }
         }
 
@@ -229,9 +232,9 @@ impl MdPreviewApp {
                 },
             ));
             self.set_toast(if self.always_on_top {
-                "視窗置頂: 開啟 📌".to_string()
+                "視窗置頂: 已開啟 📌".to_string()
             } else {
-                "視窗置頂: 關閉".to_string()
+                "視窗置頂: 已關閉".to_string()
             });
         }
     }
@@ -281,7 +284,7 @@ impl eframe::App for MdPreviewApp {
                     ));
                 }
                 TrayMenuAction::About => {
-                    self.set_toast("flash-md v0.2.4 - 快捷鍵 Alt+Space 閃電預覽 Markdown ⚡".to_string());
+                    self.set_toast("flash-md - 快捷鍵 Alt+Space 閃電預覽 Markdown ⚡".to_string());
                     self.visible = true;
                 }
                 TrayMenuAction::Exit => {
@@ -293,7 +296,7 @@ impl eframe::App for MdPreviewApp {
         // 快捷鍵監聽
         self.handle_shortcuts(ctx);
 
-        // 如果視窗隱藏且非單獨預覽模式，最小化繪製負擔
+        // 視窗可見性狀態管理
         if !self.visible && !self.is_standalone {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
@@ -301,72 +304,79 @@ impl eframe::App for MdPreviewApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
 
-        // 頂部導航與工具列
+        // 頂部現代精緻導航列 (Fluent / macOS 玻璃質感風格)
         egui::TopBottomPanel::top("top_header")
             .frame(
                 Frame::none()
                     .fill(self.theme.card_bg_color())
                     .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
-                    .inner_margin(Margin::symmetric(14.0, 10.0)),
+                    .inner_margin(Margin::symmetric(16.0, 10.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    // 左側：檔案標題與元資訊
+                    // 左側：閃電標誌與檔案資訊
+                    ui.label(
+                        RichText::new("⚡")
+                            .size(16.0)
+                            .color(self.theme.accent_color())
+                            .strong(),
+                    );
+
                     let file_name = self
                         .current_file
                         .as_ref()
                         .and_then(|p| p.file_name())
                         .and_then(|s| s.to_str())
-                        .unwrap_or("未選擇檔案 (按 Alt + Space 或開啟檔案)");
-
-                    ui.label(
-                        RichText::new("⚡")
-                            .size(16.0)
-                            .color(self.theme.accent_color()),
-                    );
+                        .unwrap_or("flash-md 預覽器");
 
                     let title_resp = ui.button(
                         RichText::new(file_name)
                             .strong()
-                            .size(14.5)
+                            .size(14.0)
                             .color(self.theme.text_primary()),
                     );
 
                     if title_resp.clicked() {
                         if let Some(ref path) = self.current_file {
-                            // 點擊複製完整路徑
                             if let Ok(mut cb) = arboard::Clipboard::new() {
                                 let _ = cb.set_text(path.to_string_lossy().to_string());
-                                self.set_toast("已複製檔案路徑 📁".to_string());
+                                self.set_toast("已複製檔案完整路徑 📁".to_string());
                             }
                         }
                     }
 
                     if title_resp.hovered() {
                         if let Some(ref path) = self.current_file {
-                            title_resp.on_hover_text(format!("完整路徑: {:?}\n(點擊複製路徑)", path));
+                            title_resp.on_hover_text(format!("完整路徑:\n{:?}\n(點擊複製路徑)", path));
                         }
                     }
 
-                    // 檔案徽章 (行數, 大小, 時間)
+                    // 檔案屬性標籤 (行數、大小、修改時間)
                     if !self.content.is_empty() {
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new(format!(
-                                "{} 行 • {} • {}",
-                                self.line_count, self.file_size_str, self.last_modified_str
-                            ))
-                            .size(11.5)
-                            .color(self.theme.text_secondary()),
-                        );
+                        ui.add_space(6.0);
+                        Frame::none()
+                            .fill(self.theme.code_bg_color())
+                            .rounding(Rounding::same(4.0))
+                            .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
+                            .inner_margin(Margin::symmetric(6.0, 2.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} 行  •  {}  •  {}",
+                                        self.line_count, self.file_size_str, self.last_modified_str
+                                    ))
+                                    .size(11.0)
+                                    .color(self.theme.text_secondary()),
+                                );
+                            });
                     }
 
-                    // 右側功能按鈕列
+                    // 右側功能按鈕列 (簡約現代圖示按鈕)
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         // 關閉按鈕
                         if ui
-                            .button(RichText::new("✕").size(14.0).color(self.theme.text_secondary()))
-                            .on_hover_text("隱藏視窗 (Esc)")
+                            .button(RichText::new(" ✕ ").size(13.0).color(self.theme.text_secondary()))
+                            .on_hover_text("關閉 / 隱藏預覽 (Esc)")
                             .clicked()
                         {
                             self.visible = false;
@@ -375,16 +385,16 @@ impl eframe::App for MdPreviewApp {
                             }
                         }
 
-                        // 置頂按鈕
-                        let pin_text = if self.always_on_top { "📌 置頂中" } else { "📌 置頂" };
+                        // 置頂狀態按鈕
+                        let pin_color = if self.always_on_top {
+                            self.theme.accent_color()
+                        } else {
+                            self.theme.text_secondary()
+                        };
                         let pin_btn = ui.button(
-                            RichText::new(pin_text)
-                                .size(12.5)
-                                .color(if self.always_on_top {
-                                    self.theme.accent_color()
-                                } else {
-                                    self.theme.text_secondary()
-                                }),
+                            RichText::new(if self.always_on_top { " 📌 置頂中 " } else { " 📌 置頂 " })
+                                .size(12.0)
+                                .color(pin_color),
                         );
                         if pin_btn.clicked() {
                             self.always_on_top = !self.always_on_top;
@@ -396,14 +406,18 @@ impl eframe::App for MdPreviewApp {
                                 },
                             ));
                         }
+                        if pin_btn.hovered() {
+                            pin_btn.on_hover_text("切換視窗置頂 (Ctrl + P)");
+                        }
 
-                        // 主題切換
-                        let theme_icon = match self.theme {
-                            AppTheme::Dark => "☀️ 淺色",
-                            AppTheme::Light => "🌙 深色",
+                        // 主題切換按鈕
+                        let (theme_icon, theme_tip) = match self.theme {
+                            AppTheme::Dark => (" ☀️ 淺色 ", "切換為淺色主題"),
+                            AppTheme::Light => (" 🌙 深色 ", "切換為深色主題"),
                         };
                         if ui
-                            .button(RichText::new(theme_icon).size(12.5))
+                            .button(RichText::new(theme_icon).size(12.0).color(self.theme.text_secondary()))
+                            .on_hover_text(theme_tip)
                             .clicked()
                         {
                             self.theme.toggle();
@@ -412,7 +426,7 @@ impl eframe::App for MdPreviewApp {
 
                         // 外部編輯器開啟
                         if ui
-                            .button(RichText::new("🚀 編輯器開啟").size(12.5))
+                            .button(RichText::new(" 🚀 編輯器 ").size(12.0).color(self.theme.text_secondary()))
                             .on_hover_text("在系統預設編輯器中開啟 (Ctrl + O)")
                             .clicked()
                         {
@@ -421,21 +435,31 @@ impl eframe::App for MdPreviewApp {
                             }
                         }
 
-                        // 複製內容
+                        // 複製全文按鈕
                         if ui
-                            .button(RichText::new("📋 複製全文").size(12.5))
+                            .button(RichText::new(" 📋 複製 ").size(12.0).color(self.theme.text_secondary()))
                             .on_hover_text("複製全部 Markdown 內文 (Ctrl + Shift + C)")
                             .clicked()
                         {
                             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                 let _ = clipboard.set_text(self.content.clone());
-                                self.set_toast("已複製全文到剪貼簿 📋".to_string());
+                                self.set_toast("已複製全文至剪貼簿 📋".to_string());
                             }
                         }
 
-                        // 開啟檔案
+                        // 搜尋按鈕
                         if ui
-                            .button(RichText::new("📂 開啟...").size(12.5))
+                            .button(RichText::new(" 🔍 尋找 ").size(12.0).color(self.theme.text_secondary()))
+                            .on_hover_text("搜尋關鍵字 (Ctrl + F)")
+                            .clicked()
+                        {
+                            self.search_open = !self.search_open;
+                        }
+
+                        // 開啟檔案按鈕
+                        if ui
+                            .button(RichText::new(" 📂 開啟... ").size(12.0).color(self.theme.text_secondary()))
+                            .on_hover_text("開啟本機 Markdown 檔案")
                             .clicked()
                         {
                             self.open_file_dialog();
@@ -443,19 +467,16 @@ impl eframe::App for MdPreviewApp {
                     });
                 });
 
-                // 搜尋條 (Ctrl + F)
+                // 搜尋列展開區 (Ctrl + F)
                 if self.search_open {
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("🔍 尋找:").size(13.0));
-                        let response = ui.add(
+                        ui.label(RichText::new("🔍 尋找內文:").size(12.5).color(self.theme.accent_color()));
+                        ui.add(
                             TextEdit::singleline(&mut self.search_query)
-                                .hint_text("輸入搜尋關鍵字...")
-                                .desired_width(260.0),
+                                .hint_text("輸入關鍵字...")
+                                .desired_width(280.0),
                         );
-                        if response.changed() {
-                            // 可擴展標亮功能
-                        }
                         if ui.button(RichText::new("✕").size(11.0)).clicked() {
                             self.search_open = false;
                             self.search_query.clear();
@@ -470,7 +491,7 @@ impl eframe::App for MdPreviewApp {
                 Frame::none()
                     .fill(self.theme.card_bg_color())
                     .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
-                    .inner_margin(Margin::symmetric(14.0, 6.0)),
+                    .inner_margin(Margin::symmetric(16.0, 6.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -479,17 +500,17 @@ impl eframe::App for MdPreviewApp {
                             ui.label(
                                 RichText::new(msg)
                                     .color(self.theme.accent_color())
+                                    .strong()
                                     .size(12.0),
                             );
+                        } else {
+                            self.render_bottom_tips(ui);
                         }
                     } else {
-                        ui.label(
-                            RichText::new("快捷鍵: Alt + Space (預覽選取檔案) | Esc (隱藏) | Ctrl+O (開啟編輯器)")
-                                .color(self.theme.text_secondary())
-                                .size(11.5),
-                        );
+                        self.render_bottom_tips(ui);
                     }
 
+                    // 右側縮放控制
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let zoom_str = format!("{}%", (self.font_scale * 100.0).round() as u32);
                         ui.label(
@@ -498,11 +519,14 @@ impl eframe::App for MdPreviewApp {
                                 .size(11.5),
                         );
 
-                        if ui.small_button("+").clicked() {
+                        if ui.small_button(" + ").on_hover_text("放大字體 (Ctrl + +)").clicked() {
                             self.font_scale = (self.font_scale + 0.1).min(2.0);
                         }
-                        if ui.small_button("-").clicked() {
+                        if ui.small_button(" − ").on_hover_text("縮小字體 (Ctrl + -)").clicked() {
                             self.font_scale = (self.font_scale - 0.1).max(0.6);
+                        }
+                        if ui.small_button(" 1:1 ").on_hover_text("重設字體 (Ctrl + 0)").clicked() {
+                            self.font_scale = 1.0;
                         }
                     });
                 });
@@ -513,35 +537,12 @@ impl eframe::App for MdPreviewApp {
             .frame(
                 Frame::none()
                     .fill(self.theme.bg_color())
-                    .inner_margin(Margin::symmetric(24.0, 18.0)),
+                    .inner_margin(Margin::symmetric(32.0, 20.0)),
             )
             .show(ctx, |ui| {
                 if self.content.is_empty() {
-                    // 空狀態導引
-                    ui.centered_and_justified(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(80.0);
-                            ui.label(
-                                RichText::new("⚡ flash-md")
-                                    .size(28.0)
-                                    .strong()
-                                    .color(self.theme.accent_color()),
-                            );
-                            ui.add_space(10.0);
-                            ui.label(
-                                RichText::new("在 Windows 檔案總管或桌面選取 .md 檔案，按下 Alt + Space 即可閃電預覽！")
-                                    .size(15.0)
-                                    .color(self.theme.text_secondary()),
-                            );
-                            ui.add_space(20.0);
-                            if ui
-                                .button(RichText::new("📂 選擇並開啟 Markdown 檔案").size(14.0))
-                                .clicked()
-                            {
-                                self.open_file_dialog();
-                            }
-                        });
-                    });
+                    // 極具現代質感的空狀態卡片介面 (Raycast / Linear Style)
+                    self.render_empty_state(ui);
                 } else {
                     ScrollArea::vertical()
                         .auto_shrink([false, false])
@@ -552,6 +553,119 @@ impl eframe::App for MdPreviewApp {
                 }
             });
     }
+}
+
+impl MdPreviewApp {
+    fn render_bottom_tips(&self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("快捷鍵: Alt + Space (快速預覽)  •  Esc (隱藏)  •  Ctrl + O (外部開啟)  •  Ctrl + Shift + C (複製全文)")
+                .color(self.theme.text_secondary())
+                .size(11.5),
+        );
+    }
+
+    fn render_empty_state(&mut self, ui: &mut egui::Ui) {
+        ui.centered_and_justified(|ui| {
+            Frame::none()
+                .fill(self.theme.card_bg_color())
+                .rounding(Rounding::same(12.0))
+                .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
+                .inner_margin(Margin::symmetric(40.0, 36.0))
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        // 閃電發光徽章
+                        Frame::none()
+                            .fill(self.theme.accent_bg())
+                            .rounding(Rounding::same(24.0))
+                            .stroke(Stroke::new(1.5_f32, self.theme.accent_color()))
+                            .inner_margin(Margin::symmetric(16.0, 10.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new("⚡ flash-md")
+                                        .size(24.0)
+                                        .strong()
+                                        .color(self.theme.accent_color()),
+                                );
+                            });
+
+                        ui.add_space(16.0);
+
+                        ui.label(
+                            RichText::new("Windows 快捷鍵 Markdown 閃電預覽")
+                                .size(17.0)
+                                .strong()
+                                .color(self.theme.text_primary()),
+                        );
+
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new("在檔案總管或桌面選取任何 Markdown 檔案，按下快捷鍵即可秒開預覽")
+                                .size(13.5)
+                                .color(self.theme.text_secondary()),
+                        );
+
+                        ui.add_space(20.0);
+
+                        // 擬真實體鍵盤按鍵 UI
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            render_keycap(ui, self.theme, "Alt");
+                            ui.label(RichText::new("+").size(15.0).color(self.theme.text_secondary()));
+                            render_keycap(ui, self.theme, "Space");
+                        });
+
+                        ui.add_space(24.0);
+
+                        // 選擇檔案按鈕
+                        let browse_btn = ui.add_sized(
+                            Vec2::new(200.0, 36.0),
+                            egui::Button::new(
+                                RichText::new("📂 瀏覽並開啟 Markdown 檔案")
+                                    .size(13.5)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(self.theme.accent_color())
+                            .rounding(Rounding::same(8.0)),
+                        );
+
+                        if browse_btn.clicked() {
+                            self.open_file_dialog();
+                        }
+
+                        ui.add_space(18.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+
+                        // 特色小標
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("⚡ 純 Rust 毫秒級渲染  •  🔄 即時熱重載  •  🎨 語法高亮")
+                                    .size(11.5)
+                                    .color(self.theme.text_secondary()),
+                            );
+                        });
+                    });
+                });
+        });
+    }
+}
+
+/// 繪製擬真鍵盤按鍵 (Keycap) 元件
+fn render_keycap(ui: &mut egui::Ui, theme: AppTheme, key_text: &str) {
+    Frame::none()
+        .fill(theme.code_bg_color())
+        .rounding(Rounding::same(6.0))
+        .stroke(Stroke::new(1.0_f32, theme.border_color()))
+        .inner_margin(Margin::symmetric(12.0, 6.0))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(key_text)
+                    .font(FontId::monospace(13.0))
+                    .strong()
+                    .color(theme.accent_color()),
+            );
+        });
 }
 
 fn rfd_open_file() -> Option<PathBuf> {

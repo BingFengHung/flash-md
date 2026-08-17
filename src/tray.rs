@@ -21,7 +21,7 @@ impl TrayManager {
     pub fn new(action_sender: Sender<TrayMenuAction>) -> Option<Self> {
         let menu = Menu::new();
 
-        let title_item = MenuItem::new("flash-md v0.2.4 (Alt + Space)", false, None);
+        let title_item = MenuItem::new("flash-md (Alt + Space)", false, None);
         let open_item = MenuItem::new("📂 開啟 Markdown 檔案...", true, None);
         let theme_item = MenuItem::new("🎨 切換深淺色主題", true, None);
         let pin_item = MenuItem::new("📌 切換視窗置頂", true, None);
@@ -85,30 +85,55 @@ impl TrayManager {
     }
 }
 
-/// 產生一個簡約美觀的預設 32x32 RGBA 圖示 (青藍閃電方塊)
+/// 產生精緻的 32x32 閃電發光圖示 (Squircle 藍色圓角背景 + 亮白閃電符號)
 fn create_default_tray_icon() -> Icon {
-    let width = 32;
-    let height = 32;
-    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    let width = 32usize;
+    let height = 32usize;
+    let mut rgba = Vec::with_capacity(width * height * 4);
 
+    // 預先計算 32x32 閃電形狀點陣圖
     for y in 0..height {
         for x in 0..width {
-            // 外框圓角方形與青藍色背景
-            let is_border = x == 0 || x == width - 1 || y == 0 || y == height - 1;
-            let is_inside = x >= 3 && x < width - 3 && y >= 3 && y < height - 3;
+            let fx = x as f32;
+            let fy = y as f32;
 
-            if is_inside {
-                // 背景青藍色 (Deep Sky Blue / Indigo)
-                rgba.extend_from_slice(&[59, 130, 246, 255]); // #3b82f6
-            } else if is_border {
-                rgba.extend_from_slice(&[0, 0, 0, 0]); // 透明
+            // 圓角矩形 (Squircle) 判斷
+            let cx = 15.5_f32;
+            let cy = 15.5_f32;
+            let dx = (fx - cx).abs();
+            let dy = (fy - cy).abs();
+            let corner_dist = if dx > 10.0 && dy > 10.0 {
+                ((dx - 10.0).powi(2) + (dy - 10.0).powi(2)).sqrt()
             } else {
-                rgba.extend_from_slice(&[37, 99, 235, 230]); // 外層漸層邊界
+                0.0
+            };
+
+            let in_squircle = dx <= 14.5 && dy <= 14.5 && corner_dist <= 4.5;
+
+            // 閃電幾何形狀 (Lightning Polygon)
+            let is_lightning = (x >= 14 && x <= 18 && y >= 6 && y <= 13)
+                || (x >= 11 && x <= 22 && y == 14)
+                || (x >= 10 && x <= 20 && y == 15)
+                || (x >= 9 && x <= 17 && y == 16)
+                || (x >= 13 && x <= 17 && y >= 17 && y <= 25 && (x + y >= 32 && x <= y - 5));
+
+            if !in_squircle {
+                rgba.extend_from_slice(&[0, 0, 0, 0]); // 完全透明
+            } else if is_lightning {
+                // 亮黃白閃電核心
+                rgba.extend_from_slice(&[255, 255, 255, 255]);
+            } else {
+                // 漸層青藍底色 (#0284c7 -> #0369a1)
+                let gradient = (fy / 32.0_f32) * 40.0;
+                let r = (2.0 - gradient * 0.05).clamp(0.0, 255.0) as u8;
+                let g = (132.0 - gradient).clamp(0.0, 255.0) as u8;
+                let b = (220.0 - gradient * 0.5).clamp(0.0, 255.0) as u8;
+                rgba.extend_from_slice(&[r, g, b, 255]);
             }
         }
     }
 
-    Icon::from_rgba(rgba, width, height).unwrap_or_else(|_| {
-        Icon::from_rgba(vec![255; (width * height * 4) as usize], width, height).unwrap()
+    Icon::from_rgba(rgba, 32, 32).unwrap_or_else(|_| {
+        Icon::from_rgba(vec![255; 32 * 32 * 4], 32, 32).unwrap()
     })
 }

@@ -1,4 +1,7 @@
-use egui::{Color32, Stroke, Visuals};
+use egui::{
+    Color32, FontData, FontDefinitions, FontFamily, Margin, Rounding, Stroke, Visuals,
+};
+use log::{info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppTheme {
@@ -16,57 +19,64 @@ impl AppTheme {
 
     pub fn bg_color(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(24, 24, 27),   // zinc-900
-            AppTheme::Light => Color32::from_rgb(250, 250, 250), // zinc-50
+            AppTheme::Dark => Color32::from_rgb(18, 18, 22),     // 深邃高級黑炭色 (Zinc-950)
+            AppTheme::Light => Color32::from_rgb(248, 249, 251), // 純淨柔和淺灰白
         }
     }
 
     pub fn card_bg_color(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(39, 39, 42),   // zinc-800
-            AppTheme::Light => Color32::from_rgb(255, 255, 255), // white
+            AppTheme::Dark => Color32::from_rgb(28, 28, 34),     // 卡片/導航列背景 (Zinc-900)
+            AppTheme::Light => Color32::from_rgb(255, 255, 255), // 純白
         }
     }
 
     pub fn code_bg_color(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(20, 20, 22),   // zinc-950
-            AppTheme::Light => Color32::from_rgb(244, 244, 245), // zinc-100
+            AppTheme::Dark => Color32::from_rgb(13, 13, 16),     // 程式碼區塊暗黑底色
+            AppTheme::Light => Color32::from_rgb(241, 243, 246), // 淺色程式碼底色
         }
     }
 
     pub fn text_primary(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(244, 244, 245), // zinc-100
-            AppTheme::Light => Color32::from_rgb(24, 24, 27),   // zinc-900
+            AppTheme::Dark => Color32::from_rgb(244, 244, 248), // 明亮白
+            AppTheme::Light => Color32::from_rgb(20, 24, 33),   // 深邃深藍黑
         }
     }
 
     pub fn text_secondary(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(161, 161, 170), // zinc-400
-            AppTheme::Light => Color32::from_rgb(113, 113, 122), // zinc-500
+            AppTheme::Dark => Color32::from_rgb(156, 163, 175), // 柔和灰 (Zinc-400)
+            AppTheme::Light => Color32::from_rgb(107, 114, 128), // 次要文字灰
         }
     }
 
     pub fn border_color(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(63, 63, 70),   // zinc-700
-            AppTheme::Light => Color32::from_rgb(228, 228, 231), // zinc-200
+            AppTheme::Dark => Color32::from_rgb(46, 46, 56),     // 細緻暗邊框
+            AppTheme::Light => Color32::from_rgb(226, 232, 240), // 淺色邊框
         }
     }
 
     pub fn accent_color(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(96, 165, 250),  // blue-400
-            AppTheme::Light => Color32::from_rgb(37, 99, 235),  // blue-600
+            AppTheme::Dark => Color32::from_rgb(56, 189, 248),  // 閃電青藍色 (Sky-400)
+            AppTheme::Light => Color32::from_rgb(2, 132, 199),  // 鮮明天藍色 (Sky-600)
+        }
+    }
+
+    pub fn accent_bg(&self) -> Color32 {
+        match self {
+            AppTheme::Dark => Color32::from_rgba_premultiplied(56, 189, 248, 25), // 淺透青光
+            AppTheme::Light => Color32::from_rgba_premultiplied(2, 132, 199, 20),
         }
     }
 
     pub fn quote_bar_color(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgb(82, 82, 91),   // zinc-600
-            AppTheme::Light => Color32::from_rgb(212, 212, 216), // zinc-300
+            AppTheme::Dark => Color32::from_rgb(56, 189, 248),
+            AppTheme::Light => Color32::from_rgb(2, 132, 199),
         }
     }
 
@@ -80,15 +90,88 @@ impl AppTheme {
         visuals.panel_fill = self.bg_color();
         visuals.window_fill = self.bg_color();
         visuals.window_stroke = Stroke::new(1.0_f32, self.border_color());
+        visuals.window_rounding = Rounding::same(10.0);
+
+        // 按鈕與互動元件樣式 (無突兀厚重外框，柔和現代圓角)
         visuals.widgets.noninteractive.bg_fill = self.card_bg_color();
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, self.border_color());
-        visuals.widgets.inactive.bg_fill = self.card_bg_color();
-        visuals.widgets.hovered.bg_fill = match self {
-            AppTheme::Dark => Color32::from_rgb(50, 50, 56),
-            AppTheme::Light => Color32::from_rgb(240, 240, 243),
+        visuals.widgets.noninteractive.rounding = Rounding::same(6.0);
+
+        visuals.widgets.inactive.bg_fill = match self {
+            AppTheme::Dark => Color32::from_rgb(34, 34, 42),
+            AppTheme::Light => Color32::from_rgb(241, 243, 247),
         };
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, self.border_color());
+        visuals.widgets.inactive.rounding = Rounding::same(6.0);
+
+        visuals.widgets.hovered.bg_fill = match self {
+            AppTheme::Dark => Color32::from_rgb(48, 48, 60),
+            AppTheme::Light => Color32::from_rgb(230, 235, 245),
+        };
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, self.accent_color());
+        visuals.widgets.hovered.rounding = Rounding::same(6.0);
+
         visuals.widgets.active.bg_fill = self.accent_color();
+        visuals.widgets.active.rounding = Rounding::same(6.0);
+
+        visuals.selection.bg_fill = self.accent_bg();
+        visuals.selection.stroke = Stroke::new(1.0_f32, self.accent_color());
 
         ctx.set_visuals(visuals);
     }
+}
+
+/// 載入 Windows 繁體中文與系統 Emoji 字型，徹底解決中文方塊 (Tofu) 與 Emoji 缺字問題
+pub fn setup_system_cjk_fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+
+    // 候選字型列表 (優先尋找微軟正黑體、微軟雅黑、思源黑體等)
+    let cjk_font_paths = [
+        r"C:\Windows\Fonts\msjh.ttc",   // 微軟正黑體 (Traditional Chinese)
+        r"C:\Windows\Fonts\msjhl.ttc",  // 微軟正黑體 Light
+        r"C:\Windows\Fonts\msyh.ttc",   // 微軟雅黑
+        r"C:\Windows\Fonts\mingliu.ttc",// 細明體
+    ];
+
+    let mut loaded_cjk = false;
+    for path in cjk_font_paths {
+        if let Ok(bytes) = std::fs::read(path) {
+            info!("成功載入 Windows CJK 系統字型: {}", path);
+            fonts.font_data.insert(
+                "windows_cjk".to_owned(),
+                FontData::from_owned(bytes),
+            );
+
+            // 將中文字型加入 Proportional 與 Monospace 家族首位
+            if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
+                prop.insert(0, "windows_cjk".to_owned());
+            }
+            if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
+                mono.push("windows_cjk".to_owned());
+            }
+            loaded_cjk = true;
+            break;
+        }
+    }
+
+    if !loaded_cjk {
+        warn!("未能在系統目錄中找到 Windows CJK 字型檔案！");
+    }
+
+    // 載入 Windows 系統 Segoe UI Emoji 字型
+    if let Ok(emoji_bytes) = std::fs::read(r"C:\Windows\Fonts\seguiemj.ttf") {
+        info!("成功載入 Windows Segoe UI Emoji 字型");
+        fonts.font_data.insert(
+            "segoe_emoji".to_owned(),
+            FontData::from_owned(emoji_bytes),
+        );
+        if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
+            prop.push("segoe_emoji".to_owned());
+        }
+        if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
+            mono.push("segoe_emoji".to_owned());
+        }
+    }
+
+    ctx.set_fonts(fonts);
 }
