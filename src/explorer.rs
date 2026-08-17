@@ -18,6 +18,7 @@ use windows_core::Interface;
 
 static APP_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
+#[allow(dead_code)]
 pub fn set_app_hwnd(hwnd: HWND) {
     APP_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
 }
