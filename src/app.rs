@@ -178,17 +178,14 @@ impl MdPreviewApp {
         info!("嘗試載入檔案: {:?}", path);
 
         if path.is_dir() {
-            self.set_toast("已選取資料夾，請在資料夾內選取檔案預覽 📁".to_string());
+            self.set_toast(format!("已選取資料夾: {:?}", path.file_name().unwrap_or_default()));
             self.visible = true;
             show_and_focus_app_window();
             return;
         }
 
-        let path_str = path.to_string_lossy().to_string();
-        let lower_path = path_str.to_lowercase();
-
-        // 1. 一般實體檔案讀取
-        if path.exists() {
+        // 1. 第一優先：直接嘗試以實體檔案讀取 (即使路徑中含有 .zip 資料夾名稱也能正常秒開)
+        if let Ok(text) = fs::read_to_string(path) {
             let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -203,55 +200,48 @@ impl MdPreviewApp {
                 self.view_mode = ViewMode::PlainText;
             }
 
-            match fs::read_to_string(path) {
-                Ok(text) => {
-                    self.line_count = text.lines().count();
-                    self.content = text;
-                    self.current_file = Some(path.to_path_buf());
+            self.line_count = text.lines().count();
+            self.content = text;
+            self.current_file = Some(path.to_path_buf());
 
-                    // 檔案元資訊計算
-                    if let Ok(metadata) = fs::metadata(path) {
-                        let len = metadata.len();
-                        self.file_size_str = if len < 1024 {
-                            format!("{} B", len)
-                        } else if len < 1024 * 1024 {
-                            format!("{:.1} KB", len as f64 / 1024.0)
-                        } else {
-                            format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                        };
+            // 檔案元資訊計算
+            if let Ok(metadata) = fs::metadata(path) {
+                let len = metadata.len();
+                self.file_size_str = if len < 1024 {
+                    format!("{} B", len)
+                } else if len < 1024 * 1024 {
+                    format!("{:.1} KB", len as f64 / 1024.0)
+                } else {
+                    format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
+                };
 
-                        if let Ok(mod_time) = metadata.modified() {
-                            let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
-                            self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
-                        }
-                    }
-
-                    // 啟動變更監視
-                    self.file_watcher.watch_file(path);
-                    self.visible = true;
-                    show_and_focus_app_window();
-                    let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                    let mode_desc = match self.view_mode {
-                        ViewMode::Markdown => "Markdown 渲染".to_string(),
-                        ViewMode::Code { ref lang } => {
-                            let (name, emoji) = get_language_badge(lang);
-                            format!("{} {} 語法高亮", emoji, name)
-                        }
-                        ViewMode::PlainText => "純文字模式".to_string(),
-                    };
-                    self.set_toast(format!("⚡ 已開啟: {} ({})", fname, mode_desc));
-                }
-                Err(e) => {
-                    error!("讀取檔案失敗 {:?}: {:?}", path, e);
-                    self.set_toast(format!("無法讀取檔案: {}", e));
-                    self.visible = true;
-                    show_and_focus_app_window();
+                if let Ok(mod_time) = metadata.modified() {
+                    let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
+                    self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
                 }
             }
+
+            // 啟動變更監視
+            self.file_watcher.watch_file(path);
+            self.visible = true;
+            show_and_focus_app_window();
+            let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+            let mode_desc = match self.view_mode {
+                ViewMode::Markdown => "Markdown 渲染".to_string(),
+                ViewMode::Code { ref lang } => {
+                    let (name, emoji) = get_language_badge(lang);
+                    format!("{} {} 語法高亮", emoji, name)
+                }
+                ViewMode::PlainText => "純文字模式".to_string(),
+            };
+            self.set_toast(format!("⚡ 已開啟: {} ({})", fname, mode_desc));
             return;
         }
 
-        // 2. 針對 ZIP 虛擬壓縮目錄內的檔案進行即時解壓縮預覽！
+        // 2. 若直接讀取失敗，檢查是否位於未解壓縮之 .zip 虛擬目錄內
+        let path_str = path.to_string_lossy().to_string();
+        let lower_path = path_str.to_lowercase();
+
         if lower_path.contains(".zip\\") || lower_path.contains(".zip/") {
             if let Some(zip_idx) = lower_path.find(".zip\\").or_else(|| lower_path.find(".zip/")) {
                 let zip_file_path_str = &path_str[..zip_idx + 4];
@@ -299,7 +289,7 @@ impl MdPreviewApp {
                         }
                         Err(e) => {
                             log::warn!("自 ZIP 解壓失敗: {}", e);
-                            self.set_toast(format!("⚠️ 讀取 ZIP 壓縮內容失敗: {}", e));
+                            self.set_toast(format!("⚠️ 讀取 ZIP 內容失敗: {}", e));
                             self.visible = true;
                             show_and_focus_app_window();
                             return;
@@ -309,8 +299,9 @@ impl MdPreviewApp {
             }
         }
 
-        // 3. 檔案真正不存在
-        self.set_toast(format!("找不到檔案: {:?}", path));
+        // 3. 檔案真正無法開啟
+        error!("無法開啟檔案 {:?}", path);
+        self.set_toast(format!("無法開啟檔案: {:?}", path.file_name().unwrap_or_default()));
         self.visible = true;
         show_and_focus_app_window();
     }
