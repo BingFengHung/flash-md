@@ -1,0 +1,88 @@
+# md-preview - Windows 快捷鍵極速 Markdown 預覽工具 ⚡
+
+[English](README.md) | [繁體中文](README.zh-TW.md)
+
+---
+
+`md-preview` 是一款專為 Windows 打造、類似 macOS **Quick Look** 體驗的極速 Markdown 與文字檔案預覽工具。以純 **Rust** 與 **egui** 原生渲染技術開發，兼具極致輕量、無網頁框架包袱、瞬間啟動與現代美觀等特性。
+
+只要在 **Windows 檔案總管** 或 **桌面** 選取任何 `.md` 檔案並按下 **`Alt + Space`**，即可瞬間彈出浮動視窗預覽內容！
+
+---
+
+## ✨ 核心特色 (Features)
+
+- ⚡ **原生極速渲染**：基於 `egui` 與 `pulldown-cmark` 純 Rust 打造，無 Electron / Chromium 肥大負擔，開檔即顯。
+- 🔍 **智慧檔案總管偵測**：背景常駐並透過 Windows Shell COM 介面，在觸發 `Alt + Space` 時自動取得檔案總管或桌面選取的檔案路徑。
+- 🎨 **現代深淺色主題**：支援深色 (Dark) 與淺色 (Light) 主題一鍵切換，內建 GitHub 風格精緻排版與語法邊框。
+- 💻 **程式碼語法高亮**：整合 `syntect` 語法高亮引擎，支援 Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, YAML 等數十種語言，並支援一鍵複製程式碼區塊。
+- 🔄 **檔案變更即時熱重載 (Live Reload)**：若預覽中的檔案在 VSCode、Obsidian 或其他編輯器被修改儲存，預覽視窗將自動即時更新。
+- 📌 **視窗置頂與快速控制**：支援 `Esc` 快速隱藏、`Ctrl + P` 視窗置頂、`Ctrl + O` 在系統預設編輯器中開啟、`Ctrl + + / -` 即時縮放文字大小。
+- 📥 **系統匣常駐 (System Tray)**：常駐於 Windows 工作列右下角系統匣，提供豐富捷徑選單。
+- 🖥️ **CLI 模式支援**：可作為獨立命令列預覽器（例如 `md-preview README.md`）。
+
+---
+
+## ⌨️ 快捷鍵指南 (Keyboard Shortcuts)
+
+| 快捷鍵 | 動作說明 |
+| :--- | :--- |
+| **`Alt + Space`** | **全域快捷鍵**：預覽檔案總管/桌面當前選取的檔案（再次按下可快速收起視窗） |
+| **`Esc`** | 快速隱藏預覽視窗 / 關閉搜尋欄 |
+| **`Ctrl + O`** | 在系統預設應用程式 (如 VSCode / 記事本) 中開啟目前預覽的檔案 |
+| **`Ctrl + Shift + C`** | 一鍵複製目前文件的完整 Markdown 內文至剪貼簿 |
+| **`Ctrl + P`** | 切換視窗是否置頂 (Always on Top) |
+| **`Ctrl + +` / `Ctrl + =`** | 放大預覽文字字級 |
+| **`Ctrl + -`** | 縮小預覽文字字級 |
+| **`Ctrl + 0`** | 重設為預設文字字級 (100%) |
+| **`Ctrl + F`** | 開啟 / 關閉內文搜尋欄 |
+
+---
+
+## 📦 安裝與使用方式 (Installation & Usage)
+
+### 方式 1：直接下載發布執行檔 (推薦)
+前往 [GitHub Releases](https://github.com/your-username/md-preview/releases) 頁面下載最新版 `md-preview-windows-x86_64.zip`，解壓縮後執行 `md-preview.exe` 即可常駐於系統匣中。
+
+### 方式 2：透過命令列執行
+```powershell
+# 常駐背景監聽快捷鍵 (預設)
+md-preview.exe
+
+# 直接預覽指定檔案 (單獨視窗模式)
+md-preview.exe path/to/document.md
+```
+
+### 方式 3：開機自動啟動 (選用)
+將 `md-preview.exe` 的捷徑放入 Windows 開機啟動資料夾：
+1. 按下 `Win + R` 輸入 `shell:startup` 並按 Enter。
+2. 將 `md-preview.exe` 的捷徑貼上至該資料夾中。
+
+---
+
+## 🛠️ 開發與架構說明 (Architecture)
+
+```
+md-preview/
+├── .github/workflows/
+│   └── release.yml     # 雲端 CI/CD 自動編譯與 Release 發布工作流
+├── src/
+│   ├── main.rs         # 程式進入點、CLI 參數處理、執行緒協調
+│   ├── app.rs          # egui 預覽視窗 UI、工具列、操作邏輯
+│   ├── explorer.rs     # Windows Shell COM API 檔案總管選取偵測
+│   ├── hotkey.rs       # Win32 RegisterHotKey 全域快捷鍵監聽執行緒
+│   ├── markdown.rs     # pulldown-cmark 解析與 syntect 語法高亮渲染引擎
+│   ├── theme.rs        # 深色/淺色主題調色盤與設計系統
+│   ├── tray.rs         # Windows 系統匣常駐圖示與右鍵功能選單
+│   └── watcher.rs      # notify 檔案系統即時變更監視器 (熱重載)
+├── Cargo.toml          # 專案相依套件與編譯設定
+├── AGENTS.md           # 專案規範與 CI/CD 流程說明
+├── README.md           # 英文說明文件
+└── README.zh-TW.md     # 繁體中文說明文件
+```
+
+---
+
+## 📄 授權條款 (License)
+
+本專案採用 [MIT OR Apache-2.0](LICENSE) 雙重授權。

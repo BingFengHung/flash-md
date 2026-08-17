@@ -1,0 +1,60 @@
+[package]
+name = "md-preview"
+version = "0.1.0"
+edition = "2021"
+authors = ["md-preview contributors"]
+description = "A blazing-fast macOS Quick Look style Markdown preview tool for Windows built with Rust & egui."
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/your-username/md-preview"
+keywords = ["markdown", "preview", "quicklook", "windows", "egui"]
+categories = ["command-line-utilities", "gui"]
+
+[dependencies]
+# GUI & Rendering
+eframe = { version = "0.29.1", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "persistence",
+] }
+egui = "0.29.1"
+egui_extras = { version = "0.29.1", features = ["all_loaders"] }
+pulldown-cmark = { version = "0.12.2", default-features = false, features = ["simd"] }
+syntect = { version = "5.2.0", default-features = false, features = ["default-fancy"] }
+
+# Windows Native APIs & Hotkey & Shell
+windows = { version = "0.58.0", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_System_SystemServices",
+] }
+windows-core = "0.58.0"
+
+# System Tray & Event handling
+tray-icon = "0.19.2"
+muda = "0.15.3"
+crossbeam-channel = "0.5.13"
+
+# CLI & Utilities
+clap = { version = "4.5.20", features = ["derive"] }
+notify = { version = "6.1.1", default-features = false, features = ["macos_kqueue"] }
+open = "5.3.0"
+arboard = "3.4.1"
+anyhow = "1.0.93"
+log = "0.4.22"
+env_logger = "0.11.5"
+chrono = { version = "0.4.38", default-features = false, features = ["clock"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
