@@ -12,10 +12,11 @@ use windows::Win32::UI::Shell::{
     SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow, GetParent,
-    GetShellWindow, GetWindowThreadProcessId, SetForegroundWindow, SetWindowPos, ShowWindow,
-    GA_ROOT, GA_ROOTOWNER, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_RESTORE, SW_SHOW,
+    BringWindowToTop, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow,
+    GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowThreadProcessId, IsWindowVisible,
+    SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT, GA_ROOTOWNER, GUITHREADINFO,
+    HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE,
+    SW_SHOW,
 };
 use windows_core::Interface;
 
@@ -129,6 +130,22 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         HWND(0 as _)
     };
 
+    let fg_thread = if foreground_hwnd.0 != 0 as _ {
+        GetWindowThreadProcessId(foreground_hwnd, None)
+    } else {
+        0
+    };
+
+    let mut gui_info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    let focus_hwnd = if fg_thread != 0 && GetGUIThreadInfo(fg_thread, &mut gui_info).is_ok() {
+        gui_info.hwndFocus
+    } else {
+        HWND(0 as _)
+    };
+
     let mut class_name = [0u16; 256];
     let class_len = if foreground_hwnd.0 != 0 as _ {
         GetClassNameW(foreground_hwnd, &mut class_name)
@@ -137,8 +154,8 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     };
     let class_str = String::from_utf16_lossy(&class_name[..class_len as usize]);
     debug!(
-        "前景視窗類別: {}, HWND: {:?}, Root: {:?}, RootOwner: {:?}",
-        class_str, foreground_hwnd, root_foreground, root_owner
+        "前景視窗類別: {}, HWND: {:?}, Focus: {:?}, Root: {:?}",
+        class_str, foreground_hwnd, focus_hwnd, root_foreground
     );
 
     // 建立 ShellWindows 實例
@@ -187,7 +204,9 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         }
     }
 
-    // 2. 優先搜尋符合前景 HWND / 根視窗 HWND / 擁有者 HWND 的視窗 (支援 Windows 10/11 多分頁檔案總管)
+    // 2. 評分排序模型：精確匹配當前焦點所在的檔案總管分頁，防止讀取到背景其他視窗！
+    let mut candidates: Vec<(i32, IDispatch)> = Vec::new();
+
     for i in 0..count {
         let variant_index = VARIANT::from(i);
         let item_disp = match shell_windows.Item(&variant_index) {
@@ -195,55 +214,62 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
             Err(_) => continue,
         };
 
-        if let Some(path) = extract_selected_if_matching_hwnd(
-            &item_disp,
-            foreground_hwnd,
-            root_foreground,
-            root_owner,
-        ) {
-            return Some(path);
+        if let Ok(browser) = item_disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
+            let is_browser_visible = browser.Visible().map(|v| v.0 != 0).unwrap_or(true);
+
+            if let Ok(hwnd_val) = browser.HWND() {
+                let win_hwnd = HWND(hwnd_val.0 as _);
+                let is_os_visible = IsWindowVisible(win_hwnd).as_bool();
+
+                let root_win = GetAncestor(win_hwnd, GA_ROOT);
+                let owner_win = GetAncestor(win_hwnd, GA_ROOTOWNER);
+
+                let mut score = 0;
+
+                // 最高權重：精確符合焦點控制項 (焦點 tab)
+                if focus_hwnd.0 != 0 as _ && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd)) {
+                    score += 100;
+                } else if win_hwnd == foreground_hwnd || is_child_or_same(foreground_hwnd, win_hwnd) {
+                    score += 80;
+                } else if root_win == root_foreground || owner_win == owner_target_fallback(root_owner, foreground_hwnd) {
+                    score += 60;
+                } else if is_os_visible {
+                    score += 20;
+                } else {
+                    score += 5;
+                }
+
+                if is_browser_visible {
+                    score += 30;
+                }
+                if is_os_visible {
+                    score += 10;
+                }
+
+                candidates.push((score, item_disp));
+            }
         }
     }
 
-    // 3. Fallback: 尋找所有開啟的檔案總管視窗中第一個有選取或焦點的有效項目
-    for i in 0..count {
-        let variant_index = VARIANT::from(i);
-        if let Ok(item_disp) = shell_windows.Item(&variant_index) {
-            if let Some(path) = extract_selected_from_folder_view(&item_disp) {
-                return Some(path);
-            }
+    // 依權重由大到小排序，優先查詢最精確的前景作用中視窗
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (score, item_disp) in candidates {
+        debug!("嘗試查詢候選視窗 (評分: {})...", score);
+        if let Some(path) = extract_selected_from_folder_view(&item_disp) {
+            return Some(path);
         }
     }
 
     None
 }
 
-unsafe fn extract_selected_if_matching_hwnd(
-    item_disp: &IDispatch,
-    target_hwnd: HWND,
-    root_target: HWND,
-    owner_target: HWND,
-) -> Option<PathBuf> {
-    if let Ok(browser) = item_disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
-        if let Ok(hwnd_val) = browser.HWND() {
-            let win_hwnd = HWND(hwnd_val.0 as _);
-            let root_win = GetAncestor(win_hwnd, GA_ROOT);
-            let owner_win = GetAncestor(win_hwnd, GA_ROOTOWNER);
-
-            let is_matched = win_hwnd == target_hwnd
-                || root_win == root_target
-                || owner_win == owner_target
-                || win_hwnd == root_target
-                || win_hwnd == owner_target
-                || is_child_or_same(target_hwnd, win_hwnd)
-                || is_child_or_same(win_hwnd, target_hwnd);
-
-            if is_matched {
-                return extract_selected_from_folder_view(item_disp);
-            }
-        }
+unsafe fn owner_target_fallback(root_owner: HWND, foreground_hwnd: HWND) -> HWND {
+    if root_owner.0 != 0 as _ {
+        root_owner
+    } else {
+        foreground_hwnd
     }
-    None
 }
 
 unsafe fn is_child_or_same(child: HWND, parent: HWND) -> bool {
@@ -283,13 +309,31 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
     if let Ok(selected_items) = folder_view.SelectedItems() {
         if let Ok(count) = selected_items.Count() {
             if count > 0 {
+                // 優先尋找已選取之「實體檔案」(非目錄)
+                for i in 0..count {
+                    let item_variant = VARIANT::from(i);
+                    if let Ok(item) = selected_items.Item(&item_variant) {
+                        if let Ok(path_bstr) = item.Path() {
+                            let raw_path = path_bstr.to_string();
+                            if !raw_path.is_empty() {
+                                let path = normalize_explorer_path(&raw_path);
+                                if path.is_file() {
+                                    info!("✅ 成功自 SelectedItems 取得檔案: {:?} (原始: {})", path, raw_path);
+                                    return Some(path);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 若選取的全為目錄，回傳第 0 個
                 let item_variant = VARIANT::from(0i32);
                 if let Ok(item) = selected_items.Item(&item_variant) {
                     if let Ok(path_bstr) = item.Path() {
                         let raw_path = path_bstr.to_string();
                         if !raw_path.is_empty() {
                             let path = normalize_explorer_path(&raw_path);
-                            info!("✅ 成功自 SelectedItems 取得檔案: {:?} (原始: {})", path, raw_path);
+                            info!("✅ 成功自 SelectedItems 取得項目: {:?} (原始: {})", path, raw_path);
                             return Some(path);
                         }
                     }
@@ -304,8 +348,10 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
             let raw_path = path_bstr.to_string();
             if !raw_path.is_empty() {
                 let path = normalize_explorer_path(&raw_path);
-                info!("✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})", path, raw_path);
-                return Some(path);
+                if path.is_file() {
+                    info!("✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})", path, raw_path);
+                    return Some(path);
+                }
             }
         }
     }
