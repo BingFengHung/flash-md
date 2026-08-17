@@ -14,8 +14,9 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
 - 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs (`IShellWindows`) to automatically detect the selected file when `Alt + Space` is pressed.
+- 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO, SVG, AVIF formats with smooth mouse wheel zooming, panning, and auto-fit to window!
 - 💻 **Full Syntax Highlighting & Line Numbers**: Powered by `syntect` supporting 100+ languages (Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, SQL, etc.) with line numbers and 1-click code copying.
-- 📝 **Intelligent 3-Track Mode Switching**: Automatically routes Markdown, Source Code, and Plain Text files to their optimal viewers, with instant cycling via `Ctrl + M`.
+- 📝 **Multi-Track Mode Switching**: Automatically routes Markdown, Source Code, Plain Text, and Images to their optimal viewers, with instant cycling via `Ctrl + M`.
 - 🎨 **Modern Dark & Light Themes**: Seamlessly toggle between dark and light modes with GitHub-style typography and clean borders.
 - 🔄 **Live Hot-Reload**: Automatically detects file modifications when saved in external editors (VSCode, Obsidian, Notepad) and updates the preview in real-time.
 - 📌 **Quick Window Controls**: `Esc` to instantly dismiss, `Ctrl + P` to toggle Always on Top, `Ctrl + O` to open in your default editor, `Ctrl + + / -` for smooth zoom scaling.
@@ -30,13 +31,13 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | :--- | :--- |
 | **`Alt + Space`** | **Global Hotkey**: Preview selected file in File Explorer / Desktop (press again to close) |
 | **`Esc`** | Instantly hide preview window / close search bar |
-| **`Ctrl + M`** | **Cycle View Mode**: Switch between Markdown rendering, Syntax Highlighting, and Plain Text |
-| **`Ctrl + O`** | Open current file in default system editor (e.g. VSCode / Notepad) |
-| **`Ctrl + Shift + C`** | Copy entire document content to clipboard |
+| **`Ctrl + M`** | **Cycle View Mode**: Switch between Markdown rendering, Syntax Highlighting, Plain Text, and Image view |
+| **`Ctrl + O`** | Open current file in default system editor / image viewer |
+| **`Ctrl + Shift + C`** | Copy entire document content or file path to clipboard |
 | **`Ctrl + P`** | Toggle Always on Top window pin |
-| **`Ctrl + +` / `Ctrl + =`** | Zoom in preview font size |
-| **`Ctrl + -`** | Zoom out preview font size |
-| **`Ctrl + 0`** | Reset preview font size (100%) |
+| **`Ctrl + +` / `Ctrl + =`** | Zoom in preview font size / image scale |
+| **`Ctrl + -`** | Zoom out preview font size / image scale |
+| **`Ctrl + 0`** | Reset preview font size / image scale (100%) |
 | **`Ctrl + F`** | Open / close search bar |
 
 ---

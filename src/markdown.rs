@@ -671,6 +671,30 @@ pub fn render_code_viewer(
         });
 }
 
+/// 判斷特定副檔名是否為圖片或向量圖類型
+pub fn is_image_extension(ext: &str) -> bool {
+    matches!(
+        ext.to_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg" | "tiff" | "tif" | "avif"
+    )
+}
+
+/// 取得圖片類型的美觀顯示名稱與 Emoji 徽章
+pub fn get_image_badge(ext: &str) -> (String, &'static str) {
+    match ext.to_lowercase().as_str() {
+        "png" => ("PNG 圖片".to_string(), "🖼️"),
+        "jpg" | "jpeg" => ("JPEG 圖片".to_string(), "📷"),
+        "svg" => ("SVG 向量圖".to_string(), "🎨"),
+        "gif" => ("GIF 動態圖".to_string(), "🎬"),
+        "webp" => ("WEBP 圖片".to_string(), "🌐"),
+        "ico" => ("ICO 圖示".to_string(), "💠"),
+        "bmp" => ("BMP 點陣圖".to_string(), "🖼️"),
+        "tiff" | "tif" => ("TIFF 圖片".to_string(), "📸"),
+        "avif" => ("AVIF 圖片".to_string(), "🌟"),
+        _ => (format!("{} 圖片", ext.to_uppercase()), "🖼️"),
+    }
+}
+
 /// 判斷特定副檔名是否為程式碼/設定檔類型
 pub fn is_code_extension(ext: &str) -> bool {
     let syntax_set = get_syntax_set();
@@ -682,7 +706,7 @@ pub fn is_code_extension(ext: &str) -> bool {
         "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "json" | "toml" | "yaml" | "yml"
             | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "cs" | "go" | "java" | "kt"
             | "html" | "css" | "scss" | "sass" | "sql" | "sh" | "bash" | "ps1" | "bat"
-            | "cmd" | "xml" | "svg" | "lua" | "php" | "rb" | "swift" | "dart" | "vue" | "svelte"
+            | "cmd" | "xml" | "lua" | "php" | "rb" | "swift" | "dart" | "vue" | "svelte"
     )
 }
 
@@ -711,7 +735,7 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
         "sh" | "bash" => ("Shell".to_string(), "🐚"),
         "ps1" => ("PowerShell".to_string(), "💻"),
         "bat" | "cmd" => ("Batch".to_string(), "📜"),
-        "xml" | "svg" => ("XML".to_string(), "📑"),
+        "xml" => ("XML".to_string(), "📑"),
         "lua" => ("Lua".to_string(), "🌙"),
         "php" => ("PHP".to_string(), "🐘"),
         "rb" => ("Ruby".to_string(), "💎"),
@@ -720,4 +744,5 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
         _ => (ext.to_uppercase(), "💻"),
     }
 }
+
 
