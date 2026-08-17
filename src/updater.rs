@@ -5,6 +5,7 @@ use std::process::Command;
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GITHUB_REPO: &str = "BingFengHung/flash-md";
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
     pub tag_name: String,

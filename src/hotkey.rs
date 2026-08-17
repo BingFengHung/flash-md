@@ -93,8 +93,8 @@ pub fn start_hotkey_listener(
                         }
                     }
 
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
+                    let _ = TranslateMessage(&msg);
+                    let _ = DispatchMessageW(&msg);
                 }
 
                 // 解除註冊
