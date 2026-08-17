@@ -293,6 +293,15 @@ pub fn normalize_explorer_path(raw: &str) -> PathBuf {
     decoded_path
 }
 
+fn decode_hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn url_decode(input: &str) -> String {
     let mut bytes = Vec::new();
     let mut chars = input.bytes();
@@ -301,9 +310,8 @@ fn url_decode(input: &str) -> String {
             let h1 = chars.next();
             let h2 = chars.next();
             if let (Some(h1), Some(h2)) = (h1, h2) {
-                let hex_str = std::str::from_utf8(&[h1, h2]).unwrap_or("");
-                if let Ok(val) = u8::from_str_radix(hex_str, 16) {
-                    bytes.push(val);
+                if let (Some(d1), Some(d2)) = (decode_hex_digit(h1), decode_hex_digit(h2)) {
+                    bytes.push((d1 << 4) | d2);
                     continue;
                 } else {
                     bytes.push(b'%');
