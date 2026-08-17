@@ -1,13 +1,13 @@
 [package]
-name = "md-preview"
-version = "0.1.0"
+name = "flash-md"
+version = "0.2.0"
 edition = "2021"
-authors = ["md-preview contributors"]
+authors = ["flash-md contributors"]
 description = "A blazing-fast macOS Quick Look style Markdown preview tool for Windows built with Rust & egui."
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/your-username/md-preview"
-keywords = ["markdown", "preview", "quicklook", "windows", "egui"]
+repository = "https://github.com/your-username/flash-md"
+keywords = ["markdown", "preview", "quicklook", "windows", "flash-md"]
 categories = ["command-line-utilities", "gui"]
 
 [dependencies]

@@ -1,10 +1,10 @@
-# md-preview - Blazing-Fast Quick Look Markdown Preview for Windows ⚡
+# flash-md - Blazing-Fast Quick Look Markdown Preview for Windows ⚡
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
 ---
 
-`md-preview` is a lightweight, blazing-fast macOS **Quick Look** style Markdown and text preview utility built specifically for Windows using pure **Rust** and **egui**.
+`flash-md` is a lightweight, blazing-fast macOS **Quick Look** style Markdown and text preview utility built specifically for Windows using pure **Rust** and **egui**.
 
 Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** and press **`Alt + Space`** to instantly preview its rendered content in a sleek, modern floating window!
 
@@ -19,7 +19,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - 🔄 **Live Hot-Reload**: Automatically detects file modifications when saved in external editors (VSCode, Obsidian, Notepad) and updates the preview in real-time.
 - 📌 **Quick Window Controls**: `Esc` to instantly dismiss, `Ctrl + P` to toggle Always on Top, `Ctrl + O` to open in your default editor, `Ctrl + + / -` for smooth zoom scaling.
 - 📥 **System Tray Resident**: Sits unobtrusively in the Windows taskbar system tray with quick action menus.
-- 🖥️ **CLI Support**: Can also be used as a standalone terminal markdown viewer (e.g., `md-preview README.md`).
+- 🖥️ **CLI Support**: Can also be used as a standalone terminal markdown viewer (e.g., `flash-md README.md`).
 
 ---
 
@@ -42,28 +42,28 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ## 📦 Installation & Usage
 
 ### Option 1: Download Pre-built Binary (Recommended)
-Download the latest `md-preview-windows-x86_64.zip` from [GitHub Releases](https://github.com/your-username/md-preview/releases), extract it, and run `md-preview.exe`.
+Download the latest `flash-md-windows-x86_64.zip` from [GitHub Releases](https://github.com/your-username/flash-md/releases), extract it, and run `flash-md.exe`.
 
 ### Option 2: CLI Usage
 ```powershell
 # Run resident background daemon (default)
-md-preview.exe
+flash-md.exe
 
 # Standalone preview of a specific file
-md-preview.exe path/to/document.md
+flash-md.exe path/to/document.md
 ```
 
 ### Option 3: Run on Windows Startup (Optional)
-To launch `md-preview` automatically when Windows starts:
+To launch `flash-md` automatically when Windows starts:
 1. Press `Win + R`, type `shell:startup`, and press Enter.
-2. Place a shortcut to `md-preview.exe` into that folder.
+2. Place a shortcut to `flash-md.exe` into that folder.
 
 ---
 
 ## 🛠️ Architecture
 
 ```
-md-preview/
+flash-md/
 ├── .github/workflows/
 │   └── release.yml     # Cloud CI/CD matrix build & GitHub release workflow
 ├── src/

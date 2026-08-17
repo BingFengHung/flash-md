@@ -21,11 +21,11 @@ use watcher::FileWatcher;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "md-preview",
-    author = "md-preview contributors",
-    version = "0.1.0",
-    about = "🚀 Windows 快捷鍵極速 Markdown 預覽工具 (Quick Look for Windows)",
-    long_about = "在 Windows 檔案總管或桌面選取 Markdown 檔案並按下 Alt + Space，即可極速彈出預覽視窗！亦可直接以命令列傳入檔案路徑預覽。"
+    name = "flash-md",
+    author = "flash-md contributors",
+    version = "0.2.0",
+    about = "⚡ Windows 快捷鍵極速 Markdown 預覽工具 (Flash Quick Look for Windows)",
+    long_about = "在 Windows 檔案總管或桌面選取 Markdown 檔案並按下 Alt + Space，即可閃電般彈出預覽視窗！亦可直接以命令列傳入檔案路徑預覽。"
 )]
 struct Cli {
     /// 直接開啟並預覽指定的 Markdown 或文字檔案路徑
@@ -41,7 +41,7 @@ fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
 
-    info!("🚀 啟動 md-preview v0.1.0...");
+    info!("⚡ 啟動 flash-md v0.2.0...");
 
     let is_standalone = cli.file.is_some();
     let target_file = cli.file;
@@ -65,7 +65,7 @@ fn main() -> eframe::Result<()> {
     // 設定 eframe 原生視窗選項
     let native_options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
-            .with_title("md-preview - 快捷鍵 Markdown 預覽")
+            .with_title("flash-md - 快捷鍵 Markdown 預覽")
             .with_inner_size([920.0, 680.0])
             .with_min_inner_size([500.0, 400.0])
             .with_decorations(true)
@@ -75,7 +75,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "md-preview",
+        "flash-md",
         native_options,
         Box::new(move |cc| {
             Ok(Box::new(MdPreviewApp::new(

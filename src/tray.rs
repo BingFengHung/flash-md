@@ -23,11 +23,11 @@ impl TrayManager {
     pub fn new(action_sender: Sender<TrayMenuAction>) -> Option<Self> {
         let menu = Menu::new();
 
-        let title_item = MenuItem::new("md-preview v0.1.0 (Alt + Space)", false, None);
+        let title_item = MenuItem::new("flash-md v0.2.0 (Alt + Space)", false, None);
         let open_item = MenuItem::new("📂 開啟 Markdown 檔案...", true, None);
         let theme_item = MenuItem::new("🎨 切換深淺色主題", true, None);
         let pin_item = MenuItem::new("📌 切換視窗置頂", true, None);
-        let about_item = MenuItem::new("ℹ️ 關於 md-preview", true, None);
+        let about_item = MenuItem::new("ℹ️ 關於 flash-md", true, None);
         let separator = PredefinedMenuItem::separator();
         let exit_item = MenuItem::new("❌ 結束程式", true, None);
 
@@ -52,7 +52,7 @@ impl TrayManager {
 
         let tray_icon = match TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("md-preview - 快捷鍵 Alt+Space 快速預覽 Markdown")
+            .with_tooltip("flash-md - 快捷鍵 Alt+Space 快速預覽 Markdown")
             .with_icon(icon)
             .build()
         {
@@ -87,7 +87,7 @@ impl TrayManager {
     }
 }
 
-/// 產生一個簡約美觀的預設 32x32 RGBA 圖示 (青藍色 MD 方塊)
+/// 產生一個簡約美觀的預設 32x32 RGBA 圖示 (青藍閃電方塊)
 fn create_default_tray_icon() -> Icon {
     let width = 32;
     let height = 32;
@@ -95,7 +95,6 @@ fn create_default_tray_icon() -> Icon {
 
     for y in 0..height {
         for x in 0..width {
-            // 外框圓角方形與青藍色背景
             let is_border = x == 0 || x == width - 1 || y == 0 || y == height - 1;
             let is_inside = x >= 3 && x < width - 3 && y >= 3 && y < height - 3;
 

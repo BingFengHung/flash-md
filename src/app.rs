@@ -282,7 +282,7 @@ impl eframe::App for MdPreviewApp {
                     ));
                 }
                 TrayMenuAction::About => {
-                    self.set_toast("md-preview v0.1.0 - 快捷鍵 Alt+Space 快速預覽 Markdown".to_string());
+                    self.set_toast("flash-md v0.2.0 - 快捷鍵 Alt+Space 閃電預覽 Markdown ⚡".to_string());
                     self.visible = true;
                 }
                 TrayMenuAction::Exit => {
@@ -321,7 +321,7 @@ impl eframe::App for MdPreviewApp {
                         .unwrap_or("未選擇檔案 (按 Alt + Space 或開啟檔案)");
 
                     ui.label(
-                        RichText::new("📄")
+                        RichText::new("⚡")
                             .size(16.0)
                             .color(self.theme.accent_color()),
                     );
@@ -523,14 +523,14 @@ impl eframe::App for MdPreviewApp {
                         ui.vertical_centered(|ui| {
                             ui.add_space(80.0);
                             ui.label(
-                                RichText::new("📖 md-preview")
+                                RichText::new("⚡ flash-md")
                                     .size(28.0)
                                     .strong()
                                     .color(self.theme.accent_color()),
                             );
                             ui.add_space(10.0);
                             ui.label(
-                                RichText::new("在 Windows 檔案總管或桌面選取 .md 檔案，按下 Alt + Space 即可極速預覽！")
+                                RichText::new("在 Windows 檔案總管或桌面選取 .md 檔案，按下 Alt + Space 即可閃電預覽！")
                                     .size(15.0)
                                     .color(self.theme.text_secondary()),
                             );

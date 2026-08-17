@@ -1,10 +1,10 @@
-# md-preview - Windows 快捷鍵極速 Markdown 預覽工具 ⚡
+# flash-md - Windows 快捷鍵極速 Markdown 預覽工具 ⚡
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
 ---
 
-`md-preview` 是一款專為 Windows 打造、類似 macOS **Quick Look** 體驗的極速 Markdown 與文字檔案預覽工具。以純 **Rust** 與 **egui** 原生渲染技術開發，兼具極致輕量、無網頁框架包袱、瞬間啟動與現代美觀等特性。
+`flash-md` 是一款專為 Windows 打造、類似 macOS **Quick Look** 體驗的極速 Markdown 與文字檔案預覽工具。以純 **Rust** 與 **egui** 原生渲染技術開發，兼具極致輕量、無網頁框架包袱、閃電級啟動與現代美觀等特性。
 
 只要在 **Windows 檔案總管** 或 **桌面** 選取任何 `.md` 檔案並按下 **`Alt + Space`**，即可瞬間彈出浮動視窗預覽內容！
 
@@ -19,7 +19,7 @@
 - 🔄 **檔案變更即時熱重載 (Live Reload)**：若預覽中的檔案在 VSCode、Obsidian 或其他編輯器被修改儲存，預覽視窗將自動即時更新。
 - 📌 **視窗置頂與快速控制**：支援 `Esc` 快速隱藏、`Ctrl + P` 視窗置頂、`Ctrl + O` 在系統預設編輯器中開啟、`Ctrl + + / -` 即時縮放文字大小。
 - 📥 **系統匣常駐 (System Tray)**：常駐於 Windows 工作列右下角系統匣，提供豐富捷徑選單。
-- 🖥️ **CLI 模式支援**：可作為獨立命令列預覽器（例如 `md-preview README.md`）。
+- 🖥️ **CLI 模式支援**：可作為獨立命令列預覽器（例如 `flash-md README.md`）。
 
 ---
 
@@ -42,28 +42,28 @@
 ## 📦 安裝與使用方式 (Installation & Usage)
 
 ### 方式 1：直接下載發布執行檔 (推薦)
-前往 [GitHub Releases](https://github.com/your-username/md-preview/releases) 頁面下載最新版 `md-preview-windows-x86_64.zip`，解壓縮後執行 `md-preview.exe` 即可常駐於系統匣中。
+前往 [GitHub Releases](https://github.com/your-username/flash-md/releases) 頁面下載最新版 `flash-md-windows-x86_64.zip`，解壓縮後執行 `flash-md.exe` 即可常駐於系統匣中。
 
 ### 方式 2：透過命令列執行
 ```powershell
 # 常駐背景監聽快捷鍵 (預設)
-md-preview.exe
+flash-md.exe
 
 # 直接預覽指定檔案 (單獨視窗模式)
-md-preview.exe path/to/document.md
+flash-md.exe path/to/document.md
 ```
 
 ### 方式 3：開機自動啟動 (選用)
-將 `md-preview.exe` 的捷徑放入 Windows 開機啟動資料夾：
+將 `flash-md.exe` 的捷徑放入 Windows 開機啟動資料夾：
 1. 按下 `Win + R` 輸入 `shell:startup` 並按 Enter。
-2. 將 `md-preview.exe` 的捷徑貼上至該資料夾中。
+2. 將 `flash-md.exe` 的捷徑貼上至該資料夾中。
 
 ---
 
 ## 🛠️ 開發與架構說明 (Architecture)
 
 ```
-md-preview/
+flash-md/
 ├── .github/workflows/
 │   └── release.yml     # 雲端 CI/CD 自動編譯與 Release 發布工作流
 ├── src/
