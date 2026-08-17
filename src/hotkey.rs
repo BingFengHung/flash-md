@@ -1,96 +1,58 @@
-use crate::explorer::show_and_focus_app_window;
 use crossbeam_channel::Sender;
 use egui::Context;
 use log::{debug, error, info};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,
-    VK_SPACE,
-};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_MENU, VK_SPACE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, TranslateMessage, MSG, WM_HOTKEY,
+    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
-
-pub const HOTKEY_ID_ALT_SPACE: i32 = 1001;
-pub const HOTKEY_ID_ALT_SHIFT_SPACE: i32 = 1002;
-pub const HOTKEY_ID_CTRL_SHIFT_SPACE: i32 = 1003;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
     TriggerPreview,
 }
 
-/// 啟動全域快捷鍵監聽執行緒 (註冊 Alt+Space, Alt+Shift+Space, Ctrl+Shift+Space)
-pub fn start_hotkey_listener(
-    sender: Sender<HotkeyEvent>,
-    ctx_holder: Arc<Mutex<Option<Context>>>,
-    running: Arc<AtomicBool>,
-) -> thread::JoinHandle<()> {
-    thread::Builder::new()
-        .name("hotkey-listener".to_string())
-        .spawn(move || {
-            info!("啟動 Windows 全域快捷鍵監聽執行緒...");
+static mut GLOBAL_HOTKEY_SENDER: Option<Sender<HotkeyEvent>> = None;
+static mut GLOBAL_CTX_HOLDER: Option<Arc<Mutex<Option<Context>>>> = None;
+static mut GLOBAL_HOOK: HHOOK = HHOOK(0 as _);
 
-            unsafe {
-                let vk = VK_SPACE.0 as u32;
+/// 全域低階鍵盤掛鉤 (WH_KEYBOARD_LL) 回呼函式
+/// 攔截 Alt + Space 並直接吞噬該按鍵事件 (Swallow Key Event)，防止 Windows 彈出系統視窗選單！
+unsafe extern "system" fn low_level_keyboard_proc(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0 {
+        let msg_type = w_param.0 as u32;
+        let is_key_down = msg_type == WM_KEYDOWN || msg_type == WM_SYSKEYDOWN;
+        let is_key_up = msg_type == WM_KEYUP || msg_type == WM_SYSKEYUP;
 
-                // 1. 主要快捷鍵: Alt + Space
-                let reg1 = RegisterHotKey(
-                    HWND(0 as _),
-                    HOTKEY_ID_ALT_SPACE,
-                    MOD_ALT | MOD_NOREPEAT,
-                    vk,
-                );
-                if reg1.is_ok() {
-                    info!("✅ 成功註冊全域快捷鍵: Alt + Space");
-                } else {
-                    error!(
-                        "⚠️ 註冊 Alt + Space 失敗 (可能被系統選單或 PowerToys 占用)，嘗試備用快捷鍵..."
-                    );
-                }
+        if is_key_down || is_key_up {
+            let kbd = *(l_param.0 as *const KBDLLHOOKSTRUCT);
+            let vk = kbd.vkCode;
 
-                // 2. 備用快捷鍵 1: Alt + Shift + Space
-                let _ = RegisterHotKey(
-                    HWND(0 as _),
-                    HOTKEY_ID_ALT_SHIFT_SPACE,
-                    MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
-                    vk,
-                );
+            if vk == VK_SPACE.0 as u32 {
+                // 檢查 Alt 鍵是否處於按下狀態 (透過 GetAsyncKeyState 或 LLKHF_ALTDOWN 旗標)
+                let alt_pressed = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0
+                    || (kbd.flags.0 & 0x20) != 0;
 
-                // 3. 備用快捷鍵 2: Ctrl + Shift + Space
-                let _ = RegisterHotKey(
-                    HWND(0 as _),
-                    HOTKEY_ID_CTRL_SHIFT_SPACE,
-                    MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT,
-                    vk,
-                );
+                if alt_pressed {
+                    if is_key_down {
+                        debug!("⚡ 成功攔截 Alt + Space！發送預覽事件...");
 
-                let mut msg = MSG::default();
-                // Win32 Message Loop
-                while running.load(Ordering::Relaxed) {
-                    let ret = GetMessageW(&mut msg, HWND(0 as _), 0, 0);
-                    if ret.0 <= 0 {
-                        break;
-                    }
-
-                    if msg.message == WM_HOTKEY {
-                        let id = msg.wParam.0 as i32;
-                        if id == HOTKEY_ID_ALT_SPACE
-                            || id == HOTKEY_ID_ALT_SHIFT_SPACE
-                            || id == HOTKEY_ID_CTRL_SHIFT_SPACE
-                        {
-                            debug!("接收到全域快捷鍵 (ID: {}) 觸發事件！", id);
-
-                            // 1. 透過 Win32 原生指令強制喚醒並顯現視窗
-                            show_and_focus_app_window();
-
-                            // 2. 發送預覽事件至應用程式主佇列
+                        // 1. 發送預覽事件至主迴圈 (保持前景焦點在檔案總管以供路徑讀取)
+                        if let Some(ref sender) = GLOBAL_HOTKEY_SENDER {
                             let _ = sender.send(HotkeyEvent::TriggerPreview);
+                        }
 
-                            // 3. 喚醒 egui 繪製迴圈
+                        // 2. 喚醒 egui 繪製迴圈
+                        if let Some(ref ctx_holder) = GLOBAL_CTX_HOLDER {
                             if let Ok(guard) = ctx_holder.lock() {
                                 if let Some(ref ctx) = *guard {
                                     ctx.request_repaint();
@@ -99,16 +61,65 @@ pub fn start_hotkey_listener(
                         }
                     }
 
+                    // 關鍵：傳回 1 (非零) 徹底吞噬此按鍵，防止 Windows 彈出還原/最大化系統選單！
+                    return LRESULT(1);
+                }
+            }
+        }
+    }
+
+    CallNextHookEx(GLOBAL_HOOK, n_code, w_param, l_param)
+}
+
+/// 啟動全域鍵盤掛鉤監聽執行緒
+pub fn start_hotkey_listener(
+    sender: Sender<HotkeyEvent>,
+    ctx_holder: Arc<Mutex<Option<Context>>>,
+    running: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::Builder::new()
+        .name("hotkey-hook-listener".to_string())
+        .spawn(move || {
+            info!("啟動 Windows Low-Level Keyboard Hook (WH_KEYBOARD_LL) 監聽執行緒...");
+
+            unsafe {
+                GLOBAL_HOTKEY_SENDER = Some(sender);
+                GLOBAL_CTX_HOLDER = Some(ctx_holder);
+
+                // 設定低階鍵盤掛鉤 (WH_KEYBOARD_LL)
+                let hook = match SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    Some(low_level_keyboard_proc),
+                    HINSTANCE(0 as _),
+                    0,
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        error!("❌ 無法設定 WH_KEYBOARD_LL 鍵盤掛鉤: {:?}", e);
+                        return;
+                    }
+                };
+
+                GLOBAL_HOOK = hook;
+                info!("✅ 成功啟用 WH_KEYBOARD_LL 全域鍵盤攔截器 (已攔截並吞噬 Alt+Space 系統選單)");
+
+                let mut msg = MSG::default();
+                // Win32 Message Loop 維持掛鉤運作
+                while running.load(Ordering::Relaxed) {
+                    let ret = GetMessageW(&mut msg, HWND(0 as _), 0, 0);
+                    if ret.0 <= 0 {
+                        break;
+                    }
+
                     let _ = TranslateMessage(&msg);
                     let _ = DispatchMessageW(&msg);
                 }
 
-                // 解除註冊
-                let _ = UnregisterHotKey(HWND(0 as _), HOTKEY_ID_ALT_SPACE);
-                let _ = UnregisterHotKey(HWND(0 as _), HOTKEY_ID_ALT_SHIFT_SPACE);
-                let _ = UnregisterHotKey(HWND(0 as _), HOTKEY_ID_CTRL_SHIFT_SPACE);
-                info!("全域快捷鍵已解除註冊");
+                // 移除掛鉤
+                let _ = UnhookWindowsHookEx(hook);
+                GLOBAL_HOOK = HHOOK(0 as _);
+                info!("WH_KEYBOARD_LL 鍵盤掛鉤已安全解除");
             }
         })
-        .expect("無法建立快捷鍵監聽執行緒")
+        .expect("無法建立快捷鍵掛鉤監聽執行緒")
 }
