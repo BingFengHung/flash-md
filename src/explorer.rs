@@ -1,6 +1,6 @@
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::path::PathBuf;
-use windows::core::VARIANT;
+use windows::core::{w, VARIANT};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_LOCAL_SERVER,
@@ -11,19 +11,61 @@ use windows::Win32::UI::Shell::{
     SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetAncestor, GetClassNameW, GetForegroundWindow, GetParent, GetShellWindow, GA_ROOT,
+    FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow, GetParent, GetShellWindow,
+    SetForegroundWindow, ShowWindow, GA_ROOT, SW_HIDE, SW_RESTORE, SW_SHOW,
 };
 use windows_core::Interface;
+
+static APP_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+pub fn set_app_hwnd(hwnd: HWND) {
+    APP_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn get_app_hwnd() -> Option<HWND> {
+    let val = APP_HWND.load(std::sync::atomic::Ordering::Relaxed);
+    if val != 0 {
+        Some(HWND(val as *mut std::ffi::c_void))
+    } else {
+        // 嘗試以視窗標題尋找 flash-md HWND
+        unsafe {
+            let hwnd = FindWindowW(None, w!("flash-md - 快捷鍵 Markdown 預覽"));
+            if hwnd.0 != 0 as _ {
+                APP_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
+                Some(hwnd)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// 透過 Win32 原生 API 強制顯示並聚焦 flash-md 視窗
+pub fn show_and_focus_app_window() {
+    if let Some(hwnd) = get_app_hwnd() {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+/// 透過 Win32 原生 API 隱藏 flash-md 視窗
+pub fn hide_app_window() {
+    if let Some(hwnd) = get_app_hwnd() {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
+    }
+}
 
 /// 取得目前前景視窗（Windows 檔案總管或桌面）中所選取的檔案路徑
 pub fn get_selected_file_from_explorer() -> Option<PathBuf> {
     unsafe {
         // 初始化 COM 元件 (STA 執行緒模式)
-        let com_init = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let result = get_selected_file_internal();
-        if com_init.is_ok() {
-            CoUninitialize();
-        }
         result
     }
 }
@@ -213,6 +255,6 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
     }
 
     let path = PathBuf::from(path_str);
-    debug!("✅ 成功取得選取檔案路徑: {:?}", path);
+    info!("✅ 成功取得選取檔案路徑: {:?}", path);
     Some(path)
 }

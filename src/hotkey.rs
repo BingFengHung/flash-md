@@ -1,3 +1,4 @@
+use crate::explorer::show_and_focus_app_window;
 use crossbeam_channel::Sender;
 use egui::Context;
 use log::{debug, error, info};
@@ -82,9 +83,14 @@ pub fn start_hotkey_listener(
                             || id == HOTKEY_ID_CTRL_SHIFT_SPACE
                         {
                             debug!("接收到全域快捷鍵 (ID: {}) 觸發事件！", id);
+
+                            // 1. 透過 Win32 原生指令強制喚醒並顯現視窗
+                            show_and_focus_app_window();
+
+                            // 2. 發送預覽事件至應用程式主佇列
                             let _ = sender.send(HotkeyEvent::TriggerPreview);
 
-                            // 關鍵：立刻喚醒 egui 事件迴圈，避免視窗在隱藏/閒置時無法接收事件
+                            // 3. 喚醒 egui 繪製迴圈
                             if let Ok(guard) = ctx_holder.lock() {
                                 if let Some(ref ctx) = *guard {
                                     ctx.request_repaint();

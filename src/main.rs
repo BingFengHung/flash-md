@@ -91,7 +91,7 @@ fn main() -> eframe::Result<()> {
     // 建立檔案監視器
     let file_watcher = FileWatcher::new(watcher_tx, ctx_holder.clone());
 
-    // 設定 eframe 原生視窗選項
+    // 設定 eframe 原生視窗選項 (預設先建立視窗，確保 HWND 註冊與訊息佇列正常運作)
     let native_options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("flash-md - 快捷鍵 Markdown 預覽")
@@ -99,7 +99,7 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([500.0, 400.0])
             .with_decorations(true)
             .with_transparent(false)
-            .with_visible(is_standalone || target_file.is_some()),
+            .with_visible(true),
         ..Default::default()
     };
 

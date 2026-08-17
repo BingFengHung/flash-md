@@ -1,4 +1,4 @@
-use crate::explorer::get_selected_file_from_explorer;
+use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
 use crate::markdown::MarkdownRenderer;
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
@@ -15,6 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 pub struct MdPreviewApp {
     pub current_file: Option<PathBuf>,
@@ -185,8 +186,9 @@ impl MdPreviewApp {
                 // 啟動變更監視
                 self.file_watcher.watch_file(path);
                 self.visible = true;
+                show_and_focus_app_window();
                 let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                self.set_toast(format!("已開啟: {}", fname));
+                self.set_toast(format!("已開啟預覽: {}", fname));
             }
             Err(e) => {
                 error!("讀取檔案失敗 {:?}: {:?}", path, e);
@@ -208,30 +210,28 @@ impl MdPreviewApp {
     pub fn trigger_hotkey_preview(&mut self, ctx: &Context) {
         // 從檔案總管或桌面取得選取檔案
         if let Some(selected_path) = get_selected_file_from_explorer() {
-            info!("快捷鍵觸發，選取檔案: {:?}", selected_path);
+            info!("快捷鍵觸發，偵測到選取檔案: {:?}", selected_path);
             if self.visible && self.current_file.as_deref() == Some(&selected_path) {
-                // 如果已經在預覽同一檔案且視窗開啟中，則隱藏 (Quick Look 行為)
+                // 如果已經在預覽同一檔案且視窗開啟中，則隱藏 (Quick Look 體驗)
                 self.visible = false;
+                hide_app_window();
             } else {
                 self.load_file(&selected_path);
                 self.visible = true;
+                show_and_focus_app_window();
             }
         } else {
-            // 沒有偵測到特定選取檔案
+            // 沒有在檔案總管選取特定檔案
             if self.visible {
                 self.visible = false;
+                hide_app_window();
             } else {
                 self.visible = true;
-                self.set_toast("已喚起 flash-md (可在檔案總管點選 .md 檔案後按 Alt+Space 直接預覽)".to_string());
+                show_and_focus_app_window();
+                self.set_toast("⚡ 已開啟 flash-md！(在檔案總管點選 .md 或 .txt 檔案後按 Alt+Space 可直接預覽)".to_string());
             }
         }
 
-        if self.visible {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        } else if !self.is_standalone {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        }
         ctx.request_repaint();
     }
 
@@ -255,6 +255,7 @@ impl MdPreviewApp {
                 self.search_query.clear();
             } else {
                 self.visible = false;
+                hide_app_window();
                 if self.is_standalone {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -313,6 +314,9 @@ impl MdPreviewApp {
 
 impl eframe::App for MdPreviewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 定期自動喚醒保持背景訊息接收敏捷 (每 100ms 檢查一次)
+        ctx.request_repaint_after(Duration::from_millis(100));
+
         // 確保 context holder 隨時保持最新
         if let Ok(mut guard) = self.ctx_holder.lock() {
             if guard.is_none() {
@@ -355,6 +359,7 @@ impl eframe::App for MdPreviewApp {
                 TrayMenuAction::OpenFile => {
                     self.open_file_dialog();
                     self.visible = true;
+                    show_and_focus_app_window();
                 }
                 TrayMenuAction::ToggleTheme => {
                     self.theme.toggle();
@@ -373,10 +378,12 @@ impl eframe::App for MdPreviewApp {
                 TrayMenuAction::CheckUpdate => {
                     self.check_update_manually();
                     self.visible = true;
+                    show_and_focus_app_window();
                 }
                 TrayMenuAction::About => {
                     self.set_toast(format!("flash-md v{} - 快捷鍵 Alt+Space 閃電預覽 ⚡", CURRENT_VERSION));
                     self.visible = true;
+                    show_and_focus_app_window();
                 }
                 TrayMenuAction::Exit => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -387,12 +394,9 @@ impl eframe::App for MdPreviewApp {
         // 快捷鍵監聽
         self.handle_shortcuts(ctx);
 
-        // 視窗可見性狀態管理
+        // 如果視窗處於隱藏狀態，則不進行後續完整 Panel 渲染以節省資源
         if !self.visible && !self.is_standalone {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
-        } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         }
 
         // 頂部新版本升級橫幅 (若有新版本)
@@ -515,6 +519,7 @@ impl eframe::App for MdPreviewApp {
                             .clicked()
                         {
                             self.visible = false;
+                            hide_app_window();
                             if self.is_standalone {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }

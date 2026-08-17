@@ -1,3 +1,4 @@
+use crate::explorer::show_and_focus_app_window;
 use crossbeam_channel::Sender;
 use egui::Context;
 use log::error;
@@ -97,6 +98,8 @@ impl TrayManager {
                 }
 
                 if sent {
+                    // 透過 Win32 原生強制喚醒視窗並重繪
+                    show_and_focus_app_window();
                     if let Ok(guard) = ctx_holder.lock() {
                         if let Some(ref ctx) = *guard {
                             ctx.request_repaint();
