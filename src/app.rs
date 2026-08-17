@@ -375,6 +375,15 @@ impl eframe::App for MdPreviewApp {
             }
         }
 
+        // 攔截原生視窗關閉 (X) 事件：常駐模式下取消退出，改為隱藏回系統匣
+        if ctx.input(|i| i.viewport().close_requested()) {
+            if !self.is_standalone {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.visible = false;
+                hide_app_window();
+            }
+        }
+
         // 處理系統匣選單事件
         while let Ok(action) = self.tray_rx.try_recv() {
             match action {
@@ -406,7 +415,8 @@ impl eframe::App for MdPreviewApp {
                     show_and_focus_app_window();
                 }
                 TrayMenuAction::Exit => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    info!("使用者自系統匣退出 flash-md");
+                    std::process::exit(0);
                 }
             }
         }
