@@ -12,7 +12,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow, GetParent, GetShellWindow,
-    SetForegroundWindow, ShowWindow, GA_ROOT, SW_HIDE, SW_RESTORE, SW_SHOW,
+    SetForegroundWindow, ShowWindow, GA_ROOT, GA_ROOTOWNER, SW_HIDE, SW_RESTORE, SW_SHOW,
 };
 use windows_core::Interface;
 
@@ -78,6 +78,11 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     } else {
         HWND(0 as _)
     };
+    let root_owner = if foreground_hwnd.0 != 0 as _ {
+        GetAncestor(foreground_hwnd, GA_ROOTOWNER)
+    } else {
+        HWND(0 as _)
+    };
 
     let mut class_name = [0u16; 256];
     let class_len = if foreground_hwnd.0 != 0 as _ {
@@ -87,8 +92,8 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     };
     let class_str = String::from_utf16_lossy(&class_name[..class_len as usize]);
     debug!(
-        "前景視窗類別: {}, HWND: {:?}, Root: {:?}",
-        class_str, foreground_hwnd, root_foreground
+        "前景視窗類別: {}, HWND: {:?}, Root: {:?}, RootOwner: {:?}",
+        class_str, foreground_hwnd, root_foreground, root_owner
     );
 
     // 建立 ShellWindows 實例
@@ -137,7 +142,7 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         }
     }
 
-    // 2. 優先搜尋符合前景 HWND / 根視窗 HWND 的視窗 (支援 Windows 10/11 多分頁檔案總管)
+    // 2. 優先搜尋符合前景 HWND / 根視窗 HWND / 擁有者 HWND 的視窗 (支援 Windows 10/11 多分頁檔案總管)
     for i in 0..count {
         let variant_index = VARIANT::from(i);
         let item_disp = match shell_windows.Item(&variant_index) {
@@ -149,12 +154,13 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
             &item_disp,
             foreground_hwnd,
             root_foreground,
+            root_owner,
         ) {
             return Some(path);
         }
     }
 
-    // 3. Fallback: 尋找所有開啟的檔案總管視窗中第一個有選取的有效項目
+    // 3. Fallback: 尋找所有開啟的檔案總管視窗中第一個有選取或焦點的有效項目
     for i in 0..count {
         let variant_index = VARIANT::from(i);
         if let Ok(item_disp) = shell_windows.Item(&variant_index) {
@@ -171,15 +177,19 @@ unsafe fn extract_selected_if_matching_hwnd(
     item_disp: &IDispatch,
     target_hwnd: HWND,
     root_target: HWND,
+    owner_target: HWND,
 ) -> Option<PathBuf> {
     if let Ok(browser) = item_disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
         if let Ok(hwnd_val) = browser.HWND() {
             let win_hwnd = HWND(hwnd_val.0 as _);
             let root_win = GetAncestor(win_hwnd, GA_ROOT);
+            let owner_win = GetAncestor(win_hwnd, GA_ROOTOWNER);
 
             let is_matched = win_hwnd == target_hwnd
                 || root_win == root_target
+                || owner_win == owner_target
                 || win_hwnd == root_target
+                || win_hwnd == owner_target
                 || is_child_or_same(target_hwnd, win_hwnd)
                 || is_child_or_same(win_hwnd, target_hwnd);
 
@@ -224,41 +234,38 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
         Err(_) => return None,
     };
 
-    let selected_items: FolderItems = match folder_view.SelectedItems() {
-        Ok(items) => items,
-        Err(_) => return None,
-    };
-
-    let count = match selected_items.Count() {
-        Ok(c) => c,
-        Err(_) => return None,
-    };
-
-    if count == 0 {
-        return None;
+    // 1. 優先嘗試 SelectedItems()
+    if let Ok(selected_items) = folder_view.SelectedItems() {
+        if let Ok(count) = selected_items.Count() {
+            if count > 0 {
+                let item_variant = VARIANT::from(0i32);
+                if let Ok(item) = selected_items.Item(&item_variant) {
+                    if let Ok(path_bstr) = item.Path() {
+                        let raw_path = path_bstr.to_string();
+                        if !raw_path.is_empty() {
+                            let path = normalize_explorer_path(&raw_path);
+                            info!("✅ 成功自 SelectedItems 取得檔案: {:?} (原始: {})", path, raw_path);
+                            return Some(path);
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    // 取得第 0 個選取的項目路徑
-    let item_variant = VARIANT::from(0i32);
-    let item = match selected_items.Item(&item_variant) {
-        Ok(it) => it,
-        Err(_) => return None,
-    };
-
-    let path_bstr = match item.Path() {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
-
-    let raw_path = path_bstr.to_string();
-    if raw_path.is_empty() {
-        return None;
+    // 2. 備用嘗試 FocusedItem() (因點選時檔案必為 FocusedItem)
+    if let Ok(focused_item) = folder_view.FocusedItem() {
+        if let Ok(path_bstr) = focused_item.Path() {
+            let raw_path = path_bstr.to_string();
+            if !raw_path.is_empty() {
+                let path = normalize_explorer_path(&raw_path);
+                info!("✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})", path, raw_path);
+                return Some(path);
+            }
+        }
     }
 
-    // 將 Windows COM 可能傳回的 file:/// 或 URL 百分比編碼字串還原為正規系統檔案路徑
-    let path = normalize_explorer_path(&raw_path);
-    info!("✅ 成功解析選取檔案路徑: {:?} (原始字串: {})", path, raw_path);
-    Some(path)
+    None
 }
 
 /// 正規化檔案總管傳回的路徑（支援 file:/// 去除、URL 百分比解碼如 %20、路徑引號去除）
