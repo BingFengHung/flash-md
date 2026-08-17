@@ -23,7 +23,7 @@ use watcher::FileWatcher;
 #[command(
     name = "flash-md",
     author = "flash-md contributors",
-    version = "0.2.3",
+    version = "0.2.4",
     about = "⚡ Windows 快捷鍵極速 Markdown 預覽工具 (Flash Quick Look for Windows)",
     long_about = "在 Windows 檔案總管或桌面選取 Markdown 檔案並按下 Alt + Space，即可閃電般彈出預覽視窗！亦可直接以命令列傳入檔案路徑預覽。"
 )]
@@ -41,7 +41,7 @@ fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
 
-    info!("⚡ 啟動 flash-md v0.2.3...");
+    info!("⚡ 啟動 flash-md v0.2.4...");
 
     let is_standalone = cli.file.is_some();
     let target_file = cli.file;

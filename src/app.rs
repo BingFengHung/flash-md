@@ -281,7 +281,7 @@ impl eframe::App for MdPreviewApp {
                     ));
                 }
                 TrayMenuAction::About => {
-                    self.set_toast("flash-md v0.2.3 - 快捷鍵 Alt+Space 閃電預覽 Markdown ⚡".to_string());
+                    self.set_toast("flash-md v0.2.4 - 快捷鍵 Alt+Space 閃電預覽 Markdown ⚡".to_string());
                     self.visible = true;
                 }
                 TrayMenuAction::Exit => {

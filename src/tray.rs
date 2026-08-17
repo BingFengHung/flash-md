@@ -21,7 +21,7 @@ impl TrayManager {
     pub fn new(action_sender: Sender<TrayMenuAction>) -> Option<Self> {
         let menu = Menu::new();
 
-        let title_item = MenuItem::new("flash-md v0.2.3 (Alt + Space)", false, None);
+        let title_item = MenuItem::new("flash-md v0.2.4 (Alt + Space)", false, None);
         let open_item = MenuItem::new("📂 開啟 Markdown 檔案...", true, None);
         let theme_item = MenuItem::new("🎨 切換深淺色主題", true, None);
         let pin_item = MenuItem::new("📌 切換視窗置頂", true, None);
