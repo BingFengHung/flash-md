@@ -118,7 +118,7 @@ unsafe fn extract_selected_path_from_disp(
     // 取得 IWebBrowserApp HWND 以比對前景視窗
     if let Ok(browser) = item_disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
         if let Ok(hwnd_val) = browser.HWND() {
-            let win_hwnd = HWND(hwnd_val as *mut _);
+            let win_hwnd = HWND(hwnd_val.0 as _);
             if win_hwnd == target_hwnd || is_child_or_same(target_hwnd, win_hwnd) {
                 return extract_selected_from_folder_view(item_disp);
             }
