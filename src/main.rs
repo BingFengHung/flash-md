@@ -16,14 +16,14 @@ use eframe::egui::ViewportBuilder;
 use log::info;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use watcher::FileWatcher;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "flash-md",
     author = "flash-md contributors",
-    version = "0.3.0",
+    version = "0.3.1",
     about = "⚡ Windows 快捷鍵極速 Markdown 預覽工具 (Flash Quick Look for Windows)",
     long_about = "在 Windows 檔案總管或桌面選取 Markdown 檔案並按下 Alt + Space，即可閃電般彈出預覽視窗！亦可直接以命令列傳入檔案路徑預覽。"
 )]
@@ -41,7 +41,7 @@ fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
 
-    info!("⚡ 啟動 flash-md v0.3.0...");
+    info!("⚡ 啟動 flash-md v0.3.1...");
 
     let is_standalone = cli.file.is_some();
     let target_file = cli.file;
@@ -52,25 +52,26 @@ fn main() -> eframe::Result<()> {
     let (tray_tx, tray_rx) = unbounded();
 
     let running = Arc::new(AtomicBool::new(true));
+    let ctx_holder = Arc::new(Mutex::new(None));
 
-    // 啟動全域快捷鍵監聽 (Alt + Space)
-    let _hotkey_handle = hotkey::start_hotkey_listener(hotkey_tx, running.clone());
+    // 啟動全域快捷鍵監聽 (Alt + Space 與備用快捷鍵)
+    let _hotkey_handle = hotkey::start_hotkey_listener(hotkey_tx, ctx_holder.clone(), running.clone());
 
     // 建立系統匣常駐圖示
-    let _tray_manager = tray::TrayManager::new(tray_tx);
+    let _tray_manager = tray::TrayManager::new(tray_tx, ctx_holder.clone());
 
     // 建立檔案監視器
-    let file_watcher = FileWatcher::new(watcher_tx);
+    let file_watcher = FileWatcher::new(watcher_tx, ctx_holder.clone());
 
     // 設定 eframe 原生視窗選項
     let native_options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("flash-md - 快捷鍵 Markdown 預覽")
-            .with_inner_size([920.0, 680.0])
+            .with_inner_size([940.0, 700.0])
             .with_min_inner_size([500.0, 400.0])
             .with_decorations(true)
             .with_transparent(false)
-            .with_visible(!is_standalone || target_file.is_some()),
+            .with_visible(is_standalone || target_file.is_some()),
         ..Default::default()
     };
 
@@ -86,6 +87,7 @@ fn main() -> eframe::Result<()> {
                 watcher_rx,
                 tray_rx,
                 file_watcher,
+                ctx_holder,
             )))
         }),
     )

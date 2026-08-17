@@ -1,6 +1,8 @@
 use crossbeam_channel::Sender;
+use egui::Context;
 use log::error;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -18,7 +20,10 @@ pub struct TrayManager {
 }
 
 impl TrayManager {
-    pub fn new(action_sender: Sender<TrayMenuAction>) -> Option<Self> {
+    pub fn new(
+        action_sender: Sender<TrayMenuAction>,
+        ctx_holder: Arc<Mutex<Option<Context>>>,
+    ) -> Option<Self> {
         let menu = Menu::new();
 
         let title_item = MenuItem::new("flash-md (Alt + Space)", false, None);
@@ -65,16 +70,30 @@ impl TrayManager {
         thread::spawn(move || {
             let menu_channel = MenuEvent::receiver();
             while let Ok(event) = menu_channel.recv() {
+                let mut sent = false;
                 if event.id == open_id {
                     let _ = action_sender.send(TrayMenuAction::OpenFile);
+                    sent = true;
                 } else if event.id == theme_id {
                     let _ = action_sender.send(TrayMenuAction::ToggleTheme);
+                    sent = true;
                 } else if event.id == pin_id {
                     let _ = action_sender.send(TrayMenuAction::ToggleAlwaysOnTop);
+                    sent = true;
                 } else if event.id == about_id {
                     let _ = action_sender.send(TrayMenuAction::About);
+                    sent = true;
                 } else if event.id == exit_id {
                     let _ = action_sender.send(TrayMenuAction::Exit);
+                    sent = true;
+                }
+
+                if sent {
+                    if let Ok(guard) = ctx_holder.lock() {
+                        if let Some(ref ctx) = *guard {
+                            ctx.request_repaint();
+                        }
+                    }
                 }
             }
         });
@@ -91,13 +110,11 @@ fn create_default_tray_icon() -> Icon {
     let height = 32usize;
     let mut rgba = Vec::with_capacity(width * height * 4);
 
-    // 預先計算 32x32 閃電形狀點陣圖
     for y in 0..height {
         for x in 0..width {
             let fx = x as f32;
             let fy = y as f32;
 
-            // 圓角矩形 (Squircle) 判斷
             let cx = 15.5_f32;
             let cy = 15.5_f32;
             let dx = (fx - cx).abs();
@@ -110,7 +127,6 @@ fn create_default_tray_icon() -> Icon {
 
             let in_squircle = dx <= 14.5 && dy <= 14.5 && corner_dist <= 4.5;
 
-            // 閃電幾何形狀 (Lightning Polygon)
             let is_lightning = (x >= 14 && x <= 18 && y >= 6 && y <= 13)
                 || (x >= 11 && x <= 22 && y == 14)
                 || (x >= 10 && x <= 20 && y == 15)
@@ -118,12 +134,10 @@ fn create_default_tray_icon() -> Icon {
                 || (x >= 13 && x <= 17 && y >= 17 && y <= 25 && (x + y >= 32 && x <= y - 5));
 
             if !in_squircle {
-                rgba.extend_from_slice(&[0, 0, 0, 0]); // 完全透明
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
             } else if is_lightning {
-                // 亮黃白閃電核心
                 rgba.extend_from_slice(&[255, 255, 255, 255]);
             } else {
-                // 漸層青藍底色 (#0284c7 -> #0369a1)
                 let gradient = (fy / 32.0_f32) * 40.0;
                 let r = (2.0 - gradient * 0.05).clamp(0.0, 255.0) as u8;
                 let g = (132.0 - gradient).clamp(0.0, 255.0) as u8;

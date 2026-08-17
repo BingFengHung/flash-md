@@ -11,7 +11,7 @@ use windows::Win32::UI::Shell::{
     SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetParent, GetShellWindow,
+    GetAncestor, GetClassNameW, GetForegroundWindow, GetParent, GetShellWindow, GA_ROOT,
 };
 use windows_core::Interface;
 
@@ -30,18 +30,23 @@ pub fn get_selected_file_from_explorer() -> Option<PathBuf> {
 
 unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     let foreground_hwnd = GetForegroundWindow();
-    if foreground_hwnd.0 == 0 as _ {
-        debug!("未偵測到前景視窗");
-        return None;
-    }
+    let root_foreground = if foreground_hwnd.0 != 0 as _ {
+        GetAncestor(foreground_hwnd, GA_ROOT)
+    } else {
+        HWND(0 as _)
+    };
 
     let mut class_name = [0u16; 256];
-    let class_len = GetClassNameW(foreground_hwnd, &mut class_name);
-    if class_len == 0 {
-        return None;
-    }
+    let class_len = if foreground_hwnd.0 != 0 as _ {
+        GetClassNameW(foreground_hwnd, &mut class_name)
+    } else {
+        0
+    };
     let class_str = String::from_utf16_lossy(&class_name[..class_len as usize]);
-    debug!("前景視窗類別: {}, HWND: {:?}", class_str, foreground_hwnd);
+    debug!(
+        "前景視窗類別: {}, HWND: {:?}, Root: {:?}",
+        class_str, foreground_hwnd, root_foreground
+    );
 
     // 建立 ShellWindows 實例
     let shell_windows: IShellWindows = match CoCreateInstance(
@@ -66,22 +71,13 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
 
     debug!("已開啟的 Shell 視窗數量: {}", count);
 
-    // 1. 搜尋符合前景 HWND 的視窗 (支援 Windows 10/11 多分頁檔案總管)
-    for i in 0..count {
-        let variant_index = VARIANT::from(i);
-        let item_disp = match shell_windows.Item(&variant_index) {
-            Ok(disp) => disp,
-            Err(_) => continue,
-        };
-
-        if let Some(path) = extract_selected_path_from_disp(&item_disp, foreground_hwnd) {
-            return Some(path);
-        }
-    }
-
-    // 2. 如果前景是桌面 (Progman 或 WorkerW)
+    // 1. 如果前景為 Windows 桌面 (Progman 或 WorkerW)
     let shell_hwnd = GetShellWindow();
-    if class_str == "Progman" || class_str == "WorkerW" || foreground_hwnd == shell_hwnd {
+    if class_str == "Progman"
+        || class_str == "WorkerW"
+        || foreground_hwnd == shell_hwnd
+        || root_foreground == shell_hwnd
+    {
         debug!("前景為 Windows 桌面，嘗試查詢桌面選取項目...");
         let pvar_loc = VARIANT::from(0i32); // CSIDL_DESKTOP
         let mut phwnd = 0i32;
@@ -98,7 +94,24 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         }
     }
 
-    // 3. Fallback: 嘗試從第一個有效選取項目取得
+    // 2. 優先搜尋符合前景 HWND / 根視窗 HWND 的視窗 (支援 Windows 10/11 多分頁檔案總管)
+    for i in 0..count {
+        let variant_index = VARIANT::from(i);
+        let item_disp = match shell_windows.Item(&variant_index) {
+            Ok(disp) => disp,
+            Err(_) => continue,
+        };
+
+        if let Some(path) = extract_selected_if_matching_hwnd(
+            &item_disp,
+            foreground_hwnd,
+            root_foreground,
+        ) {
+            return Some(path);
+        }
+    }
+
+    // 3. Fallback: 尋找所有開啟的檔案總管視窗中第一個有選取的有效項目
     for i in 0..count {
         let variant_index = VARIANT::from(i);
         if let Ok(item_disp) = shell_windows.Item(&variant_index) {
@@ -111,15 +124,23 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     None
 }
 
-unsafe fn extract_selected_path_from_disp(
+unsafe fn extract_selected_if_matching_hwnd(
     item_disp: &IDispatch,
     target_hwnd: HWND,
+    root_target: HWND,
 ) -> Option<PathBuf> {
-    // 取得 IWebBrowserApp HWND 以比對前景視窗
     if let Ok(browser) = item_disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
         if let Ok(hwnd_val) = browser.HWND() {
             let win_hwnd = HWND(hwnd_val.0 as _);
-            if win_hwnd == target_hwnd || is_child_or_same(target_hwnd, win_hwnd) {
+            let root_win = GetAncestor(win_hwnd, GA_ROOT);
+
+            let is_matched = win_hwnd == target_hwnd
+                || root_win == root_target
+                || win_hwnd == root_target
+                || is_child_or_same(target_hwnd, win_hwnd)
+                || is_child_or_same(win_hwnd, target_hwnd);
+
+            if is_matched {
                 return extract_selected_from_folder_view(item_disp);
             }
         }
@@ -145,7 +166,6 @@ unsafe fn is_child_or_same(child: HWND, parent: HWND) -> bool {
 }
 
 unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf> {
-    // 透過 IWebBrowserApp / IShellBrowser 取得 Document (IShellFolderViewDual)
     let web_browser: windows::Win32::UI::Shell::IWebBrowserApp = match disp.cast() {
         Ok(wb) => wb,
         Err(_) => return None,
@@ -175,7 +195,7 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
         return None;
     }
 
-    // 取得第 0 個選取的項目
+    // 取得第 0 個選取的項目路徑
     let item_variant = VARIANT::from(0i32);
     let item = match selected_items.Item(&item_variant) {
         Ok(it) => it,
@@ -193,6 +213,6 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
     }
 
     let path = PathBuf::from(path_str);
-    debug!("偵測到選取檔案: {:?}", path);
+    debug!("✅ 成功取得選取檔案路徑: {:?}", path);
     Some(path)
 }

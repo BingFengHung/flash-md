@@ -6,12 +6,13 @@ use crate::tray::TrayMenuAction;
 use crate::watcher::{FileWatcher, WatcherEvent};
 use crossbeam_channel::Receiver;
 use egui::{
-    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
+    Align, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
     TextEdit, Vec2,
 };
 use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub struct MdPreviewApp {
     pub current_file: Option<PathBuf>,
@@ -33,6 +34,7 @@ pub struct MdPreviewApp {
     pub hotkey_rx: Receiver<HotkeyEvent>,
     pub watcher_rx: Receiver<WatcherEvent>,
     pub tray_rx: Receiver<TrayMenuAction>,
+    pub ctx_holder: Arc<Mutex<Option<Context>>>,
 
     pub status_toast: Option<(String, std::time::Instant)>,
 }
@@ -46,7 +48,13 @@ impl MdPreviewApp {
         watcher_rx: Receiver<WatcherEvent>,
         tray_rx: Receiver<TrayMenuAction>,
         file_watcher: FileWatcher,
+        ctx_holder: Arc<Mutex<Option<Context>>>,
     ) -> Self {
+        // 註冊 egui Context 到全域 holder，供快捷鍵與系統匣隨時喚醒
+        if let Ok(mut guard) = ctx_holder.lock() {
+            *guard = Some(cc.egui_ctx.clone());
+        }
+
         // 載入 Windows 繁體中文與 Emoji 系統字型 (徹底解決方塊字問題)
         setup_system_cjk_fonts(&cc.egui_ctx);
 
@@ -62,7 +70,7 @@ impl MdPreviewApp {
             theme,
             font_scale: 1.0,
             always_on_top: false,
-            visible: initial_file.is_some() || !is_standalone,
+            visible: initial_file.is_some() || is_standalone,
             is_standalone,
             search_open: false,
             search_query: String::new(),
@@ -70,6 +78,7 @@ impl MdPreviewApp {
             hotkey_rx,
             watcher_rx,
             tray_rx,
+            ctx_holder,
             status_toast: None,
         };
 
@@ -128,40 +137,34 @@ impl MdPreviewApp {
         }
     }
 
-    pub fn trigger_hotkey_preview(&mut self) {
+    pub fn trigger_hotkey_preview(&mut self, ctx: &Context) {
         // 從檔案總管或桌面取得選取檔案
         if let Some(selected_path) = get_selected_file_from_explorer() {
-            let is_supported = selected_path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| {
-                    let ext_lower = ext.to_lowercase();
-                    matches!(
-                        ext_lower.as_str(),
-                        "md" | "markdown" | "mdown" | "mkd" | "txt" | "rs" | "toml" | "json" | "yaml" | "yml"
-                    )
-                })
-                .unwrap_or(false);
-
-            if is_supported {
-                // 若當前已經在預覽同一檔案且視窗可見，則關閉（macOS QuickLook 體驗）
-                if self.visible && self.current_file.as_deref() == Some(&selected_path) {
-                    self.visible = false;
-                } else {
-                    self.load_file(&selected_path);
-                    self.visible = true;
-                }
+            info!("快捷鍵觸發，選取檔案: {:?}", selected_path);
+            if self.visible && self.current_file.as_deref() == Some(&selected_path) {
+                // 如果已經在預覽同一檔案且視窗開啟中，則隱藏 (Quick Look 行為)
+                self.visible = false;
             } else {
-                if self.visible && self.current_file.as_deref() == Some(&selected_path) {
-                    self.visible = false;
-                } else {
-                    self.load_file(&selected_path);
-                    self.visible = true;
-                }
+                self.load_file(&selected_path);
+                self.visible = true;
             }
-        } else if self.visible {
-            self.visible = false;
+        } else {
+            // 沒有偵測到特定選取檔案
+            if self.visible {
+                self.visible = false;
+            } else {
+                self.visible = true;
+                self.set_toast("已喚起 flash-md (可在檔案總管點選 .md 檔案後按 Alt+Space 直接預覽)".to_string());
+            }
         }
+
+        if self.visible {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        } else if !self.is_standalone {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+        ctx.request_repaint();
     }
 
     pub fn set_toast(&mut self, msg: String) {
@@ -242,12 +245,17 @@ impl MdPreviewApp {
 
 impl eframe::App for MdPreviewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 確保 context holder 隨時保持最新
+        if let Ok(mut guard) = self.ctx_holder.lock() {
+            if guard.is_none() {
+                *guard = Some(ctx.clone());
+            }
+        }
+
         // 處理全域快捷鍵事件
         while let Ok(event) = self.hotkey_rx.try_recv() {
             if event == HotkeyEvent::TriggerPreview {
-                self.trigger_hotkey_preview();
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                ctx.request_repaint();
+                self.trigger_hotkey_preview(ctx);
             }
         }
 
@@ -268,6 +276,7 @@ impl eframe::App for MdPreviewApp {
             match action {
                 TrayMenuAction::OpenFile => {
                     self.open_file_dialog();
+                    self.visible = true;
                 }
                 TrayMenuAction::ToggleTheme => {
                     self.theme.toggle();
@@ -496,7 +505,7 @@ impl eframe::App for MdPreviewApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if let Some((ref msg, instant)) = self.status_toast {
-                        if instant.elapsed().as_secs() < 3 {
+                        if instant.elapsed().as_secs() < 4 {
                             ui.label(
                                 RichText::new(msg)
                                     .color(self.theme.accent_color())

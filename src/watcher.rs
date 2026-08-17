@@ -1,7 +1,9 @@
 use crossbeam_channel::Sender;
+use egui::Context;
 use log::{debug, error, info};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -13,14 +15,19 @@ pub struct FileWatcher {
     watcher: Option<RecommendedWatcher>,
     current_path: Option<PathBuf>,
     event_sender: Sender<WatcherEvent>,
+    ctx_holder: Arc<Mutex<Option<Context>>>,
 }
 
 impl FileWatcher {
-    pub fn new(event_sender: Sender<WatcherEvent>) -> Self {
+    pub fn new(
+        event_sender: Sender<WatcherEvent>,
+        ctx_holder: Arc<Mutex<Option<Context>>>,
+    ) -> Self {
         Self {
             watcher: None,
             current_path: None,
             event_sender,
+            ctx_holder,
         }
     }
 
@@ -34,6 +41,7 @@ impl FileWatcher {
         let path_buf = path.to_path_buf();
         let target_path = path_buf.clone();
         let sender = self.event_sender.clone();
+        let ctx_holder = self.ctx_holder.clone();
 
         let mut watcher = match RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| {
@@ -43,6 +51,11 @@ impl FileWatcher {
                             if event.paths.iter().any(|p| p == &target_path) {
                                 debug!("檔案變更通知: {:?}", target_path);
                                 let _ = sender.send(WatcherEvent::FileChanged(target_path.clone()));
+                                if let Ok(guard) = ctx_holder.lock() {
+                                    if let Some(ref ctx) = *guard {
+                                        ctx.request_repaint();
+                                    }
+                                }
                             }
                         }
                         _ => {}
