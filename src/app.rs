@@ -3,8 +3,9 @@ use crate::hotkey::HotkeyEvent;
 use crate::markdown::MarkdownRenderer;
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
+use crate::updater::{check_latest_release, perform_self_update, ReleaseInfo, CURRENT_VERSION};
 use crate::watcher::{FileWatcher, WatcherEvent};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{
     Align, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
     TextEdit, Vec2,
@@ -13,6 +14,7 @@ use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 pub struct MdPreviewApp {
     pub current_file: Option<PathBuf>,
@@ -29,6 +31,11 @@ pub struct MdPreviewApp {
 
     pub search_open: bool,
     pub search_query: String,
+
+    pub available_update: Option<ReleaseInfo>,
+    pub is_updating: bool,
+    pub update_tx: Sender<Option<ReleaseInfo>>,
+    pub update_rx: Receiver<Option<ReleaseInfo>>,
 
     pub file_watcher: FileWatcher,
     pub hotkey_rx: Receiver<HotkeyEvent>,
@@ -61,6 +68,8 @@ impl MdPreviewApp {
         let theme = AppTheme::Dark;
         theme.apply_to_ctx(&cc.egui_ctx);
 
+        let (update_tx, update_rx) = unbounded();
+
         let mut app = Self {
             current_file: None,
             content: String::new(),
@@ -74,19 +83,78 @@ impl MdPreviewApp {
             is_standalone,
             search_open: false,
             search_query: String::new(),
+            available_update: None,
+            is_updating: false,
+            update_tx: update_tx.clone(),
+            update_rx,
             file_watcher,
             hotkey_rx,
             watcher_rx,
             tray_rx,
-            ctx_holder,
+            ctx_holder: ctx_holder.clone(),
             status_toast: None,
         };
+
+        // 啟動時在背景默默檢查是否有新版本發布
+        let bg_tx = update_tx.clone();
+        let bg_ctx_holder = ctx_holder.clone();
+        thread::spawn(move || {
+            let rel = check_latest_release();
+            let has_update = rel.is_some();
+            let _ = bg_tx.send(rel);
+            if has_update {
+                if let Ok(guard) = bg_ctx_holder.lock() {
+                    if let Some(ref ctx) = *guard {
+                        ctx.request_repaint();
+                    }
+                }
+            }
+        });
 
         if let Some(file) = initial_file {
             app.load_file(&file);
         }
 
         app
+    }
+
+    pub fn check_update_manually(&mut self) {
+        self.set_toast("正在檢查 GitHub 最新版本... ⏳".to_string());
+        let tx = self.update_tx.clone();
+        let ctx_holder = self.ctx_holder.clone();
+        thread::spawn(move || {
+            let rel = check_latest_release();
+            let _ = tx.send(rel);
+            if let Ok(guard) = ctx_holder.lock() {
+                if let Some(ref ctx) = *guard {
+                    ctx.request_repaint();
+                }
+            }
+        });
+    }
+
+    pub fn trigger_self_update(&mut self) {
+        if let Some(release) = self.available_update.clone() {
+            self.is_updating = true;
+            self.set_toast(format!("正在下載並自動更新至 {}... 請稍候 ⏳", release.tag_name));
+            let ctx_holder = self.ctx_holder.clone();
+
+            thread::spawn(move || {
+                match perform_self_update(&release) {
+                    Ok(_) => {
+                        info!("更新完成！");
+                    }
+                    Err(e) => {
+                        error!("更新失敗: {}", e);
+                    }
+                }
+                if let Ok(guard) = ctx_holder.lock() {
+                    if let Some(ref ctx) = *guard {
+                        ctx.request_repaint();
+                    }
+                }
+            });
+        }
     }
 
     pub fn load_file(&mut self, path: &Path) {
@@ -252,6 +320,16 @@ impl eframe::App for MdPreviewApp {
             }
         }
 
+        // 處理非同步更新檢查結果
+        while let Ok(res) = self.update_rx.try_recv() {
+            if let Some(rel) = res {
+                self.set_toast(format!("🎉 發現新版本 {}！可在頂部點擊升級", rel.tag_name));
+                self.available_update = Some(rel);
+            } else {
+                self.set_toast(format!("✅ 目前已是最新版本 (v{})", CURRENT_VERSION));
+            }
+        }
+
         // 處理全域快捷鍵事件
         while let Ok(event) = self.hotkey_rx.try_recv() {
             if event == HotkeyEvent::TriggerPreview {
@@ -292,8 +370,12 @@ impl eframe::App for MdPreviewApp {
                         },
                     ));
                 }
+                TrayMenuAction::CheckUpdate => {
+                    self.check_update_manually();
+                    self.visible = true;
+                }
                 TrayMenuAction::About => {
-                    self.set_toast("flash-md - 快捷鍵 Alt+Space 閃電預覽 Markdown ⚡".to_string());
+                    self.set_toast(format!("flash-md v{} - 快捷鍵 Alt+Space 閃電預覽 ⚡", CURRENT_VERSION));
                     self.visible = true;
                 }
                 TrayMenuAction::Exit => {
@@ -311,6 +393,40 @@ impl eframe::App for MdPreviewApp {
             return;
         } else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+
+        // 頂部新版本升級橫幅 (若有新版本)
+        if let Some(ref release) = self.available_update {
+            egui::TopBottomPanel::top("update_banner")
+                .frame(
+                    Frame::none()
+                        .fill(self.theme.accent_bg())
+                        .stroke(Stroke::new(1.0_f32, self.theme.accent_color()))
+                        .inner_margin(Margin::symmetric(16.0, 8.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!("🎉 發現全新版本 {} (目前為 v{})！", release.tag_name, CURRENT_VERSION))
+                                .color(self.theme.accent_color())
+                                .strong()
+                                .size(12.5),
+                        );
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button(RichText::new("✕ 稍後").size(11.0)).clicked() {
+                                self.available_update = None;
+                            }
+
+                            if ui
+                                .button(RichText::new(" 🚀 一鍵自動升級 ").strong().size(12.0).color(Color32::WHITE))
+                                .clicked()
+                            {
+                                self.trigger_self_update();
+                            }
+                        });
+                    });
+                });
         }
 
         // 頂部現代精緻導航列 (Fluent / macOS 玻璃質感風格)
@@ -431,6 +547,15 @@ impl eframe::App for MdPreviewApp {
                         {
                             self.theme.toggle();
                             self.theme.apply_to_ctx(ctx);
+                        }
+
+                        // 檢查更新按鈕
+                        if ui
+                            .button(RichText::new(" 🔄 更新 ").size(12.0).color(self.theme.text_secondary()))
+                            .on_hover_text("檢查 GitHub 最新版本")
+                            .clicked()
+                        {
+                            self.check_update_manually();
                         }
 
                         // 外部編輯器開啟
@@ -567,9 +692,12 @@ impl eframe::App for MdPreviewApp {
 impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
         ui.label(
-            RichText::new("快捷鍵: Alt + Space (快速預覽)  •  Esc (隱藏)  •  Ctrl + O (外部開啟)  •  Ctrl + Shift + C (複製全文)")
-                .color(self.theme.text_secondary())
-                .size(11.5),
+            RichText::new(format!(
+                "flash-md v{}  •  快捷鍵: Alt + Space (快速預覽)  •  Esc (隱藏)  •  Ctrl + O (外部開啟)",
+                CURRENT_VERSION
+            ))
+            .color(self.theme.text_secondary())
+            .size(11.5),
         );
     }
 
@@ -590,7 +718,7 @@ impl MdPreviewApp {
                             .inner_margin(Margin::symmetric(16.0, 10.0))
                             .show(ui, |ui| {
                                 ui.label(
-                                    RichText::new("⚡ flash-md")
+                                    RichText::new(format!("⚡ flash-md v{}", CURRENT_VERSION))
                                         .size(24.0)
                                         .strong()
                                         .color(self.theme.accent_color()),
@@ -649,7 +777,7 @@ impl MdPreviewApp {
                         // 特色小標
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new("⚡ 純 Rust 毫秒級渲染  •  🔄 即時熱重載  •  🎨 語法高亮")
+                                RichText::new("⚡ 純 Rust 毫秒級渲染  •  🔄 即時熱重載  •  🚀 一鍵在線升級")
                                     .size(11.5)
                                     .color(self.theme.text_secondary()),
                             );

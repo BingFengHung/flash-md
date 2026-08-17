@@ -44,14 +44,21 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ### Option 1: Download Pre-built Binary (Recommended)
 Download the latest `flash-md-windows-x86_64.zip` from [GitHub Releases](https://github.com/BingFengHung/flash-md/releases), extract it, and run `flash-md.exe`.
 
-### Option 2: CLI Usage
+### Option 2: CLI Usage & Auto-Update
 ```powershell
 # Run resident background daemon (default)
 flash-md.exe
 
+# Check and auto-update to latest GitHub release 🔄
+flash-md.exe --update
+
 # Standalone preview of a specific file
 flash-md.exe path/to/document.md
 ```
+
+### Option 3: In-App & Tray 1-Click Update
+- **Background Checks**: Automatically checks for new GitHub Releases on startup and displays an upgrade banner.
+- **System Tray**: Right-click the system tray icon and select **"🔄 Check Update..."** to check and update anytime.
 
 ### Option 3: Run on Windows Startup (Optional)
 To launch `flash-md` automatically when Windows starts:

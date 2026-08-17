@@ -11,6 +11,7 @@ pub enum TrayMenuAction {
     OpenFile,
     ToggleTheme,
     ToggleAlwaysOnTop,
+    CheckUpdate,
     About,
     Exit,
 }
@@ -30,24 +31,28 @@ impl TrayManager {
         let open_item = MenuItem::new("📂 開啟 Markdown 檔案...", true, None);
         let theme_item = MenuItem::new("🎨 切換深淺色主題", true, None);
         let pin_item = MenuItem::new("📌 切換視窗置頂", true, None);
+        let update_item = MenuItem::new("🔄 檢查更新 (Check Update)...", true, None);
         let about_item = MenuItem::new("ℹ️ 關於 flash-md", true, None);
-        let separator = PredefinedMenuItem::separator();
+        let separator1 = PredefinedMenuItem::separator();
+        let separator2 = PredefinedMenuItem::separator();
         let exit_item = MenuItem::new("❌ 結束程式", true, None);
 
         let open_id = open_item.id().clone();
         let theme_id = theme_item.id().clone();
         let pin_id = pin_item.id().clone();
+        let update_id = update_item.id().clone();
         let about_id = about_item.id().clone();
         let exit_id = exit_item.id().clone();
 
         let _ = menu.append_items(&[
             &title_item,
-            &PredefinedMenuItem::separator(),
+            &separator1,
             &open_item,
             &theme_item,
             &pin_item,
+            &update_item,
             &about_item,
-            &separator,
+            &separator2,
             &exit_item,
         ]);
 
@@ -79,6 +84,9 @@ impl TrayManager {
                     sent = true;
                 } else if event.id == pin_id {
                     let _ = action_sender.send(TrayMenuAction::ToggleAlwaysOnTop);
+                    sent = true;
+                } else if event.id == update_id {
+                    let _ = action_sender.send(TrayMenuAction::CheckUpdate);
                     sent = true;
                 } else if event.id == about_id {
                     let _ = action_sender.send(TrayMenuAction::About);

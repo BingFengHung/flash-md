@@ -44,14 +44,21 @@
 ### 方式 1：直接下載發布執行檔 (推薦)
 前往 [GitHub Releases](https://github.com/BingFengHung/flash-md/releases) 頁面下載最新版 `flash-md-windows-x86_64.zip`，解壓縮後執行 `flash-md.exe` 即可常駐於系統匣中。
 
-### 方式 2：透過命令列執行
+### 方式 2：透過命令列執行或自動更新
 ```powershell
 # 常駐背景監聽快捷鍵 (預設)
 flash-md.exe
 
+# 檢查並自動升級至 GitHub 最新版本 🔄
+flash-md.exe --update
+
 # 直接預覽指定檔案 (單獨視窗模式)
 flash-md.exe path/to/document.md
 ```
+
+### 方式 3：GUI 介面與系統匣一鍵更新
+- **背景檢查**：程式啟動時會在背景自動檢查 GitHub Releases，若發現新版本將在頂部顯示「🚀 一鍵自動升級」按鈕。
+- **系統匣選單**：右鍵點擊工作列右下角閃電圖示，選擇 **「🔄 檢查更新 (Check Update)...」** 即可隨時線上手動檢查並升級。
 
 ### 方式 3：開機自動啟動 (選用)
 將 `flash-md.exe` 的捷徑放入 Windows 開機啟動資料夾：
