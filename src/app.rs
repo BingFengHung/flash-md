@@ -185,77 +185,134 @@ impl MdPreviewApp {
         }
 
         let path_str = path.to_string_lossy().to_string();
-        if !path.exists() {
-            if path_str.to_lowercase().contains(".zip\\") || path_str.to_lowercase().contains(".zip/") {
-                self.set_toast("⚠️ 提示：請先將 ZIP 壓縮檔解壓縮後再進行檔案預覽 📦".to_string());
+        let lower_path = path_str.to_lowercase();
+
+        // 1. 一般實體檔案讀取
+        if path.exists() {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
+                self.view_mode = ViewMode::Markdown;
+            } else if is_code_extension(&ext) {
+                self.view_mode = ViewMode::Code { lang: ext.clone() };
             } else {
-                self.set_toast(format!("找不到檔案: {:?}", path));
+                self.view_mode = ViewMode::PlainText;
             }
-            self.visible = true;
-            show_and_focus_app_window();
+
+            match fs::read_to_string(path) {
+                Ok(text) => {
+                    self.line_count = text.lines().count();
+                    self.content = text;
+                    self.current_file = Some(path.to_path_buf());
+
+                    // 檔案元資訊計算
+                    if let Ok(metadata) = fs::metadata(path) {
+                        let len = metadata.len();
+                        self.file_size_str = if len < 1024 {
+                            format!("{} B", len)
+                        } else if len < 1024 * 1024 {
+                            format!("{:.1} KB", len as f64 / 1024.0)
+                        } else {
+                            format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
+                        };
+
+                        if let Ok(mod_time) = metadata.modified() {
+                            let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
+                            self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
+                        }
+                    }
+
+                    // 啟動變更監視
+                    self.file_watcher.watch_file(path);
+                    self.visible = true;
+                    show_and_focus_app_window();
+                    let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                    let mode_desc = match self.view_mode {
+                        ViewMode::Markdown => "Markdown 渲染".to_string(),
+                        ViewMode::Code { ref lang } => {
+                            let (name, emoji) = get_language_badge(lang);
+                            format!("{} {} 語法高亮", emoji, name)
+                        }
+                        ViewMode::PlainText => "純文字模式".to_string(),
+                    };
+                    self.set_toast(format!("⚡ 已開啟: {} ({})", fname, mode_desc));
+                }
+                Err(e) => {
+                    error!("讀取檔案失敗 {:?}: {:?}", path, e);
+                    self.set_toast(format!("無法讀取檔案: {}", e));
+                    self.visible = true;
+                    show_and_focus_app_window();
+                }
+            }
             return;
         }
 
-        // 智慧識別檔案類型：Markdown / 全語言程式碼語法高亮 / 純文字
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        // 2. 針對 ZIP 虛擬壓縮目錄內的檔案進行即時解壓縮預覽！
+        if lower_path.contains(".zip\\") || lower_path.contains(".zip/") {
+            if let Some(zip_idx) = lower_path.find(".zip\\").or_else(|| lower_path.find(".zip/")) {
+                let zip_file_path_str = &path_str[..zip_idx + 4];
+                let inner_entry_str = &path_str[zip_idx + 5..];
+                let zip_path = PathBuf::from(zip_file_path_str);
 
-        if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
-            self.view_mode = ViewMode::Markdown;
-        } else if is_code_extension(&ext) {
-            self.view_mode = ViewMode::Code { lang: ext.clone() };
-        } else {
-            self.view_mode = ViewMode::PlainText;
-        }
+                if zip_path.exists() {
+                    info!("偵測到 ZIP 壓縮檔內虛擬路徑，嘗試即時解壓預覽: {:?} -> {}", zip_path, inner_entry_str);
+                    self.set_toast(format!("📦 正在自 ZIP 壓縮檔即時讀取 {}...", inner_entry_str));
 
-        match fs::read_to_string(path) {
-            Ok(text) => {
-                self.line_count = text.lines().count();
-                self.content = text;
-                self.current_file = Some(path.to_path_buf());
+                    match read_text_from_zip(&zip_path, inner_entry_str) {
+                        Ok(text) => {
+                            let ext = Path::new(inner_entry_str)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
 
-                // 檔案元資訊計算
-                if let Ok(metadata) = fs::metadata(path) {
-                    let len = metadata.len();
-                    self.file_size_str = if len < 1024 {
-                        format!("{} B", len)
-                    } else if len < 1024 * 1024 {
-                        format!("{:.1} KB", len as f64 / 1024.0)
-                    } else {
-                        format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                    };
+                            if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
+                                self.view_mode = ViewMode::Markdown;
+                            } else if is_code_extension(&ext) {
+                                self.view_mode = ViewMode::Code { lang: ext.clone() };
+                            } else {
+                                self.view_mode = ViewMode::PlainText;
+                            }
 
-                    if let Ok(mod_time) = metadata.modified() {
-                        let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
-                        self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
+                            self.line_count = text.lines().count();
+                            let len = text.len();
+                            self.file_size_str = if len < 1024 {
+                                format!("{} B", len)
+                            } else if len < 1024 * 1024 {
+                                format!("{:.1} KB", len as f64 / 1024.0)
+                            } else {
+                                format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
+                            };
+                            self.last_modified_str = "ZIP 壓縮檔".to_string();
+                            self.content = text;
+                            self.current_file = Some(path.to_path_buf());
+                            self.visible = true;
+                            show_and_focus_app_window();
+
+                            let fname = Path::new(inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(inner_entry_str);
+                            self.set_toast(format!("⚡ 已自 ZIP 即時預覽: {} 📦", fname));
+                            return;
+                        }
+                        Err(e) => {
+                            log::warn!("自 ZIP 解壓失敗: {}", e);
+                            self.set_toast(format!("⚠️ 讀取 ZIP 壓縮內容失敗: {}", e));
+                            self.visible = true;
+                            show_and_focus_app_window();
+                            return;
+                        }
                     }
                 }
-
-                // 啟動變更監視
-                self.file_watcher.watch_file(path);
-                self.visible = true;
-                show_and_focus_app_window();
-                let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                let mode_desc = match self.view_mode {
-                    ViewMode::Markdown => "Markdown 渲染".to_string(),
-                    ViewMode::Code { ref lang } => {
-                        let (name, emoji) = get_language_badge(lang);
-                        format!("{} {} 語法高亮", emoji, name)
-                    }
-                    ViewMode::PlainText => "純文字模式".to_string(),
-                };
-                self.set_toast(format!("⚡ 已開啟: {} ({})", fname, mode_desc));
-            }
-            Err(e) => {
-                error!("讀取檔案失敗 {:?}: {:?}", path, e);
-                self.set_toast(format!("無法讀取檔案: {}", e));
-                self.visible = true;
-                show_and_focus_app_window();
             }
         }
+
+        // 3. 檔案真正不存在
+        self.set_toast(format!("找不到檔案: {:?}", path));
+        self.visible = true;
+        show_and_focus_app_window();
     }
 
     pub fn reload_current_file(&mut self) {
@@ -1034,3 +1091,36 @@ fn rfd_open_file() -> Option<PathBuf> {
     }
     None
 }
+
+/// 自 ZIP 壓縮檔內直接即時讀取文字檔案內容 (無需使用者手動解壓縮)
+fn read_text_from_zip(zip_path: &Path, entry_name: &str) -> Result<String, String> {
+    let zip_str = zip_path.to_string_lossy().replace('\'', "''");
+    let entry_clean = entry_name.replace('/', "\\").replace('\'', "''");
+    let entry_filename = Path::new(entry_name)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| entry_name.to_string())
+        .replace('\'', "''");
+
+    let script = format!(
+        r#"[System.Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null; $z = [System.IO.Compression.ZipFile]::OpenRead('{}'); $e = $z.Entries | Where-Object {{ $_.FullName.Replace('/','\') -eq '{}' -or $_.Name -eq '{}' }} | Select-Object -First 1; if ($e) {{ $s = $e.Open(); $r = New-Object System.IO.StreamReader($s, [System.Text.Encoding]::UTF8); $t = $r.ReadToEnd(); $r.Close(); $s.Close(); Write-Output $t }}; $z.Dispose();"#,
+        zip_str, entry_clean, entry_filename
+    );
+
+    let output = std::process::Command::new("powershell")
+        .args(&["-NoProfile", "-Command", &script])
+        .output()
+        .map_err(|e| format!("執行 PowerShell 讀取 ZIP 失敗: {}", e))?;
+
+    if output.status.success() {
+        let content = String::from_utf8_lossy(&output.stdout).to_string();
+        if !content.is_empty() {
+            Ok(content)
+        } else {
+            Err("壓縮檔內找不到指定檔案或檔案內容為空".to_string())
+        }
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
