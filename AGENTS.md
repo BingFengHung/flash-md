@@ -151,6 +151,17 @@
 - **未使用的局部變數與匯入即時清除**：
   - 嚴格清理未使用的變數（如 `query_len`）與未使用的 Windows API 匯入（如 `GA_ROOTOWNER`），確保 CI/CD 雲端建置 0 警告、0 錯誤通過。
 
+### 13. Windows 11 分頁式檔案總管與核取方塊模式選取規範 (IFolderView & SVGIO_CHECKED)
+- **Windows 11 分頁與 XAML 容器 COM 介面降級問題**：
+  - Windows 11 的分頁式檔案總管（`md-preview > src` 等分頁架構）在呼叫 `IWebBrowserApp.Document()` 時，若直接透過 `.cast::<IShellFolderViewDual>()` 會因 COM 介面版本跳轉回傳 `E_NOINTERFACE`，導致選取項目完全解析失敗。
+- **檔案總管「項目核取方塊」模式 (`SVGIO_CHECKED`)**：
+  - 當使用者開啟「項目核取方塊」模式勾選檔案（如 ☑ `main.rs`）時，選取狀態在 Windows 底層不屬於傳統的 `SVGIO_SELECTION`，而是登記於 `SVGIO_CHECKED`。
+- **標準解決架構 (原生 ShellView 引擎)**：
+  - **步驟 1**：自 `IShellWindows` 取得之分頁物件透過 `IServiceProvider.QueryService(&SID_STopLevelBrowser, &IShellBrowser::IID)` 取得 `IShellBrowser`。
+  - **步驟 2**：呼叫 `shell_browser.QueryActiveShellView()` 取得 `IShellView`，並 `.cast::<IFolderView>()`。
+  - **步驟 3**：依序查詢 `SVGIO_SELECTION`、`SVGIO_CHECKED`（支援核取方塊）以及 `GetFocusedItem` + `SHGetPathFromIDListW`。
+  - **步驟 4**：透過 `IShellItemArray.GetItemAt(i).GetDisplayName(SIGDN_FILESYSPATH)` 取得絕對路徑，穿透所有 Windows 10/11 分頁與勾選模式！
+
 ---
 
 ## 🚀 標準開發與發布工作流程 (Standard Release Workflow)
