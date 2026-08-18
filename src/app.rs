@@ -49,6 +49,7 @@ pub struct MdPreviewApp {
 
     pub search_open: bool,
     pub search_query: String,
+    pub search_focus_requested: bool,
 
     pub available_update: Option<ReleaseInfo>,
     pub is_updating: bool,
@@ -111,6 +112,7 @@ impl MdPreviewApp {
             is_standalone,
             search_open: false,
             search_query: String::new(),
+            search_focus_requested: false,
             available_update: None,
             is_updating: false,
             update_tx: update_tx.clone(),
@@ -451,6 +453,117 @@ impl MdPreviewApp {
         self.status_toast = Some((msg, std::time::Instant::now()));
     }
 
+    /// 切換至同目錄下的上一個 / 下一個檔案 (依檔名自然排序)
+    pub fn navigate_sibling_file(&mut self, forward: bool) {
+        let current_path = match self.current_file.clone() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let parent_dir = match current_path.parent() {
+            Some(p) if p.exists() => p,
+            _ => return,
+        };
+
+        // 讀取同目錄下的所有實體檔案
+        let mut files: Vec<PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(parent_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        // 排除隱藏檔與暫存檔
+                        if !name.starts_with('.') && !name.starts_with("~$") {
+                            files.push(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        if files.is_empty() {
+            return;
+        }
+
+        // 依檔名不分大小寫排序
+        files.sort_by(|a, b| {
+            let name_a = a.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let name_b = b.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            name_a.cmp(&name_b)
+        });
+
+        let current_idx = files.iter().position(|p| p == &current_path);
+
+        let target_idx = match current_idx {
+            Some(idx) => {
+                if forward {
+                    if idx + 1 < files.len() {
+                        idx + 1
+                    } else {
+                        0 // 循環至第一筆
+                    }
+                } else {
+                    if idx > 0 {
+                        idx - 1
+                    } else {
+                        files.len() - 1 // 循環至最後一筆
+                    }
+                }
+            }
+            None => 0,
+        };
+
+        if let Some(target_path) = files.get(target_idx) {
+            let target_path_clone = target_path.clone();
+            let total_count = files.len();
+            let display_idx = target_idx + 1;
+
+            self.load_file(&target_path_clone);
+
+            let file_name = target_path_clone
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            self.set_toast(format!("[{}/{}] ⚡ 已切換: {}", display_idx, total_count, file_name));
+        }
+    }
+
+    /// 取得當前檔案在同目錄下的序號資訊，例如 (3, 18) 代表第 3 個，共 18 個檔案
+    pub fn get_sibling_info(&self) -> Option<(usize, usize)> {
+        let current_path = self.current_file.as_ref()?;
+        let parent_dir = current_path.parent()?;
+        if !parent_dir.exists() {
+            return None;
+        }
+
+        let mut files: Vec<PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(parent_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !name.starts_with('.') && !name.starts_with("~$") {
+                            files.push(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        if files.is_empty() {
+            return None;
+        }
+
+        files.sort_by(|a, b| {
+            let name_a = a.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let name_b = b.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            name_a.cmp(&name_b)
+        });
+
+        let idx = files.iter().position(|p| p == current_path)?;
+        Some((idx + 1, files.len()))
+    }
+
     fn open_file_dialog(&mut self) {
         if let Some(path) = rfd_open_file() {
             self.load_file(&path);
@@ -460,7 +573,7 @@ impl MdPreviewApp {
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let input = ctx.input(|i| i.clone());
 
-        // ESC: 隱藏或關閉視窗
+        // ESC: 隱藏或關閉視窗 (若搜尋列開啟則優先關閉搜尋列)
         if input.key_pressed(egui::Key::Escape) {
             if self.search_open {
                 self.search_open = false;
@@ -474,9 +587,21 @@ impl MdPreviewApp {
             }
         }
 
-        // Ctrl + F: 搜尋
+        // 方向鍵 ↑ / ↓ 或 ← / →: 切換同目錄上一個 / 下一個檔案 (非文字編輯輸入狀態下觸發)
+        if !ctx.wants_keyboard_input() && self.current_file.is_some() {
+            if input.key_pressed(egui::Key::ArrowUp) || input.key_pressed(egui::Key::ArrowLeft) {
+                self.navigate_sibling_file(false);
+            } else if input.key_pressed(egui::Key::ArrowDown) || input.key_pressed(egui::Key::ArrowRight) {
+                self.navigate_sibling_file(true);
+            }
+        }
+
+        // Ctrl + F: 搜尋開關與自動聚焦
         if input.modifiers.command && input.key_pressed(egui::Key::F) {
-            self.search_open = !self.search_open;
+            if !self.search_open {
+                self.search_open = true;
+            }
+            self.search_focus_requested = true;
         }
 
         // Ctrl + O: 在外部預設編輯器開啟
@@ -751,6 +876,18 @@ impl eframe::App for MdPreviewApp {
 
                     ui.add_space(4.0);
 
+                    // ◀ 上一個檔案按鈕
+                    if self.current_file.is_some() {
+                        let prev_resp = ui.add(
+                            egui::Button::new(RichText::new("◀").size(11.0).color(self.theme.text_secondary()))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE),
+                        );
+                        if prev_resp.on_hover_text("上一個檔案 (↑ / ←)").clicked() {
+                            self.navigate_sibling_file(false);
+                        }
+                    }
+
                     let file_name = self
                         .current_file
                         .as_ref()
@@ -782,6 +919,18 @@ impl eframe::App for MdPreviewApp {
                     if title_resp.hovered() {
                         if let Some(ref path) = self.current_file {
                             title_resp.on_hover_text(format!("完整路徑:\n{:?}\n(點擊複製路徑)", path));
+                        }
+                    }
+
+                    // ▶ 下一個檔案按鈕
+                    if self.current_file.is_some() {
+                        let next_resp = ui.add(
+                            egui::Button::new(RichText::new("▶").size(11.0).color(self.theme.text_secondary()))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE),
+                        );
+                        if next_resp.on_hover_text("下一個檔案 (↓ / →)").clicked() {
+                            self.navigate_sibling_file(true);
                         }
                     }
 
@@ -857,7 +1006,7 @@ impl eframe::App for MdPreviewApp {
                             mode_btn.on_hover_text(badge_tip);
                         }
 
-                        // 檔案屬性標籤 (行數/尺寸、大小、修改時間)
+                        // 檔案屬性標籤 (同目錄序號、行數/尺寸、大小、修改時間)
                         ui.add_space(2.0);
                         Frame::none()
                             .fill(self.theme.code_bg_color())
@@ -865,10 +1014,15 @@ impl eframe::App for MdPreviewApp {
                             .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
                             .inner_margin(Margin::symmetric(6.0, 3.0))
                             .show(ui, |ui| {
+                                let sibling_str = self
+                                    .get_sibling_info()
+                                    .map(|(cur, total)| format!("[{}/{}]  •  ", cur, total))
+                                    .unwrap_or_default();
+
                                 let info_text = if let ViewMode::Image { ref format } = self.view_mode {
-                                    format!("{}  •  {}  •  {}", format.to_uppercase(), self.file_size_str, self.last_modified_str)
+                                    format!("{}{format_upper}  •  {}  •  {}", sibling_str, self.file_size_str, self.last_modified_str, format_upper = format.to_uppercase())
                                 } else {
-                                    format!("{} 行  •  {}  •  {}", self.line_count, self.file_size_str, self.last_modified_str)
+                                    format!("{}{} 行  •  {}  •  {}", sibling_str, self.line_count, self.file_size_str, self.last_modified_str)
                                 };
                                 ui.label(
                                     RichText::new(info_text)
@@ -951,6 +1105,9 @@ impl eframe::App for MdPreviewApp {
                         if !matches!(self.view_mode, ViewMode::Image { .. }) {
                             if render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F)").clicked() {
                                 self.search_open = !self.search_open;
+                                if self.search_open {
+                                    self.search_focus_requested = true;
+                                }
                             }
                         }
 
@@ -966,11 +1123,16 @@ impl eframe::App for MdPreviewApp {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("🔍 尋找內文:").size(12.5).color(self.theme.accent_color()).strong());
-                        ui.add(
+                        let search_input_resp = ui.add(
                             TextEdit::singleline(&mut self.search_query)
                                 .hint_text("輸入搜尋關鍵字...")
                                 .desired_width(260.0),
                         );
+
+                        if self.search_focus_requested {
+                            search_input_resp.request_focus();
+                            self.search_focus_requested = false;
+                        }
 
                         let query_clean = self.search_query.trim();
                         if !query_clean.is_empty() {
@@ -1166,7 +1328,7 @@ impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!(
-                "flash-md v{}  •  快捷鍵: Alt + Space (快速預覽)  •  Esc (隱藏)  •  Ctrl + M (切換模式)  •  Ctrl + O (外部開啟)",
+                "flash-md v{}  •  快捷鍵: Alt + Space (預覽)  •  ↑ / ↓ (同目錄切換檔案)  •  Ctrl + F (搜尋)  •  Ctrl + M (切換模式)  •  Esc (隱藏)",
                 CURRENT_VERSION
             ))
             .color(self.theme.text_secondary())

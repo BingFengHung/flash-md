@@ -20,7 +20,7 @@ fn get_theme_set() -> &'static ThemeSet {
     THEME_SET.get_or_init(ThemeSet::load_defaults)
 }
 
-/// 依搜尋關鍵字即時進行高亮分段附加
+/// 依搜尋關鍵字即時進行高亮分段附加 (全 Unicode 安全切片，支援中英文與特殊字元)
 pub fn append_highlighted_text(
     job: &mut LayoutJob,
     text: &str,
@@ -35,60 +35,50 @@ pub fn append_highlighted_text(
         return;
     }
 
-    let text_lower = text.to_lowercase();
     let query_lower = clean_query.to_lowercase();
-
-    // 以 char_indices 支援 Unicode 中文字元正確索引切片
-    let mut last_char_idx = 0;
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let lower_chars: Vec<char> = text_lower.chars().collect();
     let query_chars: Vec<char> = query_lower.chars().collect();
-
-    if query_chars.is_empty() || lower_chars.len() < query_chars.len() {
+    if query_chars.is_empty() {
         job.append(text, 0.0, base_format);
         return;
     }
 
+    let text_chars: Vec<char> = text.chars().collect();
+    if text_chars.len() < query_chars.len() {
+        job.append(text, 0.0, base_format);
+        return;
+    }
+
+    let mut last_idx = 0;
     let mut i = 0;
-    while i + query_chars.len() <= lower_chars.len() {
-        if lower_chars[i..i + query_chars.len()] == query_chars[..] {
-            let start_byte = chars[i].0;
-            let end_byte = if i + query_chars.len() < chars.len() {
-                chars[i + query_chars.len()].0
-            } else {
-                text.len()
-            };
+    while i + query_chars.len() <= text_chars.len() {
+        let is_match = text_chars[i..i + query_chars.len()]
+            .iter()
+            .zip(query_chars.iter())
+            .all(|(tc, qc)| {
+                tc.to_lowercase().eq(qc.to_lowercase())
+            });
 
-            let last_byte = if last_char_idx < chars.len() {
-                chars[last_char_idx].0
-            } else {
-                text.len()
-            };
-
-            if start_byte > last_byte {
-                job.append(&text[last_byte..start_byte], 0.0, base_format.clone());
+        if is_match {
+            if i > last_idx {
+                let s: String = text_chars[last_idx..i].iter().collect();
+                job.append(&s, 0.0, base_format.clone());
             }
-
+            let s: String = text_chars[i..i + query_chars.len()].iter().collect();
             let mut hl_format = base_format.clone();
             hl_format.background = highlight_bg;
             hl_format.color = highlight_fg;
-            job.append(&text[start_byte..end_byte], 0.0, hl_format);
+            job.append(&s, 0.0, hl_format);
 
             i += query_chars.len();
-            last_char_idx = i;
+            last_idx = i;
         } else {
             i += 1;
         }
     }
 
-    let last_byte = if last_char_idx < chars.len() {
-        chars[last_char_idx].0
-    } else {
-        text.len()
-    };
-
-    if last_byte < text.len() {
-        job.append(&text[last_byte..], 0.0, base_format);
+    if last_idx < text_chars.len() {
+        let s: String = text_chars[last_idx..].iter().collect();
+        job.append(&s, 0.0, base_format);
     }
 }
 
@@ -596,13 +586,29 @@ impl<'a> RenderContext<'a> {
                     );
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .button(RichText::new("📋 複製").size(11.5 * self.font_scale))
-                            .clicked()
-                        {
+                        let copy_id = ui.make_persistent_id(format!("md_cb_copy_{:p}_{}", code.as_ptr(), code.len()));
+                        let is_copied = ui.ctx().data(|d| {
+                            d.get_temp::<std::time::Instant>(copy_id)
+                                .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
+                                .unwrap_or(false)
+                        });
+
+                        let btn_text = if is_copied {
+                            RichText::new("✓ 已複製")
+                                .color(Color32::from_rgb(34, 197, 94))
+                                .size(11.5 * self.font_scale)
+                                .strong()
+                        } else {
+                            RichText::new("📋 複製")
+                                .color(self.theme.text_secondary())
+                                .size(11.5 * self.font_scale)
+                        };
+
+                        if ui.button(btn_text).clicked() {
                             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                 let _ = clipboard.set_text(code.to_string());
                             }
+                            ui.ctx().data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
                         }
                     });
                 });
@@ -827,6 +833,53 @@ pub fn render_code_viewer(
         .stroke(Stroke::new(1.0_f32, border_color))
         .inner_margin(Margin::symmetric(16.0, 14.0))
         .show(ui, |ui| {
+            // 程式碼檢視器頂部工具列 (語言識別 + 行數 + 複製按鈕)
+            ui.horizontal(|ui| {
+                let (name, emoji) = get_language_badge(&lang_lower);
+                ui.label(
+                    RichText::new(format!("{} {}", emoji, name))
+                        .font(FontId::monospace(11.5 * font_scale))
+                        .color(theme.accent_color())
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(format!("•  {} 行", line_count))
+                        .size(11.0 * font_scale)
+                        .color(theme.text_secondary()),
+                );
+
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let copy_id = ui.make_persistent_id(format!("viewer_cb_copy_{:p}_{}", code.as_ptr(), code.len()));
+                    let is_copied = ui.ctx().data(|d| {
+                        d.get_temp::<std::time::Instant>(copy_id)
+                            .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
+                            .unwrap_or(false)
+                    });
+
+                    let btn_text = if is_copied {
+                        RichText::new("✓ 已複製")
+                            .color(Color32::from_rgb(34, 197, 94))
+                            .size(11.5 * font_scale)
+                            .strong()
+                    } else {
+                        RichText::new("📋 複製程式碼")
+                            .color(theme.text_secondary())
+                            .size(11.5 * font_scale)
+                    };
+
+                    if ui.button(btn_text).clicked() {
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            let _ = clipboard.set_text(code.to_string());
+                        }
+                        ui.ctx().data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
+                    }
+                });
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
+
             ui.horizontal_top(|ui| {
                 // 1. 行號欄 (Line Numbers Gutter)
                 ui.vertical(|ui| {
@@ -917,10 +970,12 @@ pub fn is_code_extension(ext: &str) -> bool {
     }
     matches!(
         ext.to_lowercase().as_str(),
-        "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "json" | "toml" | "yaml" | "yml"
-            | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "cs" | "go" | "java" | "kt"
-            | "html" | "css" | "scss" | "sass" | "sql" | "sh" | "bash" | "ps1" | "bat"
+        "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "json" | "json5" | "jsonc" | "toml" | "yaml" | "yml"
+            | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "cs" | "go" | "java" | "kt" | "kts"
+            | "html" | "htm" | "xhtml" | "css" | "scss" | "sass" | "sql" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "psm1" | "bat"
             | "cmd" | "xml" | "lua" | "php" | "rb" | "swift" | "dart" | "vue" | "svelte"
+            | "csv" | "tsv" | "ini" | "conf" | "env" | "dockerfile" | "graphql" | "gql"
+            | "diff" | "patch" | "log" | "r" | "scala" | "zig" | "proto"
     )
 }
 
@@ -929,25 +984,27 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
     match ext.to_lowercase().as_str() {
         "rs" => ("Rust".to_string(), "🦀"),
         "py" => ("Python".to_string(), "🐍"),
-        "js" => ("JavaScript".to_string(), "⚡"),
+        "js" | "mjs" | "cjs" => ("JavaScript".to_string(), "⚡"),
         "jsx" => ("React JSX".to_string(), "⚛️"),
         "ts" => ("TypeScript".to_string(), "🔷"),
         "tsx" => ("React TSX".to_string(), "⚛️"),
-        "json" => ("JSON".to_string(), "📦"),
+        "json" | "json5" | "jsonc" => ("JSON".to_string(), "📦"),
         "toml" => ("TOML".to_string(), "⚙️"),
         "yaml" | "yml" => ("YAML".to_string(), "📄"),
+        "csv" => ("CSV 表格".to_string(), "📊"),
+        "tsv" => ("TSV 表格".to_string(), "📊"),
         "c" => ("C".to_string(), "📘"),
         "cpp" | "cc" | "cxx" | "hpp" => ("C++".to_string(), "💠"),
         "cs" => ("C#".to_string(), "🟣"),
         "go" => ("Go".to_string(), "🐹"),
         "java" => ("Java".to_string(), "☕"),
-        "kt" => ("Kotlin".to_string(), "🎯"),
-        "html" => ("HTML".to_string(), "🌐"),
+        "kt" | "kts" => ("Kotlin".to_string(), "🎯"),
+        "html" | "htm" | "xhtml" => ("HTML".to_string(), "🌐"),
         "css" => ("CSS".to_string(), "🎨"),
         "scss" | "sass" => ("SCSS".to_string(), "🎨"),
         "sql" => ("SQL".to_string(), "🗄️"),
-        "sh" | "bash" => ("Shell".to_string(), "🐚"),
-        "ps1" => ("PowerShell".to_string(), "💻"),
+        "sh" | "bash" | "zsh" | "fish" => ("Shell".to_string(), "🐚"),
+        "ps1" | "psm1" => ("PowerShell".to_string(), "💻"),
         "bat" | "cmd" => ("Batch".to_string(), "📜"),
         "xml" => ("XML".to_string(), "📑"),
         "lua" => ("Lua".to_string(), "🌙"),
@@ -955,6 +1012,17 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
         "rb" => ("Ruby".to_string(), "💎"),
         "swift" => ("Swift".to_string(), "🐦"),
         "dart" => ("Dart".to_string(), "🎯"),
+        "vue" => ("Vue".to_string(), "💚"),
+        "svelte" => ("Svelte".to_string(), "🧡"),
+        "dockerfile" => ("Dockerfile".to_string(), "🐳"),
+        "graphql" | "gql" => ("GraphQL".to_string(), "🔺"),
+        "ini" | "conf" | "env" => ("Config".to_string(), "⚙️"),
+        "diff" | "patch" => ("Diff".to_string(), "🔄"),
+        "log" => ("Log 記錄".to_string(), "📋"),
+        "zig" => ("Zig".to_string(), "⚡"),
+        "r" => ("R 語言".to_string(), "📈"),
+        "scala" => ("Scala".to_string(), "🔴"),
+        "proto" => ("Protobuf".to_string(), "📦"),
         _ => (ext.to_uppercase(), "💻"),
     }
 }

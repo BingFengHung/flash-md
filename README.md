@@ -13,9 +13,12 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ## ✨ Features
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
-- 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs (`IShellWindows`) to automatically detect the selected file when `Alt + Space` is pressed.
+- 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs to automatically detect the selected file when `Alt + Space` is pressed.
+- ⬆️⬇️ **Keyboard Sibling File Navigation**: Press `↑` / `↓` or `←` / `→` (or click `◀` / `▶` buttons) to instantly browse previous/next files in the same directory, complete with index indicators `[3/18]`!
+- 📋 **1-Click Code Block Copying**: Code blocks in Markdown and the standalone Code Viewer now feature dedicated copy buttons with instant green "✓ Copied" feedback.
+- 🔍 **Robust Full-Text Search (Ctrl + F)**: Live match count, auto-focus on open, and Unicode-safe case-insensitive text highlighting.
 - 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO, SVG, AVIF formats with smooth mouse wheel zooming, panning, and auto-fit to window!
-- 💻 **Full Syntax Highlighting & Line Numbers**: Powered by `syntect` supporting 100+ languages (Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, SQL, etc.) with line numbers and 1-click code copying.
+- 💻 **100+ Formats & Syntax Highlighting**: Supports Markdown, Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, CSV, SQL, Dockerfile, and more!
 - 📝 **Multi-Track Mode Switching**: Automatically routes Markdown, Source Code, Plain Text, and Images to their optimal viewers, with instant cycling via `Ctrl + M`.
 - 🎨 **Modern Dark & Light Themes**: Seamlessly toggle between dark and light modes with GitHub-style typography and clean borders.
 - 🔄 **Live Hot-Reload**: Automatically detects file modifications when saved in external editors (VSCode, Obsidian, Notepad) and updates the preview in real-time.
@@ -30,7 +33,9 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | Shortcut | Description |
 | :--- | :--- |
 | **`Alt + Space`** | **Global Hotkey**: Preview selected file in File Explorer / Desktop (press again to close) |
+| **`↑` / `↓` or `←` / `→`** | **Browse Files**: Navigate to previous / next file in the same directory (with `[3/18]` index) |
 | **`Esc`** | Instantly hide preview window / close search bar |
+| **`Ctrl + F`** | Open search bar and auto-focus search input |
 | **`Ctrl + M`** | **Cycle View Mode**: Switch between Markdown rendering, Syntax Highlighting, Plain Text, and Image view |
 | **`Ctrl + O`** | Open current file in default system editor / image viewer |
 | **`Ctrl + Shift + C`** | Copy entire document content or file path to clipboard |
@@ -38,7 +43,6 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | **`Ctrl + +` / `Ctrl + =`** | Zoom in preview font size / image scale |
 | **`Ctrl + -`** | Zoom out preview font size / image scale |
 | **`Ctrl + 0`** | Reset preview font size / image scale (100%) |
-| **`Ctrl + F`** | Open / close search bar |
 
 ---
 
