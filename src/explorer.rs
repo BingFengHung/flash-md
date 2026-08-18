@@ -14,7 +14,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow,
     GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowThreadProcessId, IsWindowVisible,
-    SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT, GA_ROOTOWNER, GUITHREADINFO,
+    SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT, GUITHREADINFO,
     HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE,
     SW_SHOW,
 };

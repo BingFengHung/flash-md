@@ -1115,7 +1115,8 @@ impl eframe::App for MdPreviewApp {
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.add_space(4.0);
-                                    let font_id = FontId::monospace(14.0 * self.font_scale);
+                                    let font_scale = self.font_scale;
+                                    let font_id = FontId::monospace(14.0 * font_scale);
                                     let text_color = self.theme.text_primary();
                                     let hl_bg = match self.theme {
                                         AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
@@ -1127,12 +1128,13 @@ impl eframe::App for MdPreviewApp {
                                     };
 
                                     let search_q = self.search_query.clone();
+                                    let font_id_for_layouter = font_id.clone();
                                     let mut layouter = move |ui: &egui::Ui, string: &str, _wrap_width: f32| {
                                         let mut job = egui::text::LayoutJob::default();
                                         let base_fmt = egui::TextFormat {
-                                            font_id: font_id.clone(),
+                                            font_id: font_id_for_layouter.clone(),
                                             color: text_color,
-                                            line_height: Some(22.0 * self.font_scale),
+                                            line_height: Some(22.0 * font_scale),
                                             ..Default::default()
                                         };
                                         crate::markdown::append_highlighted_text(&mut job, string, &search_q, base_fmt, hl_bg, hl_fg);
@@ -1142,7 +1144,7 @@ impl eframe::App for MdPreviewApp {
                                     let mut text = self.content.clone();
                                     ui.add(
                                         TextEdit::multiline(&mut text)
-                                            .font(font_id.clone())
+                                            .font(font_id)
                                             .layouter(&mut layouter)
                                             .text_color(text_color)
                                             .frame(false)

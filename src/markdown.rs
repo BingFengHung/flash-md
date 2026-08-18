@@ -226,9 +226,9 @@ impl<'a> RenderContext<'a> {
             }
             Event::Rule => {
                 self.flush_inline(ui);
-                ui.add_space(8.0);
+                ui.add_space(8.0_f32);
                 ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(8.0_f32);
             }
             Event::SoftBreak => {
                 self.push_text(" ");
@@ -246,7 +246,7 @@ impl<'a> RenderContext<'a> {
                         } else {
                             self.theme.text_secondary()
                         })
-                        .size(16.0 * self.font_scale),
+                        .size(16.0_f32 * self.font_scale),
                 );
             }
             _ => {}
@@ -255,31 +255,28 @@ impl<'a> RenderContext<'a> {
 
     fn handle_start_tag(&mut self, ui: &mut Ui, tag: Tag) {
         match tag {
-            Tag::Paragraph => {
-                self.flush_inline(ui);
-            }
+            Tag::Paragraph => {}
             Tag::Heading { level, .. } => {
                 self.flush_inline(ui);
                 self.in_heading = Some(level);
-                ui.add_space(10.0);
             }
-            Tag::BlockQuote(_) => {
+            Tag::BlockQuote(..) => {
                 self.flush_inline(ui);
                 self.in_blockquote = true;
             }
             Tag::CodeBlock(kind) => {
                 self.flush_inline(ui);
                 self.in_code_block = true;
-                self.code_block_content.clear();
                 self.code_block_lang = match kind {
-                    pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                    pulldown_cmark::CodeBlockKind::Indented => String::new(),
+                    CodeBlockKind::Fenced(lang) => lang.to_string(),
+                    CodeBlockKind::Indented => String::new(),
                 };
+                self.code_block_content.clear();
             }
-            Tag::List(start_num) => {
+            Tag::List(first_item) => {
                 self.flush_inline(ui);
                 self.list_level += 1;
-                self.ordered_list_index = start_num;
+                self.ordered_list_index = first_item;
             }
             Tag::Item => {
                 self.flush_inline(ui);
@@ -298,14 +295,31 @@ impl<'a> RenderContext<'a> {
             Tag::TableRow => {
                 self.current_row.clear();
             }
-            Tag::TableCell => {
-                // 清空收集 Cell inline
-            }
+            Tag::TableCell => {}
             Tag::Emphasis => self.current_italic = true,
             Tag::Strong => self.current_bold = true,
             Tag::Strikethrough => self.current_strikethrough = true,
             Tag::Link { dest_url, .. } => {
                 self.current_link = Some(dest_url.to_string());
+            }
+            Tag::Image { dest_url, .. } => {
+                self.flush_inline(ui);
+                ui.add_space(4.0_f32);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("🖼️ [圖片連結]")
+                            .color(self.theme.accent_color())
+                            .italics(),
+                    );
+                    let resp = ui.add(egui::Hyperlink::from_label_and_url(
+                        RichText::new(&dest_url.to_string()).underline(),
+                        &dest_url.to_string(),
+                    ));
+                    if resp.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+                });
+                ui.add_space(4.0_f32);
             }
             _ => {}
         }
@@ -315,37 +329,38 @@ impl<'a> RenderContext<'a> {
         match tag {
             TagEnd::Paragraph => {
                 self.flush_inline(ui);
-                ui.add_space(4.0);
+                ui.add_space(6.0_f32);
             }
             TagEnd::Heading(level) => {
                 self.render_heading(ui, level);
                 self.in_heading = None;
-                ui.add_space(8.0);
+                ui.add_space(8.0_f32);
             }
-            TagEnd::BlockQuote(_) => {
+            TagEnd::BlockQuote(..) => {
                 self.flush_inline(ui);
                 self.in_blockquote = false;
-                ui.add_space(6.0);
+                ui.add_space(6.0_f32);
             }
             TagEnd::CodeBlock => {
-                self.in_code_block = false;
                 self.render_code_block(ui);
-                ui.add_space(8.0);
+                self.in_code_block = false;
+                self.code_block_lang.clear();
+                self.code_block_content.clear();
+                ui.add_space(8.0_f32);
             }
             TagEnd::List(_) => {
                 self.flush_inline(ui);
-                if self.list_level > 0 {
-                    self.list_level -= 1;
-                }
+                self.list_level = self.list_level.saturating_sub(1);
                 self.ordered_list_index = None;
-                ui.add_space(4.0);
+                ui.add_space(4.0_f32);
             }
             TagEnd::Item => {
                 self.render_list_item(ui);
             }
-            TagEnd::TableCell => {
-                let cell_text: String = self.inlines.drain(..).map(|s| s.text).collect();
-                self.current_row.push(cell_text);
+            TagEnd::Table => {
+                self.render_table(ui);
+                self.in_table = false;
+                ui.add_space(8.0_f32);
             }
             TagEnd::TableHead => {
                 self.in_table_head = false;
@@ -356,10 +371,9 @@ impl<'a> RenderContext<'a> {
                     self.table_rows.push(std::mem::take(&mut self.current_row));
                 }
             }
-            TagEnd::Table => {
-                self.in_table = false;
-                self.render_table(ui);
-                ui.add_space(10.0);
+            TagEnd::TableCell => {
+                let cell_text: String = self.inlines.drain(..).map(|s| s.text).collect();
+                self.current_row.push(cell_text);
             }
             TagEnd::Emphasis => self.current_italic = false,
             TagEnd::Strong => self.current_bold = false,
@@ -380,8 +394,8 @@ impl<'a> RenderContext<'a> {
             // Blockquote 渲染
             Frame::none()
                 .fill(self.theme.card_bg_color())
-                .inner_margin(Margin::symmetric(10.0, 6.0))
-                .rounding(Rounding::same(4.0))
+                .inner_margin(Margin::symmetric(10.0_f32, 6.0_f32))
+                .rounding(Rounding::same(4.0_f32))
                 .stroke(Stroke::new(3.0_f32, self.theme.quote_bar_color()))
                 .show(ui, |ui| {
                     self.render_inline_spans(ui, inlines);
@@ -414,9 +428,9 @@ impl<'a> RenderContext<'a> {
         if !has_hyperlinks {
             for span in spans {
                 let font_id = if span.code {
-                    FontId::monospace(13.0 * self.font_scale)
+                    FontId::monospace(13.0_f32 * self.font_scale)
                 } else {
-                    FontId::proportional(14.5 * self.font_scale)
+                    FontId::proportional(14.5_f32 * self.font_scale)
                 };
 
                 let color = if span.code {
@@ -429,8 +443,8 @@ impl<'a> RenderContext<'a> {
                     font_id,
                     color,
                     italics: span.italic,
-                    strikethrough: Stroke::new(if span.strikethrough { 1.5 } else { 0.0 }, color),
-                    line_height: Some(22.0 * self.font_scale),
+                    strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
+                    line_height: Some(22.0_f32 * self.font_scale),
                     background: if span.code {
                         self.theme.code_bg_color()
                     } else {
@@ -444,7 +458,7 @@ impl<'a> RenderContext<'a> {
             ui.label(job);
         } else {
             ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().item_spacing.x = 2.0_f32;
 
                 for span in spans {
                     if span.code {
@@ -453,13 +467,13 @@ impl<'a> RenderContext<'a> {
                         let border = self.theme.border_color();
                         Frame::none()
                             .fill(bg)
-                            .rounding(Rounding::same(4.0))
+                            .rounding(Rounding::same(4.0_f32))
                             .stroke(Stroke::new(1.0_f32, border))
-                            .inner_margin(Margin::symmetric(4.0, 1.0))
+                            .inner_margin(Margin::symmetric(4.0_f32, 1.0_f32))
                             .show(ui, |ui| {
                                 let mut code_job = LayoutJob::default();
                                 let base_fmt = egui::TextFormat {
-                                    font_id: FontId::monospace(13.0 * self.font_scale),
+                                    font_id: FontId::monospace(13.0_f32 * self.font_scale),
                                     color: self.theme.accent_color(),
                                     ..Default::default()
                                 };
@@ -471,7 +485,7 @@ impl<'a> RenderContext<'a> {
                         let link_text = RichText::new(&span.text)
                             .color(self.theme.accent_color())
                             .underline()
-                            .size(14.0 * self.font_scale);
+                            .size(14.0_f32 * self.font_scale);
                         let resp = ui.add(egui::Hyperlink::from_label_and_url(link_text, &url));
                         if resp.hovered() {
                             ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
@@ -479,11 +493,11 @@ impl<'a> RenderContext<'a> {
                     } else {
                         let mut span_job = LayoutJob::default();
                         let base_fmt = egui::TextFormat {
-                            font_id: FontId::proportional(14.5 * self.font_scale),
+                            font_id: FontId::proportional(14.5_f32 * self.font_scale),
                             color: self.theme.text_primary(),
                             italics: span.italic,
-                            strikethrough: Stroke::new(if span.strikethrough { 1.5 } else { 0.0 }, self.theme.text_primary()),
-                            line_height: Some(22.0 * self.font_scale),
+                            strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, self.theme.text_primary()),
+                            line_height: Some(22.0_f32 * self.font_scale),
                             ..Default::default()
                         };
                         append_highlighted_text(&mut span_job, &span.text, self.search_query, base_fmt, hl_bg, hl_fg);
