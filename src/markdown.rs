@@ -3,7 +3,7 @@ use egui::{
     text::LayoutJob, Align, Color32, FontId, Frame, Layout, Margin,
     RichText, Rounding, Stroke, Ui, Vec2,
 };
-use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -37,7 +37,6 @@ pub fn append_highlighted_text(
 
     let text_lower = text.to_lowercase();
     let query_lower = clean_query.to_lowercase();
-    let query_len = clean_query.chars().count();
 
     // 以 char_indices 支援 Unicode 中文字元正確索引切片
     let mut last_char_idx = 0;
