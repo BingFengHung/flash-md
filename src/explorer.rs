@@ -334,12 +334,13 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
                         for i in 0..array_count {
                             if let Ok(shell_item) = item_array.GetItemAt(i) {
                                 if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
-                                    let raw_path = display_name.to_string();
-                                    if !raw_path.is_empty() {
-                                        let path = normalize_explorer_path(&raw_path);
-                                        if path.exists() {
-                                            info!("✅ [IFolderView Selection] 成功取得檔案: {:?}", path);
-                                            return Some(path);
+                                    if let Ok(raw_path) = display_name.to_string() {
+                                        if !raw_path.is_empty() {
+                                            let path = normalize_explorer_path(&raw_path);
+                                            if path.exists() {
+                                                info!("✅ [IFolderView Selection] 成功取得檔案: {:?}", path);
+                                                return Some(path);
+                                            }
                                         }
                                     }
                                 }
@@ -358,12 +359,13 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
                         for i in 0..array_count {
                             if let Ok(shell_item) = item_array.GetItemAt(i) {
                                 if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
-                                    let raw_path = display_name.to_string();
-                                    if !raw_path.is_empty() {
-                                        let path = normalize_explorer_path(&raw_path);
-                                        if path.exists() {
-                                            info!("✅ [IFolderView Checked] 成功取得檔案: {:?}", path);
-                                            return Some(path);
+                                    if let Ok(raw_path) = display_name.to_string() {
+                                        if !raw_path.is_empty() {
+                                            let path = normalize_explorer_path(&raw_path);
+                                            if path.exists() {
+                                                info!("✅ [IFolderView Checked] 成功取得檔案: {:?}", path);
+                                                return Some(path);
+                                            }
                                         }
                                     }
                                 }
