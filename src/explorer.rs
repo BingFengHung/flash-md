@@ -153,14 +153,15 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     };
 
     // 1. 如果前景為 Windows 桌面 (Progman 或 WorkerW 或 ShellWindow)
-    if class_str == "Progman"
+    let is_desktop = class_str == "Progman"
         || class_str == "WorkerW"
         || root_class_str == "Progman"
         || root_class_str == "WorkerW"
         || foreground_hwnd == shell_hwnd
-        || root_foreground == shell_hwnd
-    {
-        debug!("前景為 Windows 桌面，查詢桌面選取項目...");
+        || root_foreground == shell_hwnd;
+
+    if is_desktop {
+        debug!("前景為 Windows 桌面，嘗試查詢桌面選取項目...");
         let pvar_loc = VARIANT::from(0i32); // CSIDL_DESKTOP
         let mut phwnd = 0i32;
         if let Ok(desktop_disp) = shell_windows.FindWindowSW(
@@ -174,22 +175,15 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
                 return Some(path);
             }
         }
-        // 若桌面無選取項目，直接返回 None，絕不讀取背景其他資料夾
-        return None;
     }
-
-    // 2. 判斷前景是否為檔案總管 (CabinetWClass / ExploreWClass)
-    let is_explorer_foreground = class_str == "CabinetWClass"
-        || class_str == "ExploreWClass"
-        || root_class_str == "CabinetWClass"
-        || root_class_str == "ExploreWClass";
 
     let count = match shell_windows.Count() {
         Ok(c) => c,
         Err(_) => return None,
     };
 
-    let fg_thread = GetWindowThreadProcessId(foreground_hwnd, None);
+    let mut fg_pid = 0u32;
+    let fg_thread = GetWindowThreadProcessId(foreground_hwnd, Some(&mut fg_pid));
     let mut gui_info = GUITHREADINFO {
         cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
         ..Default::default()
@@ -210,61 +204,58 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         };
 
         if let Ok(browser) = item_disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
-            let is_browser_visible = browser.Visible().map(|v| v.0 != 0).unwrap_or(false);
+            let is_browser_visible = browser.Visible().map(|v| v.0 != 0).unwrap_or(true);
 
             if let Ok(hwnd_val) = browser.HWND() {
                 let win_hwnd = HWND(hwnd_val.0 as _);
                 let root_win = GetAncestor(win_hwnd, GA_ROOT);
                 let is_os_visible = IsWindowVisible(win_hwnd).as_bool();
 
-                // 核心防護：若當前使用者在特定檔案總管視窗中，只查詢該前景視窗的分頁！
-                // 徹底防止抓取到背景其他不相干目錄或先前開啟過的舊檔案
-                if is_explorer_foreground && root_win != root_foreground && win_hwnd != foreground_hwnd {
-                    continue;
+                let mut win_pid = 0u32;
+                GetWindowThreadProcessId(win_hwnd, Some(&mut win_pid));
+
+                let mut score = 10;
+
+                // 1. 最高權重：精確符合當前焦點控制項 (焦點 tab)
+                if focus_hwnd.0 != 0 as _ && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd)) {
+                    score += 200;
                 }
-
-                let mut score = 0;
-
-                // 只有可見的瀏覽器 Tab 才能獲得高分
-                if is_browser_visible {
+                // 2. 前景視窗或其子父視窗
+                if win_hwnd == foreground_hwnd || is_child_or_same(foreground_hwnd, win_hwnd) || is_child_or_same(win_hwnd, foreground_hwnd) {
+                    score += 150;
+                }
+                // 3. 相同 Root 視窗 (同一個檔案總管視窗內部的分頁)
+                if root_win == root_foreground && root_foreground.0 != 0 as _ {
+                    score += 100;
+                }
+                // 4. 相同行程 (explorer.exe)
+                if fg_pid != 0 && win_pid == fg_pid {
                     score += 50;
                 }
-
-                if focus_hwnd.0 != 0 as _ && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd)) {
-                    score += 100;
-                } else if win_hwnd == foreground_hwnd || is_child_or_same(foreground_hwnd, win_hwnd) {
-                    score += 80;
-                } else if root_win == root_foreground {
-                    score += 60;
-                } else if is_os_visible {
-                    score += 10;
+                // 5. 可見性加分
+                if is_browser_visible {
+                    score += 30;
+                }
+                if is_os_visible {
+                    score += 20;
                 }
 
-                if score > 0 {
-                    candidates.push((score, item_disp));
-                }
+                candidates.push((score, item_disp));
             }
         }
     }
 
+    // 依權重降冪排序，最符合前景焦點的視窗排在最前面
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
     for (score, item_disp) in candidates {
-        debug!("依評分順序 (評分: {}) 查詢選取項目...", score);
+        debug!("嘗試查詢候選視窗 (評分: {})...", score);
         if let Some(path) = extract_selected_from_folder_view(&item_disp) {
             return Some(path);
         }
     }
 
     None
-}
-
-unsafe fn owner_target_fallback(root_owner: HWND, foreground_hwnd: HWND) -> HWND {
-    if root_owner.0 != 0 as _ {
-        root_owner
-    } else {
-        foreground_hwnd
-    }
 }
 
 unsafe fn is_child_or_same(child: HWND, parent: HWND) -> bool {
@@ -300,7 +291,7 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
         Err(_) => return None,
     };
 
-    // 嚴格依據使用者「當前選取」項目 (SelectedItems)，不使用 FocusedItem (避免未選取時誤判為第 1 個檔案)
+    // 1. 優先嘗試 SelectedItems() (多選或單擊選取)
     if let Ok(selected_items) = folder_view.SelectedItems() {
         if let Ok(count) = selected_items.Count() {
             if count > 0 {
@@ -332,6 +323,20 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
                             return Some(path);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // 2. 備用嘗試 FocusedItem() (當鍵盤導航或單擊時，SelectedItems 可能為空而 FocusedItem 存在)
+    if let Ok(focused_item) = folder_view.FocusedItem() {
+        if let Ok(path_bstr) = focused_item.Path() {
+            let raw_path = path_bstr.to_string();
+            if !raw_path.is_empty() {
+                let path = normalize_explorer_path(&raw_path);
+                if path.is_file() {
+                    info!("✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})", path, raw_path);
+                    return Some(path);
                 }
             }
         }
