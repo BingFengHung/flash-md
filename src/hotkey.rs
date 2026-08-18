@@ -46,27 +46,40 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
                 if alt_pressed {
                     if is_key_down {
-                        debug!("⚡ 成功攔截 Alt + Space！正在讀取選取檔案並喚醒視窗...");
+                        debug!("⚡ 成功攔截 Alt + Space！");
 
-                        // 1. 先在檔案總管仍處於焦點時提取選取檔案
-                        let selected_file = get_selected_file_from_explorer();
+                        // ⚠️ 關鍵修正：低階鍵盤掛鉤回呼 (WH_KEYBOARD_LL) 是在 GetMessageW 內部
+                        // 被同步呼叫的，Windows 對此有嚴格的逾時限制（約 300ms）。
+                        // 跨行程 COM 呼叫 (CoCreateInstance CLSCTX_LOCAL_SERVER 至 explorer.exe)
+                        // 需要訊息幫浦 (message pump) 配合進行 COM 封送 (marshaling)，
+                        // 但掛鉤回呼正處於訊息處理流程中，訊息幫浦被阻塞，
+                        // 會導致 COM 呼叫互鎖逾時或靜默失敗回傳 None！
+                        //
+                        // 因此必須將所有 COM 操作搬至獨立執行緒，讓掛鉤回呼立即返回！
+                        let sender_clone = GLOBAL_HOTKEY_SENDER.as_ref().cloned();
+                        let ctx_clone = GLOBAL_CTX_HOLDER.as_ref().cloned();
 
-                        // 2. 透過 Win32 原生 ShowWindow(SW_SHOW) 強制喚醒 OS 視窗與 winit 事件迴圈
-                        show_and_focus_app_window();
+                        std::thread::spawn(move || {
+                            // 1. 在獨立執行緒中執行 COM 操作（擁有獨立的 COM 初始化，不受掛鉤訊息幫浦限制）
+                            let selected_file = get_selected_file_from_explorer();
 
-                        // 3. 發送帶有檔案路徑的預覽事件至主佇列
-                        if let Some(ref sender) = GLOBAL_HOTKEY_SENDER {
-                            let _ = sender.send(HotkeyEvent::TriggerPreviewWithFile(selected_file));
-                        }
+                            // 2. 透過 Win32 原生 ShowWindow(SW_SHOW) 強制喚醒 OS 視窗與 winit 事件迴圈
+                            show_and_focus_app_window();
 
-                        // 4. 喚醒 egui 繪製迴圈
-                        if let Some(ref ctx_holder) = GLOBAL_CTX_HOLDER {
-                            if let Ok(guard) = ctx_holder.lock() {
-                                if let Some(ref ctx) = *guard {
-                                    ctx.request_repaint();
+                            // 3. 發送帶有檔案路徑的預覽事件至主佇列
+                            if let Some(sender) = sender_clone {
+                                let _ = sender.send(HotkeyEvent::TriggerPreviewWithFile(selected_file));
+                            }
+
+                            // 4. 喚醒 egui 繪製迴圈
+                            if let Some(ctx_holder) = ctx_clone {
+                                if let Ok(guard) = ctx_holder.lock() {
+                                    if let Some(ref ctx) = *guard {
+                                        ctx.request_repaint();
+                                    }
                                 }
                             }
-                        }
+                        });
                     }
 
                     // 關鍵：傳回 1 (非零) 徹底吞噬此按鍵，防止 Windows 彈出還原/最大化系統選單！
