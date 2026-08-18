@@ -175,6 +175,22 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
                 return Some(path);
             }
         }
+        // 桌面未選取任何檔案，直接返回 None，嚴禁跨視窗讀取背景資料夾
+        return None;
+    }
+
+    // 2. 判斷前景是否為檔案總管 (CabinetWClass / ExploreWClass)
+    let is_explorer_foreground = class_str == "CabinetWClass"
+        || class_str == "ExploreWClass"
+        || root_class_str == "CabinetWClass"
+        || root_class_str == "ExploreWClass"
+        || class_str == "ShellTabWindowClass"
+        || root_class_str == "ShellTabWindowClass";
+
+    // 若前景完全不是檔案總管也不是桌面，直接返回 None，絕不讀取背景歷史資料夾
+    if !is_explorer_foreground {
+        debug!("前景非檔案總管或桌面，跳過背景檔案查詢");
+        return None;
     }
 
     let count = match shell_windows.Count() {
@@ -211,33 +227,32 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
                 let root_win = GetAncestor(win_hwnd, GA_ROOT);
                 let is_os_visible = IsWindowVisible(win_hwnd).as_bool();
 
-                let mut win_pid = 0u32;
-                GetWindowThreadProcessId(win_hwnd, Some(&mut win_pid));
+                // 核心防護：嚴格限定只查詢當前前景檔案總管視窗內部的分頁！
+                // 徹底隔離背景開啟過的其他資料夾視窗，絕不互相干擾！
+                if root_win != root_foreground && win_hwnd != foreground_hwnd {
+                    continue;
+                }
 
                 let mut score = 10;
 
                 // 1. 最高權重：精確符合當前焦點控制項 (焦點 tab)
                 if focus_hwnd.0 != 0 as _ && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd)) {
-                    score += 200;
+                    score += 300;
                 }
                 // 2. 前景視窗或其子父視窗
                 if win_hwnd == foreground_hwnd || is_child_or_same(foreground_hwnd, win_hwnd) || is_child_or_same(win_hwnd, foreground_hwnd) {
-                    score += 150;
+                    score += 200;
                 }
                 // 3. 相同 Root 視窗 (同一個檔案總管視窗內部的分頁)
                 if root_win == root_foreground && root_foreground.0 != 0 as _ {
                     score += 100;
                 }
-                // 4. 相同行程 (explorer.exe)
-                if fg_pid != 0 && win_pid == fg_pid {
+                // 4. 可見性加分 (Windows 11 中作用中分頁可見，背景分頁隱藏)
+                if is_browser_visible {
                     score += 50;
                 }
-                // 5. 可見性加分
-                if is_browser_visible {
-                    score += 30;
-                }
                 if is_os_visible {
-                    score += 20;
+                    score += 30;
                 }
 
                 candidates.push((score, item_disp));
@@ -249,7 +264,7 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
     for (score, item_disp) in candidates {
-        debug!("嘗試查詢候選視窗 (評分: {})...", score);
+        debug!("嘗試查詢前景檔案總管候選分頁 (評分: {})...", score);
         if let Some(path) = extract_selected_from_folder_view(&item_disp) {
             return Some(path);
         }
