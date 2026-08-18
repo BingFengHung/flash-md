@@ -8,7 +8,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Shell::{
-    IFolderView, IShellBrowser, IShellFolderViewDual, IShellWindows, ShellWindows,
+    IFolderView, IShellBrowser, IShellFolderViewDual, IShellItemArray, IShellWindows, ShellWindows,
     SHGetPathFromIDListW, SIGDN_FILESYSPATH, SVGIO_CHECKED, SVGIO_SELECTION, SWC_DESKTOP,
     SWFO_NEEDDISPATCH,
 };
@@ -314,22 +314,9 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
 
     // SID_STopLevelBrowser = {4C96BE40-915C-11CF-99D3-00AA004AE837}
     let sid_s_top_level_browser = windows::core::GUID::from_u128(0x4C96BE40_915C_11CF_99D3_00AA004AE837);
-    let mut shell_browser_ptr: Option<IShellBrowser> = None;
-
-    if service_provider
-        .QueryService(
-            &sid_s_top_level_browser,
-            &IShellBrowser::IID,
-            &mut shell_browser_ptr as *mut _ as *mut _,
-        )
-        .is_err()
-    {
-        return None;
-    }
-
-    let shell_browser = match shell_browser_ptr {
-        Some(sb) => sb,
-        None => return None,
+    let shell_browser: IShellBrowser = match service_provider.QueryService(&sid_s_top_level_browser) {
+        Ok(sb) => sb,
+        Err(_) => return None,
     };
 
     let shell_view = match shell_browser.QueryActiveShellView() {
@@ -340,21 +327,20 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
     // 1. 嘗試透過 IFolderView 取得選取項目 (IFolderView 是 Windows Vista ~ Win 11 最強大的項目查詢介面)
     if let Ok(folder_view) = shell_view.cast::<IFolderView>() {
         // 先嘗試選取項目 (SVGIO_SELECTION)
-        let mut item_count = 0i32;
-        let _ = folder_view.ItemCount(SVGIO_SELECTION.0 as u32, &mut item_count);
-
-        if item_count > 0 {
-            if let Ok(item_array) = folder_view.Items(SVGIO_SELECTION.0 as u32) {
-                if let Ok(array_count) = item_array.GetCount() {
-                    for i in 0..array_count {
-                        if let Ok(shell_item) = item_array.GetItemAt(i) {
-                            if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
-                                let raw_path = display_name.to_string();
-                                if !raw_path.is_empty() {
-                                    let path = normalize_explorer_path(&raw_path);
-                                    if path.exists() {
-                                        info!("✅ [IFolderView Selection] 成功取得檔案: {:?}", path);
-                                        return Some(path);
+        if let Ok(item_count) = folder_view.ItemCount(SVGIO_SELECTION) {
+            if item_count > 0 {
+                if let Ok(item_array) = folder_view.Items::<IShellItemArray>(SVGIO_SELECTION) {
+                    if let Ok(array_count) = item_array.GetCount() {
+                        for i in 0..array_count {
+                            if let Ok(shell_item) = item_array.GetItemAt(i) {
+                                if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
+                                    let raw_path = display_name.to_string();
+                                    if !raw_path.is_empty() {
+                                        let path = normalize_explorer_path(&raw_path);
+                                        if path.exists() {
+                                            info!("✅ [IFolderView Selection] 成功取得檔案: {:?}", path);
+                                            return Some(path);
+                                        }
                                     }
                                 }
                             }
@@ -365,20 +351,20 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
         }
 
         // 嘗試已勾選項目 (SVGIO_CHECKED) (支援 Windows 11 核取方塊勾選模式！)
-        let mut checked_count = 0i32;
-        let _ = folder_view.ItemCount(SVGIO_CHECKED.0 as u32, &mut checked_count);
-        if checked_count > 0 {
-            if let Ok(item_array) = folder_view.Items(SVGIO_CHECKED.0 as u32) {
-                if let Ok(array_count) = item_array.GetCount() {
-                    for i in 0..array_count {
-                        if let Ok(shell_item) = item_array.GetItemAt(i) {
-                            if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
-                                let raw_path = display_name.to_string();
-                                if !raw_path.is_empty() {
-                                    let path = normalize_explorer_path(&raw_path);
-                                    if path.exists() {
-                                        info!("✅ [IFolderView Checked] 成功取得檔案: {:?}", path);
-                                        return Some(path);
+        if let Ok(checked_count) = folder_view.ItemCount(SVGIO_CHECKED) {
+            if checked_count > 0 {
+                if let Ok(item_array) = folder_view.Items::<IShellItemArray>(SVGIO_CHECKED) {
+                    if let Ok(array_count) = item_array.GetCount() {
+                        for i in 0..array_count {
+                            if let Ok(shell_item) = item_array.GetItemAt(i) {
+                                if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
+                                    let raw_path = display_name.to_string();
+                                    if !raw_path.is_empty() {
+                                        let path = normalize_explorer_path(&raw_path);
+                                        if path.exists() {
+                                            info!("✅ [IFolderView Checked] 成功取得檔案: {:?}", path);
+                                            return Some(path);
+                                        }
                                     }
                                 }
                             }
@@ -389,18 +375,19 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
         }
 
         // 若無多選，嘗試取得聚焦項目 (GetFocusedItem)
-        let mut focused_index = 0i32;
-        if folder_view.GetFocusedItem(&mut focused_index).is_ok() && focused_index >= 0 {
-            if let Ok(pidl) = folder_view.Item(focused_index) {
-                let mut path_buf = [0u16; 512];
-                if SHGetPathFromIDListW(pidl, &mut path_buf).as_bool() {
-                    let len = path_buf.iter().position(|&c| c == 0).unwrap_or(path_buf.len());
-                    let raw_path = String::from_utf16_lossy(&path_buf[..len]);
-                    if !raw_path.is_empty() {
-                        let path = normalize_explorer_path(&raw_path);
-                        if path.exists() {
-                            info!("✅ [IFolderView Focus] 成功取得檔案: {:?}", path);
-                            return Some(path);
+        if let Ok(focused_index) = folder_view.GetFocusedItem() {
+            if focused_index >= 0 {
+                if let Ok(pidl) = folder_view.Item(focused_index) {
+                    let mut path_buf = [0u16; 260];
+                    if SHGetPathFromIDListW(pidl, &mut path_buf).as_bool() {
+                        let len = path_buf.iter().position(|&c| c == 0).unwrap_or(path_buf.len());
+                        let raw_path = String::from_utf16_lossy(&path_buf[..len]);
+                        if !raw_path.is_empty() {
+                            let path = normalize_explorer_path(&raw_path);
+                            if path.exists() {
+                                info!("✅ [IFolderView Focus] 成功取得檔案: {:?}", path);
+                                return Some(path);
+                            }
                         }
                     }
                 }
