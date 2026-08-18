@@ -428,12 +428,21 @@ impl MdPreviewApp {
         } else {
             // 沒有在檔案總管選取特定檔案
             if self.visible {
+                // 若當前已經開啟，再次按下快捷鍵則隱藏收起視窗
                 self.visible = false;
                 hide_app_window();
             } else {
+                // 若為隱藏狀態，且沒有選取任何檔案，重置為純淨的空狀態 (絕不殘留舊檔案！)
+                self.current_file = None;
+                self.content.clear();
+                self.image_uri = None;
+                self.image_bytes = None;
+                self.line_count = 0;
+                self.file_size_str.clear();
+                self.last_modified_str.clear();
                 self.visible = true;
                 show_and_focus_app_window();
-                self.set_toast("⚡ 已開啟 flash-md！(在檔案總管點選 .md、程式碼或純文字檔案後按 Alt+Space 可直接預覽)".to_string());
+                self.set_toast("⚡ 已開啟 flash-md！(在檔案總管點選檔案後按 Alt+Space 可直接預覽)".to_string());
             }
         }
     }

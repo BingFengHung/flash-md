@@ -119,43 +119,24 @@ pub fn get_selected_file_from_explorer() -> Option<PathBuf> {
 
 unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     let foreground_hwnd = GetForegroundWindow();
-    let root_foreground = if foreground_hwnd.0 != 0 as _ {
-        GetAncestor(foreground_hwnd, GA_ROOT)
-    } else {
-        HWND(0 as _)
-    };
-    let root_owner = if foreground_hwnd.0 != 0 as _ {
-        GetAncestor(foreground_hwnd, GA_ROOTOWNER)
-    } else {
-        HWND(0 as _)
-    };
+    if foreground_hwnd.0 == 0 as _ {
+        return None;
+    }
 
-    let fg_thread = if foreground_hwnd.0 != 0 as _ {
-        GetWindowThreadProcessId(foreground_hwnd, None)
-    } else {
-        0
-    };
-
-    let mut gui_info = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..Default::default()
-    };
-    let focus_hwnd = if fg_thread != 0 && GetGUIThreadInfo(fg_thread, &mut gui_info).is_ok() {
-        gui_info.hwndFocus
-    } else {
-        HWND(0 as _)
-    };
+    let root_foreground = GetAncestor(foreground_hwnd, GA_ROOT);
+    let shell_hwnd = GetShellWindow();
 
     let mut class_name = [0u16; 256];
-    let class_len = if foreground_hwnd.0 != 0 as _ {
-        GetClassNameW(foreground_hwnd, &mut class_name)
-    } else {
-        0
-    };
+    let class_len = GetClassNameW(foreground_hwnd, &mut class_name);
     let class_str = String::from_utf16_lossy(&class_name[..class_len as usize]);
+
+    let mut root_class_name = [0u16; 256];
+    let root_class_len = GetClassNameW(root_foreground, &mut root_class_name);
+    let root_class_str = String::from_utf16_lossy(&root_class_name[..root_class_len as usize]);
+
     debug!(
-        "前景視窗類別: {}, HWND: {:?}, Focus: {:?}, Root: {:?}",
-        class_str, foreground_hwnd, focus_hwnd, root_foreground
+        "🔍 前景視窗: class={}, root_class={}, HWND={:?}, root={:?}",
+        class_str, root_class_str, foreground_hwnd, root_foreground
     );
 
     // 建立 ShellWindows 實例
@@ -171,24 +152,15 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         }
     };
 
-    let count = match shell_windows.Count() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("無法讀取 ShellWindows 數量: {:?}", e);
-            return None;
-        }
-    };
-
-    debug!("已開啟的 Shell 視窗數量: {}", count);
-
-    // 1. 如果前景為 Windows 桌面 (Progman 或 WorkerW)
-    let shell_hwnd = GetShellWindow();
+    // 1. 如果前景為 Windows 桌面 (Progman 或 WorkerW 或 ShellWindow)
     if class_str == "Progman"
         || class_str == "WorkerW"
+        || root_class_str == "Progman"
+        || root_class_str == "WorkerW"
         || foreground_hwnd == shell_hwnd
         || root_foreground == shell_hwnd
     {
-        debug!("前景為 Windows 桌面，嘗試查詢桌面選取項目...");
+        debug!("前景為 Windows 桌面，查詢桌面選取項目...");
         let pvar_loc = VARIANT::from(0i32); // CSIDL_DESKTOP
         let mut phwnd = 0i32;
         if let Ok(desktop_disp) = shell_windows.FindWindowSW(
@@ -202,9 +174,32 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
                 return Some(path);
             }
         }
+        // 若桌面無選取項目，直接返回 None，絕不讀取背景其他資料夾
+        return None;
     }
 
-    // 2. 評分排序模型：精確匹配當前焦點所在的檔案總管分頁，防止讀取到背景其他視窗！
+    // 2. 判斷前景是否為檔案總管 (CabinetWClass / ExploreWClass)
+    let is_explorer_foreground = class_str == "CabinetWClass"
+        || class_str == "ExploreWClass"
+        || root_class_str == "CabinetWClass"
+        || root_class_str == "ExploreWClass";
+
+    let count = match shell_windows.Count() {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    let fg_thread = GetWindowThreadProcessId(foreground_hwnd, None);
+    let mut gui_info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    let focus_hwnd = if fg_thread != 0 && GetGUIThreadInfo(fg_thread, &mut gui_info).is_ok() {
+        gui_info.hwndFocus
+    } else {
+        HWND(0 as _)
+    };
+
     let mut candidates: Vec<(i32, IDispatch)> = Vec::new();
 
     for i in 0..count {
@@ -215,47 +210,47 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         };
 
         if let Ok(browser) = item_disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
-            let is_browser_visible = browser.Visible().map(|v| v.0 != 0).unwrap_or(true);
+            let is_browser_visible = browser.Visible().map(|v| v.0 != 0).unwrap_or(false);
 
             if let Ok(hwnd_val) = browser.HWND() {
                 let win_hwnd = HWND(hwnd_val.0 as _);
+                let root_win = GetAncestor(win_hwnd, GA_ROOT);
                 let is_os_visible = IsWindowVisible(win_hwnd).as_bool();
 
-                let root_win = GetAncestor(win_hwnd, GA_ROOT);
-                let owner_win = GetAncestor(win_hwnd, GA_ROOTOWNER);
+                // 核心防護：若當前使用者在特定檔案總管視窗中，只查詢該前景視窗的分頁！
+                // 徹底防止抓取到背景其他不相干目錄或先前開啟過的舊檔案
+                if is_explorer_foreground && root_win != root_foreground && win_hwnd != foreground_hwnd {
+                    continue;
+                }
 
                 let mut score = 0;
 
-                // 最高權重：精確符合焦點控制項 (焦點 tab)
+                // 只有可見的瀏覽器 Tab 才能獲得高分
+                if is_browser_visible {
+                    score += 50;
+                }
+
                 if focus_hwnd.0 != 0 as _ && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd)) {
                     score += 100;
                 } else if win_hwnd == foreground_hwnd || is_child_or_same(foreground_hwnd, win_hwnd) {
                     score += 80;
-                } else if root_win == root_foreground || owner_win == owner_target_fallback(root_owner, foreground_hwnd) {
+                } else if root_win == root_foreground {
                     score += 60;
                 } else if is_os_visible {
-                    score += 20;
-                } else {
-                    score += 5;
-                }
-
-                if is_browser_visible {
-                    score += 30;
-                }
-                if is_os_visible {
                     score += 10;
                 }
 
-                candidates.push((score, item_disp));
+                if score > 0 {
+                    candidates.push((score, item_disp));
+                }
             }
         }
     }
 
-    // 依權重由大到小排序，優先查詢最精確的前景作用中視窗
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
     for (score, item_disp) in candidates {
-        debug!("嘗試查詢候選視窗 (評分: {})...", score);
+        debug!("依評分順序 (評分: {}) 查詢選取項目...", score);
         if let Some(path) = extract_selected_from_folder_view(&item_disp) {
             return Some(path);
         }
@@ -305,7 +300,7 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
         Err(_) => return None,
     };
 
-    // 1. 優先嘗試 SelectedItems()
+    // 嚴格依據使用者「當前選取」項目 (SelectedItems)，不使用 FocusedItem (避免未選取時誤判為第 1 個檔案)
     if let Ok(selected_items) = folder_view.SelectedItems() {
         if let Ok(count) = selected_items.Count() {
             if count > 0 {
@@ -326,7 +321,7 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
                     }
                 }
 
-                // 若選取的全為目錄，回傳第 0 個
+                // 若選取的包含資料夾或虛擬項目，取第 0 個
                 let item_variant = VARIANT::from(0i32);
                 if let Ok(item) = selected_items.Item(&item_variant) {
                     if let Ok(path_bstr) = item.Path() {
@@ -337,20 +332,6 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
                             return Some(path);
                         }
                     }
-                }
-            }
-        }
-    }
-
-    // 2. 備用嘗試 FocusedItem() (因點選時檔案必為 FocusedItem)
-    if let Ok(focused_item) = folder_view.FocusedItem() {
-        if let Ok(path_bstr) = focused_item.Path() {
-            let raw_path = path_bstr.to_string();
-            if !raw_path.is_empty() {
-                let path = normalize_explorer_path(&raw_path);
-                if path.is_file() {
-                    info!("✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})", path, raw_path);
-                    return Some(path);
                 }
             }
         }
