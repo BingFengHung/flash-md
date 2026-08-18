@@ -965,13 +965,38 @@ impl eframe::App for MdPreviewApp {
                 if self.search_open && !matches!(self.view_mode, ViewMode::Image { .. }) {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("🔍 尋找內文:").size(12.5).color(self.theme.accent_color()));
+                        ui.label(RichText::new("🔍 尋找內文:").size(12.5).color(self.theme.accent_color()).strong());
                         ui.add(
                             TextEdit::singleline(&mut self.search_query)
-                                .hint_text("輸入關鍵字...")
-                                .desired_width(280.0),
+                                .hint_text("輸入搜尋關鍵字...")
+                                .desired_width(260.0),
                         );
-                        if ui.button(RichText::new("✕").size(11.0)).clicked() {
+
+                        let query_clean = self.search_query.trim();
+                        if !query_clean.is_empty() {
+                            let match_count = self.content.to_lowercase().matches(&query_clean.to_lowercase()).count();
+                            let count_text = if match_count > 0 {
+                                format!("找到 {} 筆相符", match_count)
+                            } else {
+                                "無相符項目".to_string()
+                            };
+                            let count_color = if match_count > 0 {
+                                self.theme.accent_color()
+                            } else {
+                                self.theme.text_secondary()
+                            };
+                            ui.label(
+                                RichText::new(count_text)
+                                    .size(11.5)
+                                    .color(count_color)
+                                    .strong(),
+                            );
+                        }
+
+                        if ui.button(RichText::new("✕ 清除").size(11.0)).clicked() {
+                            self.search_query.clear();
+                        }
+                        if ui.button(RichText::new("關閉 (Esc)").size(11.0)).clicked() {
                             self.search_open = false;
                             self.search_query.clear();
                         }
@@ -1018,31 +1043,30 @@ impl eframe::App for MdPreviewApp {
                                     .size(11.5),
                             );
 
-                            if ui.small_button(" + ").on_hover_text("放大圖片").clicked() {
-                                self.image_zoom = (self.image_zoom * 1.2).min(10.0);
-                                self.image_fit_mode = false;
+                            if ui.small_button(" ↔ ").on_hover_text("自適應視窗大小").clicked() {
+                                self.image_fit_mode = true;
                             }
-                            if ui.small_button(" − ").on_hover_text("縮小圖片").clicked() {
-                                self.image_zoom = (self.image_zoom / 1.2).max(0.1);
-                                self.image_fit_mode = false;
-                            }
-                            if ui.small_button(" 1:1 ").on_hover_text("原始尺寸 (100%)").clicked() {
+                            if ui.small_button(" 1:1 ").on_hover_text("原始尺寸 100% (Ctrl + 0)").clicked() {
                                 self.image_zoom = 1.0;
                                 self.image_fit_mode = false;
                             }
-                            if ui.small_button(" ↔ ").on_hover_text("縮放適應視窗").clicked() {
-                                self.image_fit_mode = true;
+                            if ui.small_button(" + ").on_hover_text("放大 (Ctrl + +)").clicked() {
+                                self.image_zoom = (self.image_zoom * 1.2).min(10.0);
+                                self.image_fit_mode = false;
+                            }
+                            if ui.small_button(" − ").on_hover_text("縮小 (Ctrl + -)").clicked() {
+                                self.image_zoom = (self.image_zoom / 1.2).max(0.1);
+                                self.image_fit_mode = false;
                             }
                         } else {
-                            let zoom_str = format!("{}%", (self.font_scale * 100.0).round() as u32);
                             ui.label(
-                                RichText::new(zoom_str)
+                                RichText::new(format!("{}%", (self.font_scale * 100.0).round() as u32))
                                     .color(self.theme.text_secondary())
                                     .size(11.5),
                             );
 
                             if ui.small_button(" + ").on_hover_text("放大字體 (Ctrl + +)").clicked() {
-                                self.font_scale = (self.font_scale + 0.1).min(2.0);
+                                self.font_scale = (self.font_scale + 0.1).min(2.5);
                             }
                             if ui.small_button(" − ").on_hover_text("縮小字體 (Ctrl + -)").clicked() {
                                 self.font_scale = (self.font_scale - 0.1).max(0.6);
@@ -1069,43 +1093,49 @@ impl eframe::App for MdPreviewApp {
                 } else {
                     match self.view_mode {
                         ViewMode::Markdown => {
-                            // Markdown 富文字渲染模式
+                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮)
                             ScrollArea::vertical()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    let renderer = MarkdownRenderer::new(self.theme, self.font_scale);
+                                    let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query);
                                     renderer.render(ui, &self.content);
                                 });
                         }
                         ViewMode::Code { ref lang } => {
-                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排)
+                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮)
                             ScrollArea::both()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang);
+                                    render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query);
                                 });
                         }
                         ViewMode::PlainText => {
-                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示)
+                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮)
                             ScrollArea::both()
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.add_space(4.0);
                                     let font_id = FontId::monospace(14.0 * self.font_scale);
                                     let text_color = self.theme.text_primary();
+                                    let hl_bg = match self.theme {
+                                        AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
+                                        AppTheme::Light => Color32::from_rgb(254, 240, 138),
+                                    };
+                                    let hl_fg = match self.theme {
+                                        AppTheme::Dark => Color32::BLACK,
+                                        AppTheme::Light => Color32::from_rgb(113, 63, 18),
+                                    };
 
-                                    let mut layouter = |ui: &egui::Ui, string: &str, _wrap_width: f32| {
+                                    let search_q = self.search_query.clone();
+                                    let mut layouter = move |ui: &egui::Ui, string: &str, _wrap_width: f32| {
                                         let mut job = egui::text::LayoutJob::default();
-                                        job.append(
-                                            string,
-                                            0.0,
-                                            egui::TextFormat {
-                                                font_id: font_id.clone(),
-                                                color: text_color,
-                                                line_height: Some(22.0 * self.font_scale),
-                                                ..Default::default()
-                                            },
-                                        );
+                                        let base_fmt = egui::TextFormat {
+                                            font_id: font_id.clone(),
+                                            color: text_color,
+                                            line_height: Some(22.0 * self.font_scale),
+                                            ..Default::default()
+                                        };
+                                        crate::markdown::append_highlighted_text(&mut job, string, &search_q, base_fmt, hl_bg, hl_fg);
                                         ui.fonts(|f| f.layout_job(job))
                                     };
 

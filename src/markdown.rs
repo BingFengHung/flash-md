@@ -20,17 +20,92 @@ fn get_theme_set() -> &'static ThemeSet {
     THEME_SET.get_or_init(ThemeSet::load_defaults)
 }
 
+/// 依搜尋關鍵字即時進行高亮分段附加
+pub fn append_highlighted_text(
+    job: &mut LayoutJob,
+    text: &str,
+    search_query: &str,
+    base_format: egui::TextFormat,
+    highlight_bg: Color32,
+    highlight_fg: Color32,
+) {
+    let clean_query = search_query.trim();
+    if clean_query.is_empty() {
+        job.append(text, 0.0, base_format);
+        return;
+    }
+
+    let text_lower = text.to_lowercase();
+    let query_lower = clean_query.to_lowercase();
+    let query_len = clean_query.chars().count();
+
+    // 以 char_indices 支援 Unicode 中文字元正確索引切片
+    let mut last_char_idx = 0;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let lower_chars: Vec<char> = text_lower.chars().collect();
+    let query_chars: Vec<char> = query_lower.chars().collect();
+
+    if query_chars.is_empty() || lower_chars.len() < query_chars.len() {
+        job.append(text, 0.0, base_format);
+        return;
+    }
+
+    let mut i = 0;
+    while i + query_chars.len() <= lower_chars.len() {
+        if lower_chars[i..i + query_chars.len()] == query_chars[..] {
+            let start_byte = chars[i].0;
+            let end_byte = if i + query_chars.len() < chars.len() {
+                chars[i + query_chars.len()].0
+            } else {
+                text.len()
+            };
+
+            let last_byte = if last_char_idx < chars.len() {
+                chars[last_char_idx].0
+            } else {
+                text.len()
+            };
+
+            if start_byte > last_byte {
+                job.append(&text[last_byte..start_byte], 0.0, base_format.clone());
+            }
+
+            let mut hl_format = base_format.clone();
+            hl_format.background = highlight_bg;
+            hl_format.color = highlight_fg;
+            job.append(&text[start_byte..end_byte], 0.0, hl_format);
+
+            i += query_chars.len();
+            last_char_idx = i;
+        } else {
+            i += 1;
+        }
+    }
+
+    let last_byte = if last_char_idx < chars.len() {
+        chars[last_char_idx].0
+    } else {
+        text.len()
+    };
+
+    if last_byte < text.len() {
+        job.append(&text[last_byte..], 0.0, base_format);
+    }
+}
+
 pub struct MarkdownRenderer<'a> {
     pub theme: AppTheme,
     pub font_scale: f32,
+    pub search_query: &'a str,
     pub _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> MarkdownRenderer<'a> {
-    pub fn new(theme: AppTheme, font_scale: f32) -> Self {
+    pub fn new(theme: AppTheme, font_scale: f32, search_query: &'a str) -> Self {
         Self {
             theme,
             font_scale,
+            search_query,
             _marker: std::marker::PhantomData,
         }
     }
@@ -44,7 +119,7 @@ impl<'a> MarkdownRenderer<'a> {
         options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
 
         let parser = Parser::new_ext(markdown_text, options);
-        let mut context = RenderContext::new(self.theme, self.font_scale);
+        let mut context = RenderContext::new(self.theme, self.font_scale, self.search_query);
 
         for event in parser {
             context.process_event(ui, event);
@@ -64,9 +139,10 @@ struct InlineSpan {
     link_url: Option<String>,
 }
 
-struct RenderContext {
+struct RenderContext<'a> {
     theme: AppTheme,
     font_scale: f32,
+    search_query: &'a str,
     inlines: Vec<InlineSpan>,
     current_bold: bool,
     current_italic: bool,
@@ -87,11 +163,12 @@ struct RenderContext {
     ordered_list_index: Option<u64>,
 }
 
-impl RenderContext {
-    fn new(theme: AppTheme, font_scale: f32) -> Self {
+impl<'a> RenderContext<'a> {
+    fn new(theme: AppTheme, font_scale: f32, search_query: &'a str) -> Self {
         Self {
             theme,
             font_scale,
+            search_query,
             inlines: Vec::new(),
             current_bold: false,
             current_italic: false,
@@ -315,53 +392,106 @@ impl RenderContext {
     }
 
     fn render_inline_spans(&self, ui: &mut Ui, spans: Vec<InlineSpan>) {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+        let hl_bg = match self.theme {
+            AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
+            AppTheme::Light => Color32::from_rgb(254, 240, 138),
+        };
+        let hl_fg = match self.theme {
+            AppTheme::Dark => Color32::BLACK,
+            AppTheme::Light => Color32::from_rgb(113, 63, 18),
+        };
 
-            for span in spans {
-                if span.code {
-                    // Inline Code Pill
-                    let bg = self.theme.code_bg_color();
-                    let border = self.theme.border_color();
-                    Frame::none()
-                        .fill(bg)
-                        .rounding(Rounding::same(4.0))
-                        .stroke(Stroke::new(1.0_f32, border))
-                        .inner_margin(Margin::symmetric(4.0, 1.0))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(&span.text)
-                                    .font(FontId::monospace(13.0 * self.font_scale))
-                                    .color(self.theme.accent_color()),
-                            );
-                        });
-                } else if let Some(url) = span.link_url {
-                    // Hyperlink
-                    let link_text = RichText::new(&span.text)
-                        .color(self.theme.accent_color())
-                        .underline()
-                        .size(14.0 * self.font_scale);
-                    let resp = ui.add(egui::Hyperlink::from_label_and_url(link_text, &url));
-                    if resp.hovered() {
-                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                    }
-                } else {
-                    let mut rich = RichText::new(&span.text)
-                        .color(self.theme.text_primary())
-                        .size(14.5 * self.font_scale);
-                    if span.bold {
-                        rich = rich.strong();
-                    }
-                    if span.italic {
-                        rich = rich.italics();
-                    }
-                    if span.strikethrough {
-                        rich = rich.strikethrough();
-                    }
-                    ui.label(rich);
-                }
+        let mut job = LayoutJob::default();
+        let mut has_hyperlinks = false;
+
+        for span in &spans {
+            if span.link_url.is_some() {
+                has_hyperlinks = true;
+                break;
             }
-        });
+        }
+
+        if !has_hyperlinks {
+            for span in spans {
+                let font_id = if span.code {
+                    FontId::monospace(13.0 * self.font_scale)
+                } else {
+                    FontId::proportional(14.5 * self.font_scale)
+                };
+
+                let color = if span.code {
+                    self.theme.accent_color()
+                } else {
+                    self.theme.text_primary()
+                };
+
+                let base_fmt = egui::TextFormat {
+                    font_id,
+                    color,
+                    italics: span.italic,
+                    strikethrough: Stroke::new(if span.strikethrough { 1.5 } else { 0.0 }, color),
+                    line_height: Some(22.0 * self.font_scale),
+                    background: if span.code {
+                        self.theme.code_bg_color()
+                    } else {
+                        Color32::TRANSPARENT
+                    },
+                    ..Default::default()
+                };
+
+                append_highlighted_text(&mut job, &span.text, self.search_query, base_fmt, hl_bg, hl_fg);
+            }
+            ui.label(job);
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+
+                for span in spans {
+                    if span.code {
+                        // Inline Code Pill
+                        let bg = self.theme.code_bg_color();
+                        let border = self.theme.border_color();
+                        Frame::none()
+                            .fill(bg)
+                            .rounding(Rounding::same(4.0))
+                            .stroke(Stroke::new(1.0_f32, border))
+                            .inner_margin(Margin::symmetric(4.0, 1.0))
+                            .show(ui, |ui| {
+                                let mut code_job = LayoutJob::default();
+                                let base_fmt = egui::TextFormat {
+                                    font_id: FontId::monospace(13.0 * self.font_scale),
+                                    color: self.theme.accent_color(),
+                                    ..Default::default()
+                                };
+                                append_highlighted_text(&mut code_job, &span.text, self.search_query, base_fmt, hl_bg, hl_fg);
+                                ui.label(code_job);
+                            });
+                    } else if let Some(url) = span.link_url {
+                        // Hyperlink
+                        let link_text = RichText::new(&span.text)
+                            .color(self.theme.accent_color())
+                            .underline()
+                            .size(14.0 * self.font_scale);
+                        let resp = ui.add(egui::Hyperlink::from_label_and_url(link_text, &url));
+                        if resp.hovered() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                        }
+                    } else {
+                        let mut span_job = LayoutJob::default();
+                        let base_fmt = egui::TextFormat {
+                            font_id: FontId::proportional(14.5 * self.font_scale),
+                            color: self.theme.text_primary(),
+                            italics: span.italic,
+                            strikethrough: Stroke::new(if span.strikethrough { 1.5 } else { 0.0 }, self.theme.text_primary()),
+                            line_height: Some(22.0 * self.font_scale),
+                            ..Default::default()
+                        };
+                        append_highlighted_text(&mut span_job, &span.text, self.search_query, base_fmt, hl_bg, hl_fg);
+                        ui.label(span_job);
+                    }
+                }
+            });
+        }
     }
 
     fn render_heading(&mut self, ui: &mut Ui, level: HeadingLevel) {
@@ -379,12 +509,23 @@ impl RenderContext {
             HeadingLevel::H6 => (13.0 * self.font_scale, false),
         };
 
-        ui.label(
-            RichText::new(&heading_text)
-                .size(size)
-                .strong()
-                .color(self.theme.text_primary()),
-        );
+        let hl_bg = match self.theme {
+            AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
+            AppTheme::Light => Color32::from_rgb(254, 240, 138),
+        };
+        let hl_fg = match self.theme {
+            AppTheme::Dark => Color32::BLACK,
+            AppTheme::Light => Color32::from_rgb(113, 63, 18),
+        };
+
+        let mut job = LayoutJob::default();
+        let base_fmt = egui::TextFormat {
+            font_id: FontId::proportional(size),
+            color: self.theme.text_primary(),
+            ..Default::default()
+        };
+        append_highlighted_text(&mut job, &heading_text, self.search_query, base_fmt, hl_bg, hl_fg);
+        ui.label(job);
 
         if is_h1_or_h2 {
             ui.add_space(2.0);
@@ -457,7 +598,7 @@ impl RenderContext {
                 ui.separator();
                 ui.add_space(4.0);
 
-                // 語法高亮呈現
+                // 語法高亮呈現 (使用 LinesWithEndings 精確解析完整換行語意)
                 let syntax_set = get_syntax_set();
                 let theme_set = get_theme_set();
 
@@ -466,15 +607,57 @@ impl RenderContext {
                     AppTheme::Light => &theme_set.themes["InspiredGitHub"],
                 };
 
+                let lang_lower = lang.to_lowercase();
                 let syntax = syntax_set
-                    .find_syntax_by_token(lang)
+                    .find_syntax_by_token(&lang_lower)
+                    .or_else(|| syntax_set.find_syntax_by_extension(&lang_lower))
+                    .or_else(|| {
+                        match lang_lower.as_str() {
+                            "rs" => syntax_set.find_syntax_by_name("Rust"),
+                            "py" => syntax_set.find_syntax_by_name("Python"),
+                            "js" | "mjs" | "cjs" => syntax_set.find_syntax_by_name("JavaScript"),
+                            "jsx" => syntax_set.find_syntax_by_name("JavaScript (JSX)"),
+                            "ts" => syntax_set.find_syntax_by_name("TypeScript"),
+                            "tsx" => syntax_set.find_syntax_by_name("TypeScript (TSX)"),
+                            "toml" => syntax_set.find_syntax_by_name("TOML"),
+                            "yaml" | "yml" => syntax_set.find_syntax_by_name("YAML"),
+                            "json" => syntax_set.find_syntax_by_name("JSON"),
+                            "c" | "h" => syntax_set.find_syntax_by_name("C"),
+                            "cpp" | "cc" | "cxx" | "hpp" => syntax_set.find_syntax_by_name("C++"),
+                            "cs" => syntax_set.find_syntax_by_name("C#"),
+                            "go" => syntax_set.find_syntax_by_name("Go"),
+                            "java" => syntax_set.find_syntax_by_name("Java"),
+                            "kt" | "kts" => syntax_set.find_syntax_by_name("Kotlin"),
+                            "html" | "htm" => syntax_set.find_syntax_by_name("HTML"),
+                            "css" => syntax_set.find_syntax_by_name("CSS"),
+                            "scss" | "sass" => syntax_set.find_syntax_by_name("Sass"),
+                            "sql" => syntax_set.find_syntax_by_name("SQL"),
+                            "sh" | "bash" | "zsh" => syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"),
+                            "ps1" | "psm1" => syntax_set.find_syntax_by_name("PowerShell"),
+                            "bat" | "cmd" => syntax_set.find_syntax_by_name("Batch File"),
+                            "xml" | "svg" => syntax_set.find_syntax_by_name("XML"),
+                            "lua" => syntax_set.find_syntax_by_name("Lua"),
+                            "php" => syntax_set.find_syntax_by_name("PHP"),
+                            "rb" => syntax_set.find_syntax_by_name("Ruby"),
+                            _ => None,
+                        }
+                    })
                     .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
 
                 let mut highlighter = HighlightLines::new(syntax, syntect_theme);
-
+                let font_id = FontId::monospace(13.0 * self.font_scale);
                 let mut layout_job = LayoutJob::default();
 
-                for line in code.lines() {
+                let hl_bg = match self.theme {
+                    AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
+                    AppTheme::Light => Color32::from_rgb(254, 240, 138),
+                };
+                let hl_fg = match self.theme {
+                    AppTheme::Dark => Color32::BLACK,
+                    AppTheme::Light => Color32::from_rgb(113, 63, 18),
+                };
+
+                for line in syntect::util::LinesWithEndings::from(code) {
                     let ranges = highlighter
                         .highlight_line(line, syntax_set)
                         .unwrap_or_default();
@@ -485,25 +668,13 @@ impl RenderContext {
                             style.foreground.g,
                             style.foreground.b,
                         );
-                        layout_job.append(
-                            text,
-                            0.0,
-                            egui::TextFormat {
-                                font_id: FontId::monospace(13.0 * self.font_scale),
-                                color,
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    layout_job.append(
-                        "\n",
-                        0.0,
-                        egui::TextFormat {
-                            font_id: FontId::monospace(13.0 * self.font_scale),
-                            color: self.theme.text_primary(),
+                        let base_fmt = egui::TextFormat {
+                            font_id: font_id.clone(),
+                            color,
                             ..Default::default()
-                        },
-                    );
+                        };
+                        append_highlighted_text(&mut layout_job, text, self.search_query, base_fmt, hl_bg, hl_fg);
+                    }
                 }
 
                 ui.label(layout_job);
@@ -564,13 +735,14 @@ impl RenderContext {
     }
 }
 
-/// 支援全語法高亮 + 行號的獨立程式碼檢視器
+/// 支援全語法高亮 + 行號 + 搜尋高亮的獨立程式碼檢視器
 pub fn render_code_viewer(
     ui: &mut Ui,
     theme: AppTheme,
     font_scale: f32,
     code: &str,
     extension_or_lang: &str,
+    search_query: &str,
 ) {
     let syntax_set = get_syntax_set();
     let theme_set = get_theme_set();
@@ -580,9 +752,41 @@ pub fn render_code_viewer(
         AppTheme::Light => &theme_set.themes["InspiredGitHub"],
     };
 
+    let lang_lower = extension_or_lang.to_lowercase();
     let syntax = syntax_set
-        .find_syntax_by_extension(extension_or_lang)
-        .or_else(|| syntax_set.find_syntax_by_token(extension_or_lang))
+        .find_syntax_by_extension(&lang_lower)
+        .or_else(|| syntax_set.find_syntax_by_token(&lang_lower))
+        .or_else(|| {
+            match lang_lower.as_str() {
+                "rs" => syntax_set.find_syntax_by_name("Rust"),
+                "py" => syntax_set.find_syntax_by_name("Python"),
+                "js" | "mjs" | "cjs" => syntax_set.find_syntax_by_name("JavaScript"),
+                "jsx" => syntax_set.find_syntax_by_name("JavaScript (JSX)"),
+                "ts" => syntax_set.find_syntax_by_name("TypeScript"),
+                "tsx" => syntax_set.find_syntax_by_name("TypeScript (TSX)"),
+                "toml" => syntax_set.find_syntax_by_name("TOML"),
+                "yaml" | "yml" => syntax_set.find_syntax_by_name("YAML"),
+                "json" => syntax_set.find_syntax_by_name("JSON"),
+                "c" | "h" => syntax_set.find_syntax_by_name("C"),
+                "cpp" | "cc" | "cxx" | "hpp" => syntax_set.find_syntax_by_name("C++"),
+                "cs" => syntax_set.find_syntax_by_name("C#"),
+                "go" => syntax_set.find_syntax_by_name("Go"),
+                "java" => syntax_set.find_syntax_by_name("Java"),
+                "kt" | "kts" => syntax_set.find_syntax_by_name("Kotlin"),
+                "html" | "htm" => syntax_set.find_syntax_by_name("HTML"),
+                "css" => syntax_set.find_syntax_by_name("CSS"),
+                "scss" | "sass" => syntax_set.find_syntax_by_name("Sass"),
+                "sql" => syntax_set.find_syntax_by_name("SQL"),
+                "sh" | "bash" | "zsh" => syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"),
+                "ps1" | "psm1" => syntax_set.find_syntax_by_name("PowerShell"),
+                "bat" | "cmd" => syntax_set.find_syntax_by_name("Batch File"),
+                "xml" | "svg" => syntax_set.find_syntax_by_name("XML"),
+                "lua" => syntax_set.find_syntax_by_name("Lua"),
+                "php" => syntax_set.find_syntax_by_name("PHP"),
+                "rb" => syntax_set.find_syntax_by_name("Ruby"),
+                _ => None,
+            }
+        })
         .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
 
     let mut highlighter = HighlightLines::new(syntax, syntect_theme);
@@ -593,6 +797,15 @@ pub fn render_code_viewer(
     let font_id = FontId::monospace(13.5 * font_scale);
     let gutter_color = theme.text_secondary().gamma_multiply(0.6);
     let border_color = theme.border_color();
+
+    let hl_bg = match theme {
+        AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
+        AppTheme::Light => Color32::from_rgb(254, 240, 138),
+    };
+    let hl_fg = match theme {
+        AppTheme::Dark => Color32::BLACK,
+        AppTheme::Light => Color32::from_rgb(113, 63, 18),
+    };
 
     // 容器卡片外框
     Frame::none()
@@ -627,10 +840,10 @@ pub fn render_code_viewer(
                 ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0_f32, border_color));
                 ui.add_space(8.0);
 
-                // 2. 程式碼語法高亮區域
+                // 2. 程式碼語法高亮區域 (使用 LinesWithEndings 保持 \n 供 syntect 精確解析)
                 ui.vertical(|ui| {
                     let mut code_job = LayoutJob::default();
-                    for line in code.lines() {
+                    for line in syntect::util::LinesWithEndings::from(code) {
                         let ranges = highlighter
                             .highlight_line(line, syntax_set)
                             .unwrap_or_default();
@@ -642,27 +855,15 @@ pub fn render_code_viewer(
                                 style.foreground.b,
                             );
 
-                            code_job.append(
-                                text,
-                                0.0,
-                                egui::TextFormat {
-                                    font_id: font_id.clone(),
-                                    color,
-                                    line_height: Some(21.0 * font_scale),
-                                    ..Default::default()
-                                },
-                            );
-                        }
-                        code_job.append(
-                            "\n",
-                            0.0,
-                            egui::TextFormat {
+                            let base_fmt = egui::TextFormat {
                                 font_id: font_id.clone(),
-                                color: theme.text_primary(),
+                                color,
                                 line_height: Some(21.0 * font_scale),
                                 ..Default::default()
-                            },
-                        );
+                            };
+
+                            append_highlighted_text(&mut code_job, text, search_query, base_fmt, hl_bg, hl_fg);
+                        }
                     }
 
                     ui.label(code_job);
