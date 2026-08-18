@@ -258,17 +258,9 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     // 依權重降冪排序，最符合前景焦點的視窗排在最前面
     candidates.sort_by(|a, b| b.0.cmp(&a.0));
 
-    // 關鍵防護：若有高分（與前景視窗直接匹配，>= 800）的候選分頁，嚴禁回退搜尋無關背景視窗
-    let has_foreground_match = candidates.iter().any(|(s, _)| *s >= 800);
-
-    for (score, item_disp) in candidates {
-        // 如果當前使用者處於特定檔案總管視窗中，只查詢高分（同視窗）候選分頁，絕不回退搜尋背景其他資料夾！
-        if has_foreground_match && score < 800 {
-            break;
-        }
-
+    for (score, item_disp) in &candidates {
         debug!("嘗試查詢候選視窗 (評分: {})...", score);
-        if let Some(path) = extract_selected_from_folder_view(&item_disp) {
+        if let Some(path) = extract_selected_from_folder_view(item_disp) {
             return Some(path);
         }
     }
@@ -304,11 +296,16 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
         Err(_) => return None,
     };
 
-    let folder_view: IShellFolderViewDual = match doc_disp.cast() {
-        Ok(fv) => fv,
-        Err(_) => return None,
-    };
+    if let Ok(folder_view) = doc_disp.cast::<IShellFolderViewDual>() {
+        if let Some(path) = extract_from_folder_view_dual(&folder_view) {
+            return Some(path);
+        }
+    }
 
+    None
+}
+
+unsafe fn extract_from_folder_view_dual(folder_view: &IShellFolderViewDual) -> Option<PathBuf> {
     // 1. 優先嘗試 SelectedItems() (多選或單擊選取)
     if let Ok(selected_items) = folder_view.SelectedItems() {
         if let Ok(count) = selected_items.Count() {
@@ -321,7 +318,7 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
                             let raw_path = path_bstr.to_string();
                             if !raw_path.is_empty() {
                                 let path = normalize_explorer_path(&raw_path);
-                                if path.is_file() {
+                                if path.exists() {
                                     info!("✅ 成功自 SelectedItems 取得檔案: {:?} (原始: {})", path, raw_path);
                                     return Some(path);
                                 }
@@ -352,7 +349,7 @@ unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf>
             let raw_path = path_bstr.to_string();
             if !raw_path.is_empty() {
                 let path = normalize_explorer_path(&raw_path);
-                if path.is_file() {
+                if path.exists() {
                     info!("✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})", path, raw_path);
                     return Some(path);
                 }
