@@ -57,6 +57,8 @@
   - 例如 `FindWindowSW` 中的 `SWC_DESKTOP` 與 `SWFO_NEEDDISPATCH` 已是型別安全的列舉常數，直接作為引數傳遞即可，切勿強制轉型為 `i32`。
 - **Win32 訊息迴圈 `must_use` 處理**：
   - `TranslateMessage(&msg)` 與 `DispatchMessageW(&msg)` 傳回 `BOOL`，必須以 `let _ = TranslateMessage(&msg);` 明確接收，避免 `#[warn(unused_must_use)]` 警告。
+- **`PWSTR::to_string()` 傳回值型別注意**：
+  - `windows_core::PWSTR`（例如 `IShellItem::GetDisplayName` 傳回之物件）呼叫 `.to_string()` 傳回的是 **`Result<String, FromUtf16Error>`** 而非純字串。必須以 `if let Ok(raw_path) = display_name.to_string()` 解包處理。
 
 ### 2. 全域快捷鍵攔截與 Windows 系統選單 (SC_KEYMENU) 衝突解決
 - **`Alt + Space` 系統預設選單衝突**：
