@@ -3,12 +3,13 @@ use std::path::PathBuf;
 use windows::core::{w, VARIANT};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, IDispatch, CLSCTX_LOCAL_SERVER,
+    CoCreateInstance, CoInitializeEx, IDispatch, IServiceProvider, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Shell::{
-    IShellFolderViewDual, IShellWindows, ShellWindows, SWC_DESKTOP,
+    IFolderView, IShellBrowser, IShellFolderViewDual, IShellWindows, ShellWindows,
+    SHGetPathFromIDListW, SIGDN_FILESYSPATH, SVGIO_CHECKED, SVGIO_SELECTION, SWC_DESKTOP,
     SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -226,19 +227,19 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
 
                 // 1. 符合當前焦點控制項 (例如作用中分頁或焦點檔案清單)
                 if focus_hwnd.0 != 0 as _ && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd)) {
-                    score += 1500;
+                    score += 2000;
                 }
                 // 2. 前景視窗或其子父視窗
                 if win_hwnd == foreground_hwnd || is_child_or_same(foreground_hwnd, win_hwnd) || is_child_or_same(win_hwnd, foreground_hwnd) {
-                    score += 1000;
+                    score += 1500;
                 }
                 // 3. 相同 Root 視窗 (同一個檔案總管視窗內部的分頁或父框架)
                 if root_win == root_foreground && root_foreground.0 != 0 as _ {
-                    score += 800;
+                    score += 1000;
                 }
-                // 4. 同行程 PID (explorer.exe)
+                // 4. 同進程 PID (explorer.exe)
                 if fg_pid != 0 && win_pid == fg_pid {
-                    score += 300;
+                    score += 500;
                 }
                 // 5. 可見性加分 (作用中分頁可見，背景分頁隱藏)
                 if is_browser_visible {
@@ -286,19 +287,124 @@ unsafe fn is_child_or_same(child: HWND, parent: HWND) -> bool {
 }
 
 unsafe fn extract_selected_from_folder_view(disp: &IDispatch) -> Option<PathBuf> {
-    let web_browser: windows::Win32::UI::Shell::IWebBrowserApp = match disp.cast() {
-        Ok(wb) => wb,
+    // 1. 優先採用 Windows ShellView / IFolderView 原生引擎 (直接支援 Windows 11 Tabs 與核取方塊模式)
+    if let Some(path) = extract_via_shell_browser(disp) {
+        return Some(path);
+    }
+
+    // 2. 備用：IWebBrowserApp -> Document() -> IShellFolderViewDual
+    if let Ok(web_browser) = disp.cast::<windows::Win32::UI::Shell::IWebBrowserApp>() {
+        if let Ok(doc_disp) = web_browser.Document() {
+            if let Ok(folder_view) = doc_disp.cast::<IShellFolderViewDual>() {
+                if let Some(path) = extract_from_folder_view_dual(&folder_view) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
+    let service_provider: IServiceProvider = match disp.cast() {
+        Ok(sp) => sp,
         Err(_) => return None,
     };
 
-    let doc_disp = match web_browser.Document() {
-        Ok(doc) => doc,
+    // SID_STopLevelBrowser = {4C96BE40-915C-11CF-99D3-00AA004AE837}
+    let sid_s_top_level_browser = windows::core::GUID::from_u128(0x4C96BE40_915C_11CF_99D3_00AA004AE837);
+    let mut shell_browser_ptr: Option<IShellBrowser> = None;
+
+    if service_provider
+        .QueryService(
+            &sid_s_top_level_browser,
+            &IShellBrowser::IID,
+            &mut shell_browser_ptr as *mut _ as *mut _,
+        )
+        .is_err()
+    {
+        return None;
+    }
+
+    let shell_browser = match shell_browser_ptr {
+        Some(sb) => sb,
+        None => return None,
+    };
+
+    let shell_view = match shell_browser.QueryActiveShellView() {
+        Ok(sv) => sv,
         Err(_) => return None,
     };
 
-    if let Ok(folder_view) = doc_disp.cast::<IShellFolderViewDual>() {
-        if let Some(path) = extract_from_folder_view_dual(&folder_view) {
-            return Some(path);
+    // 1. 嘗試透過 IFolderView 取得選取項目 (IFolderView 是 Windows Vista ~ Win 11 最強大的項目查詢介面)
+    if let Ok(folder_view) = shell_view.cast::<IFolderView>() {
+        // 先嘗試選取項目 (SVGIO_SELECTION)
+        let mut item_count = 0i32;
+        let _ = folder_view.ItemCount(SVGIO_SELECTION.0 as u32, &mut item_count);
+
+        if item_count > 0 {
+            if let Ok(item_array) = folder_view.Items(SVGIO_SELECTION.0 as u32) {
+                if let Ok(array_count) = item_array.GetCount() {
+                    for i in 0..array_count {
+                        if let Ok(shell_item) = item_array.GetItemAt(i) {
+                            if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
+                                let raw_path = display_name.to_string();
+                                if !raw_path.is_empty() {
+                                    let path = normalize_explorer_path(&raw_path);
+                                    if path.exists() {
+                                        info!("✅ [IFolderView Selection] 成功取得檔案: {:?}", path);
+                                        return Some(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 嘗試已勾選項目 (SVGIO_CHECKED) (支援 Windows 11 核取方塊勾選模式！)
+        let mut checked_count = 0i32;
+        let _ = folder_view.ItemCount(SVGIO_CHECKED.0 as u32, &mut checked_count);
+        if checked_count > 0 {
+            if let Ok(item_array) = folder_view.Items(SVGIO_CHECKED.0 as u32) {
+                if let Ok(array_count) = item_array.GetCount() {
+                    for i in 0..array_count {
+                        if let Ok(shell_item) = item_array.GetItemAt(i) {
+                            if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
+                                let raw_path = display_name.to_string();
+                                if !raw_path.is_empty() {
+                                    let path = normalize_explorer_path(&raw_path);
+                                    if path.exists() {
+                                        info!("✅ [IFolderView Checked] 成功取得檔案: {:?}", path);
+                                        return Some(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 若無多選，嘗試取得聚焦項目 (GetFocusedItem)
+        let mut focused_index = 0i32;
+        if folder_view.GetFocusedItem(&mut focused_index).is_ok() && focused_index >= 0 {
+            if let Ok(pidl) = folder_view.Item(focused_index) {
+                let mut path_buf = [0u16; 512];
+                if SHGetPathFromIDListW(pidl, &mut path_buf).as_bool() {
+                    let len = path_buf.iter().position(|&c| c == 0).unwrap_or(path_buf.len());
+                    let raw_path = String::from_utf16_lossy(&path_buf[..len]);
+                    if !raw_path.is_empty() {
+                        let path = normalize_explorer_path(&raw_path);
+                        if path.exists() {
+                            info!("✅ [IFolderView Focus] 成功取得檔案: {:?}", path);
+                            return Some(path);
+                        }
+                    }
+                }
+            }
         }
     }
 
