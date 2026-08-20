@@ -63,6 +63,7 @@ pub struct MdPreviewApp {
     pub ctx_holder: Arc<Mutex<Option<Context>>>,
 
     pub status_toast: Option<(String, std::time::Instant)>,
+    pub reset_scroll_to_top: bool,
 }
 
 impl MdPreviewApp {
@@ -123,6 +124,7 @@ impl MdPreviewApp {
             tray_rx,
             ctx_holder: ctx_holder.clone(),
             status_toast: None,
+            reset_scroll_to_top: false,
         };
 
         if !is_visible {
@@ -194,6 +196,8 @@ impl MdPreviewApp {
 
     pub fn load_file(&mut self, path: &Path) {
         info!("嘗試載入檔案: {:?}", path);
+        // 切換或載入檔案時自動將滾輪捲動至最頂部
+        self.reset_scroll_to_top = true;
 
         if path.is_dir() {
             self.set_toast(format!("已選取資料夾: {:?}", path.file_name().unwrap_or_default()));
@@ -654,6 +658,8 @@ impl MdPreviewApp {
                 }
             };
 
+            self.reset_scroll_to_top = true;
+
             self.set_toast(match self.view_mode {
                 ViewMode::Markdown => "已切換至 Markdown 渲染模式 📄".to_string(),
                 ViewMode::Code { ref lang } => {
@@ -1002,6 +1008,7 @@ impl eframe::App for MdPreviewApp {
                                     }
                                 }
                             };
+                            self.reset_scroll_to_top = true;
                         }
                         if mode_btn.hovered() {
                             mode_btn.on_hover_text(badge_tip);
@@ -1266,64 +1273,70 @@ impl eframe::App for MdPreviewApp {
                 } else {
                     match self.view_mode {
                         ViewMode::Markdown => {
-                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮)
-                            ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query);
-                                    renderer.render(ui, &self.content);
-                                });
+                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮與滾輪重置回頂部)
+                            let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                            if self.reset_scroll_to_top {
+                                scroll = scroll.vertical_scroll_offset(0.0);
+                            }
+                            scroll.show(ui, |ui| {
+                                let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query);
+                                renderer.render(ui, &self.content);
+                            });
                         }
                         ViewMode::Code { ref lang } => {
-                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮)
-                            ScrollArea::both()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query);
-                                });
+                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮與滾輪重置回頂部)
+                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            if self.reset_scroll_to_top {
+                                scroll = scroll.scroll_offset(Vec2::ZERO);
+                            }
+                            scroll.show(ui, |ui| {
+                                render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query);
+                            });
                         }
                         ViewMode::PlainText => {
-                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮)
-                            ScrollArea::both()
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.add_space(4.0);
-                                    let font_scale = self.font_scale;
-                                    let font_id = FontId::monospace(14.0 * font_scale);
-                                    let text_color = self.theme.text_primary();
-                                    let hl_bg = match self.theme {
-                                        AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
-                                        AppTheme::Light => Color32::from_rgb(254, 240, 138),
-                                    };
-                                    let hl_fg = match self.theme {
-                                        AppTheme::Dark => Color32::BLACK,
-                                        AppTheme::Light => Color32::from_rgb(113, 63, 18),
-                                    };
+                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮與滾輪重置回頂部)
+                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            if self.reset_scroll_to_top {
+                                scroll = scroll.scroll_offset(Vec2::ZERO);
+                            }
+                            scroll.show(ui, |ui| {
+                                ui.add_space(4.0);
+                                let font_scale = self.font_scale;
+                                let font_id = FontId::monospace(14.0 * font_scale);
+                                let text_color = self.theme.text_primary();
+                                let hl_bg = match self.theme {
+                                    AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
+                                    AppTheme::Light => Color32::from_rgb(254, 240, 138),
+                                };
+                                let hl_fg = match self.theme {
+                                    AppTheme::Dark => Color32::BLACK,
+                                    AppTheme::Light => Color32::from_rgb(113, 63, 18),
+                                };
 
-                                    let search_q = self.search_query.clone();
-                                    let font_id_for_layouter = font_id.clone();
-                                    let mut layouter = move |ui: &egui::Ui, string: &str, _wrap_width: f32| {
-                                        let mut job = egui::text::LayoutJob::default();
-                                        let base_fmt = egui::TextFormat {
-                                            font_id: font_id_for_layouter.clone(),
-                                            color: text_color,
-                                            line_height: Some(22.0 * font_scale),
-                                            ..Default::default()
-                                        };
-                                        crate::markdown::append_highlighted_text(&mut job, string, &search_q, base_fmt, hl_bg, hl_fg);
-                                        ui.fonts(|f| f.layout_job(job))
+                                let search_q = self.search_query.clone();
+                                let font_id_for_layouter = font_id.clone();
+                                let mut layouter = move |ui: &egui::Ui, string: &str, _wrap_width: f32| {
+                                    let mut job = egui::text::LayoutJob::default();
+                                    let base_fmt = egui::TextFormat {
+                                        font_id: font_id_for_layouter.clone(),
+                                        color: text_color,
+                                        line_height: Some(22.0 * font_scale),
+                                        ..Default::default()
                                     };
+                                    crate::markdown::append_highlighted_text(&mut job, string, &search_q, base_fmt, hl_bg, hl_fg);
+                                    ui.fonts(|f| f.layout_job(job))
+                                };
 
-                                    let mut text = self.content.clone();
-                                    ui.add(
-                                        TextEdit::multiline(&mut text)
-                                            .font(font_id)
-                                            .layouter(&mut layouter)
-                                            .text_color(text_color)
-                                            .frame(false)
-                                            .desired_width(f32::INFINITY),
-                                    );
-                                });
+                                let mut text = self.content.clone();
+                                ui.add(
+                                    TextEdit::multiline(&mut text)
+                                        .font(font_id)
+                                        .layouter(&mut layouter)
+                                        .text_color(text_color)
+                                        .frame(false)
+                                        .desired_width(f32::INFINITY),
+                                );
+                            });
                         }
                         ViewMode::Image { .. } => {
                             // 圖片與 SVG 向量圖檢視模式 (支援縮放、滾輪、適應視窗)
@@ -1332,6 +1345,9 @@ impl eframe::App for MdPreviewApp {
                     }
                 }
             });
+
+        // 渲染完成後清除滾輪回到頂部旗標，允許使用者後續正常捲動
+        self.reset_scroll_to_top = false;
     }
 }
 
@@ -1558,9 +1574,11 @@ impl MdPreviewApp {
                 self.image_fit_mode = false;
             }
 
-            ScrollArea::both()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
+            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+            if self.reset_scroll_to_top {
+                scroll = scroll.scroll_offset(Vec2::ZERO);
+            }
+            scroll.show(ui, |ui| {
                     ui.centered_and_justified(|ui| {
                         let mut img = egui::Image::from_uri(uri.clone())
                             .rounding(Rounding::same(6.0));
