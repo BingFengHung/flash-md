@@ -1,0 +1,62 @@
+# ============================================================================
+# cargo-deny 設定檔 — 依賴安全、授權條款與來源管控
+# 文件：https://embarkstudios.github.io/cargo-deny/
+# ============================================================================
+
+# ── 一般設定 ──────────────────────────────────────────────────────────────────
+[graph]
+# 僅檢查 Windows 平台目標（flash-md 僅支援 Windows）
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+
+# ── 安全漏洞掃描 (Advisories) ────────────────────────────────────────────────
+# 比對 RustSec Advisory Database (https://rustsec.org/) 中的已知 CVE 漏洞
+[advisories]
+# 依賴存在已知安全漏洞時 → 建置失敗
+vulnerability = "deny"
+# 依賴被標記為已 yank（撤回）時 → 建置失敗（本次 arrayref 攻擊事件即可攔截）
+yanked = "deny"
+# 依賴被標記為無人維護時 → 警告
+unmaintained = "warn"
+# 依賴存在安全公告但非漏洞時 → 警告
+notice = "warn"
+
+# ── 授權條款檢查 (Licenses) ──────────────────────────────────────────────────
+[licenses]
+# 使用未宣告授權條款的 crate → 建置失敗
+unlicensed = "deny"
+# 允許的授權條款白名單
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "CC0-1.0",
+    "OpenSSL",
+]
+# 使用 SPDX 表達式解析授權條款
+confidence-threshold = 0.8
+
+# ── 禁用 crate 檢查 (Bans) ──────────────────────────────────────────────────
+[bans]
+# 存在同一 crate 的多個主版本時 → 警告（有助於減少二進制檔體積）
+multiple-versions = "warn"
+# 允許重複的 crate（某些上游無法避免）
+allow-wildcard-paths = true
+
+# ── 來源管控 (Sources) ────────────────────────────────────────────────────────
+[sources]
+# 禁止使用未知的 registry 來源（防止引入偽冒 registry）
+unknown-registry = "deny"
+# 禁止使用未知的 Git 來源
+unknown-git = "deny"
+# 僅允許 crates.io 作為合法來源
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
