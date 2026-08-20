@@ -6,7 +6,10 @@ use crate::markdown::{
 };
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
-use crate::updater::{check_latest_release, perform_self_update, ReleaseInfo, CURRENT_VERSION};
+use crate::updater::{
+    check_latest_release, perform_self_update, restart_with_new_version, ReleaseInfo,
+    CURRENT_VERSION,
+};
 use crate::watcher::{FileWatcher, WatcherEvent};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{
@@ -172,22 +175,43 @@ impl MdPreviewApp {
 
     pub fn trigger_self_update(&mut self) {
         if let Some(release) = self.available_update.clone() {
+            if self.is_updating {
+                return;
+            }
             self.is_updating = true;
-            self.set_toast(format!("正在下載並自動更新至 {}... 請稍候 ⏳", release.tag_name));
+            self.set_toast(format!("正在下載並自動升級至 {}... ⏳", release.tag_name));
             let ctx_holder = self.ctx_holder.clone();
+            let current_file_path = self.current_file.clone();
+            let is_standalone = self.is_standalone;
 
             thread::spawn(move || {
                 match perform_self_update(&release) {
                     Ok(_) => {
-                        info!("更新完成！");
+                        info!("更新完成！即將自動無縫重啟新版本...");
+                        if let Ok(guard) = ctx_holder.lock() {
+                            if let Some(ref ctx) = *guard {
+                                ctx.request_repaint();
+                            }
+                        }
+                        // 稍作緩衝讓介面完成最後繪製
+                        thread::sleep(Duration::from_millis(600));
+
+                        let mut args = Vec::new();
+                        if is_standalone {
+                            if let Some(ref p) = current_file_path {
+                                args.push(p.to_string_lossy().to_string());
+                            }
+                        }
+                        restart_with_new_version(&args);
+                        std::process::exit(0);
                     }
                     Err(e) => {
                         error!("更新失敗: {}", e);
-                    }
-                }
-                if let Ok(guard) = ctx_holder.lock() {
-                    if let Some(ref ctx) = *guard {
-                        ctx.request_repaint();
+                        if let Ok(guard) = ctx_holder.lock() {
+                            if let Some(ref ctx) = *guard {
+                                ctx.request_repaint();
+                            }
+                        }
                     }
                 }
             });
@@ -816,6 +840,7 @@ impl eframe::App for MdPreviewApp {
         let mut do_self_update = false;
         if let Some(ref release) = self.available_update {
             let release_tag = release.tag_name.clone();
+            let is_updating = self.is_updating;
             egui::TopBottomPanel::top("update_banner")
                 .frame(
                     Frame::none()
@@ -825,23 +850,37 @@ impl eframe::App for MdPreviewApp {
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
+                        let banner_text = if is_updating {
+                            format!("⏳ 正在自動下載升級至 {} 並無縫重啟，請稍候...", release_tag)
+                        } else {
+                            format!("🎉 發現全新版本 {} (目前為 v{})！", release_tag, CURRENT_VERSION)
+                        };
+
                         ui.label(
-                            RichText::new(format!("🎉 發現全新版本 {} (目前為 v{})！", release_tag, CURRENT_VERSION))
+                            RichText::new(banner_text)
                                 .color(self.theme.accent_color())
                                 .strong()
                                 .size(12.5),
                         );
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button(RichText::new("✕ 稍後").size(11.0)).clicked() {
-                                dismiss_update = true;
-                            }
+                            if !is_updating {
+                                if ui.button(RichText::new("✕ 稍後").size(11.0)).clicked() {
+                                    dismiss_update = true;
+                                }
 
-                            if ui
-                                .button(RichText::new(" 🚀 一鍵自動升級 ").strong().size(12.0).color(Color32::WHITE))
-                                .clicked()
-                            {
-                                do_self_update = true;
+                                if ui
+                                    .button(RichText::new(" 🚀 一鍵自動升級 ").strong().size(12.0).color(Color32::WHITE))
+                                    .clicked()
+                                {
+                                    do_self_update = true;
+                                }
+                            } else {
+                                ui.label(
+                                    RichText::new("⚡ 即時熱替換中...")
+                                        .size(11.5)
+                                        .color(self.theme.text_secondary()),
+                                );
                             }
                         });
                     });

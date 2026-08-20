@@ -165,3 +165,21 @@ Write-Host "SUCCESS";
         Err("目前僅支援 Windows 自動更新".to_string())
     }
 }
+
+/// 自動更新完成後，以新版本執行檔重啟程式進程並無縫繼承參數
+pub fn restart_with_new_version(args: &[String]) {
+    if let Ok(current_exe) = env::current_exe() {
+        info!("正在重啟新版本: {:?}, 參數: {:?}", current_exe, args);
+        let mut cmd = Command::new(&current_exe);
+        cmd.args(args);
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // 0x00000200 = CREATE_NEW_PROCESS_GROUP, 0x00000008 = DETACHED_PROCESS
+            cmd.creation_flags(0x00000200 | 0x00000008);
+        }
+
+        let _ = cmd.spawn();
+    }
+}

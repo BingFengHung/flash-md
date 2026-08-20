@@ -18,7 +18,7 @@ use log::info;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use updater::{check_latest_release, perform_self_update, CURRENT_VERSION};
+use updater::{check_latest_release, perform_self_update, restart_with_new_version, CURRENT_VERSION};
 use watcher::FileWatcher;
 
 #[cfg(windows)]
@@ -59,6 +59,14 @@ fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     attach_parent_console();
 
+    // 自動清理上次自我更新所留下的 .old 備份檔案
+    if let Ok(current_exe) = std::env::current_exe() {
+        let backup_exe = format!("{}.old", current_exe.to_string_lossy());
+        if std::path::Path::new(&backup_exe).exists() {
+            let _ = std::fs::remove_file(&backup_exe);
+        }
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let cli = Cli::parse();
 
@@ -83,7 +91,8 @@ fn main() -> eframe::Result<()> {
             match perform_self_update(&release) {
                 Ok(_) => {
                     println!("✨ 恭喜！flash-md 已成功自動升級至 {}！", release.tag_name);
-                    println!("💡 您可以再次執行 flash-md 或按 Alt + Space 享受最新功能！");
+                    println!("🚀 正在自動為您啟動新版本 flash-md...");
+                    restart_with_new_version(&[]);
                     std::process::exit(0);
                 }
                 Err(e) => {
