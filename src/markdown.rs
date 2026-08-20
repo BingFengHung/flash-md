@@ -20,14 +20,18 @@ fn get_theme_set() -> &'static ThemeSet {
     THEME_SET.get_or_init(ThemeSet::load_defaults)
 }
 
-/// 依搜尋關鍵字即時進行高亮分段附加 (全 Unicode 安全切片，支援中英文與特殊字元，ASCII 快速路徑零分配)
+/// 依搜尋關鍵字即時進行高亮分段附加 (全 Unicode 安全切片，支援中英文與特殊字元，區分當前聚焦與一般相符)
 pub fn append_highlighted_text(
     job: &mut LayoutJob,
     text: &str,
     search_query: &str,
     base_format: egui::TextFormat,
-    highlight_bg: Color32,
-    highlight_fg: Color32,
+    normal_hl_bg: Color32,
+    normal_hl_fg: Color32,
+    active_hl_bg: Color32,
+    active_hl_fg: Color32,
+    active_match_idx: Option<usize>,
+    match_counter: &mut usize,
 ) {
     let clean_query = search_query.trim();
     if clean_query.is_empty() || text.is_empty() {
@@ -50,9 +54,17 @@ pub fn append_highlighted_text(
                 job.append(&text[last_end..start], 0.0, base_format.clone());
             }
 
+            let is_active = active_match_idx == Some(*match_counter);
+            *match_counter += 1;
+
             let mut hl_fmt = base_format.clone();
-            hl_fmt.background = highlight_bg;
-            hl_fmt.color = highlight_fg;
+            if is_active {
+                hl_fmt.background = active_hl_bg;
+                hl_fmt.color = active_hl_fg;
+            } else {
+                hl_fmt.background = normal_hl_bg;
+                hl_fmt.color = normal_hl_fg;
+            }
             job.append(&text[start..end], 0.0, hl_fmt);
 
             last_end = end;
@@ -89,9 +101,17 @@ pub fn append_highlighted_text(
                 job.append(&text[last_byte_idx..start_byte], 0.0, base_format.clone());
             }
 
+            let is_active = active_match_idx == Some(*match_counter);
+            *match_counter += 1;
+
             let mut hl_fmt = base_format.clone();
-            hl_fmt.background = highlight_bg;
-            hl_fmt.color = highlight_fg;
+            if is_active {
+                hl_fmt.background = active_hl_bg;
+                hl_fmt.color = active_hl_fg;
+            } else {
+                hl_fmt.background = normal_hl_bg;
+                hl_fmt.color = normal_hl_fg;
+            }
             job.append(&text[start_byte..end_byte], 0.0, hl_fmt);
 
             i += query_lower.len();
@@ -110,15 +130,22 @@ pub struct MarkdownRenderer<'a> {
     pub theme: AppTheme,
     pub font_scale: f32,
     pub search_query: &'a str,
+    pub active_match_index: Option<usize>,
     pub _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> MarkdownRenderer<'a> {
-    pub fn new(theme: AppTheme, font_scale: f32, search_query: &'a str) -> Self {
+    pub fn new(
+        theme: AppTheme,
+        font_scale: f32,
+        search_query: &'a str,
+        active_match_index: Option<usize>,
+    ) -> Self {
         Self {
             theme,
             font_scale,
             search_query,
+            active_match_index,
             _marker: std::marker::PhantomData,
         }
     }
@@ -132,7 +159,12 @@ impl<'a> MarkdownRenderer<'a> {
         options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
 
         let parser = Parser::new_ext(markdown_text, options);
-        let mut context = RenderContext::new(self.theme, self.font_scale, self.search_query);
+        let mut context = RenderContext::new(
+            self.theme,
+            self.font_scale,
+            self.search_query,
+            self.active_match_index,
+        );
 
         for event in parser {
             context.process_event(ui, event);
@@ -156,6 +188,8 @@ struct RenderContext<'a> {
     theme: AppTheme,
     font_scale: f32,
     search_query: &'a str,
+    active_match_index: Option<usize>,
+    match_counter: usize,
     inlines: Vec<InlineSpan>,
     current_bold: bool,
     current_italic: bool,
@@ -177,11 +211,18 @@ struct RenderContext<'a> {
 }
 
 impl<'a> RenderContext<'a> {
-    fn new(theme: AppTheme, font_scale: f32, search_query: &'a str) -> Self {
+    fn new(
+        theme: AppTheme,
+        font_scale: f32,
+        search_query: &'a str,
+        active_match_index: Option<usize>,
+    ) -> Self {
         Self {
             theme,
             font_scale,
             search_query,
+            active_match_index,
+            match_counter: 0,
             inlines: Vec::new(),
             current_bold: false,
             current_italic: false,
@@ -200,6 +241,23 @@ impl<'a> RenderContext<'a> {
             in_table_head: false,
             list_level: 0,
             ordered_list_index: None,
+        }
+    }
+
+    fn hl_colors(&self) -> (Color32, Color32, Color32, Color32) {
+        match self.theme {
+            AppTheme::Dark => (
+                Color32::from_rgba_unmultiplied(234, 179, 8, 110), // 普通相符：柔和暗金黃底
+                Color32::from_rgb(254, 240, 138),                  // 普通相符：淺金黃字
+                Color32::from_rgb(249, 115, 22),                   // 當前 Focus 相符：耀眼亮橘橙底
+                Color32::BLACK,                                    // 當前 Focus 相符：純黑字
+            ),
+            AppTheme::Light => (
+                Color32::from_rgb(254, 240, 138),                  // 普通相符：柔和檸檬黃底
+                Color32::from_rgb(113, 63, 18),                    // 普通相符：深褐色字
+                Color32::from_rgb(234, 88, 12),                    // 當前 Focus 相符：深橘紅底
+                Color32::WHITE,                                    // 當前 Focus 相符：純白字
+            ),
         }
     }
 
@@ -418,15 +476,8 @@ impl<'a> RenderContext<'a> {
         }
     }
 
-    fn render_inline_spans(&self, ui: &mut Ui, spans: Vec<InlineSpan>) {
-        let hl_bg = match self.theme {
-            AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
-            AppTheme::Light => Color32::from_rgb(254, 240, 138),
-        };
-        let hl_fg = match self.theme {
-            AppTheme::Dark => Color32::BLACK,
-            AppTheme::Light => Color32::from_rgb(113, 63, 18),
-        };
+    fn render_inline_spans(&mut self, ui: &mut Ui, spans: Vec<InlineSpan>) {
+        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
         let mut job = LayoutJob::default();
         let mut has_hyperlinks = false;
@@ -466,7 +517,18 @@ impl<'a> RenderContext<'a> {
                     ..Default::default()
                 };
 
-                append_highlighted_text(&mut job, &span.text, self.search_query, base_fmt, hl_bg, hl_fg);
+                append_highlighted_text(
+                    &mut job,
+                    &span.text,
+                    self.search_query,
+                    base_fmt,
+                    hl_bg,
+                    hl_fg,
+                    act_bg,
+                    act_fg,
+                    self.active_match_index,
+                    &mut self.match_counter,
+                );
             }
             ui.label(job);
         } else {
@@ -490,7 +552,18 @@ impl<'a> RenderContext<'a> {
                                     color: self.theme.accent_color(),
                                     ..Default::default()
                                 };
-                                append_highlighted_text(&mut code_job, &span.text, self.search_query, base_fmt, hl_bg, hl_fg);
+                                append_highlighted_text(
+                                    &mut code_job,
+                                    &span.text,
+                                    self.search_query,
+                                    base_fmt,
+                                    hl_bg,
+                                    hl_fg,
+                                    act_bg,
+                                    act_fg,
+                                    self.active_match_index,
+                                    &mut self.match_counter,
+                                );
                                 ui.label(code_job);
                             });
                     } else if let Some(url) = span.link_url {
@@ -513,7 +586,18 @@ impl<'a> RenderContext<'a> {
                             line_height: Some(22.0_f32 * self.font_scale),
                             ..Default::default()
                         };
-                        append_highlighted_text(&mut span_job, &span.text, self.search_query, base_fmt, hl_bg, hl_fg);
+                        append_highlighted_text(
+                            &mut span_job,
+                            &span.text,
+                            self.search_query,
+                            base_fmt,
+                            hl_bg,
+                            hl_fg,
+                            act_bg,
+                            act_fg,
+                            self.active_match_index,
+                            &mut self.match_counter,
+                        );
                         ui.label(span_job);
                     }
                 }
@@ -536,14 +620,7 @@ impl<'a> RenderContext<'a> {
             HeadingLevel::H6 => (13.0 * self.font_scale, false),
         };
 
-        let hl_bg = match self.theme {
-            AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
-            AppTheme::Light => Color32::from_rgb(254, 240, 138),
-        };
-        let hl_fg = match self.theme {
-            AppTheme::Dark => Color32::BLACK,
-            AppTheme::Light => Color32::from_rgb(113, 63, 18),
-        };
+        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
         let mut job = LayoutJob::default();
         let base_fmt = egui::TextFormat {
@@ -551,7 +628,18 @@ impl<'a> RenderContext<'a> {
             color: self.theme.text_primary(),
             ..Default::default()
         };
-        append_highlighted_text(&mut job, &heading_text, self.search_query, base_fmt, hl_bg, hl_fg);
+        append_highlighted_text(
+            &mut job,
+            &heading_text,
+            self.search_query,
+            base_fmt,
+            hl_bg,
+            hl_fg,
+            act_bg,
+            act_fg,
+            self.active_match_index,
+            &mut self.match_counter,
+        );
         ui.label(job);
 
         if is_h1_or_h2 {
@@ -589,9 +677,11 @@ impl<'a> RenderContext<'a> {
         }
     }
 
-    fn render_code_block(&self, ui: &mut Ui) {
+    fn render_code_block(&mut self, ui: &mut Ui) {
         let lang = self.code_block_lang.trim();
         let code = self.code_block_content.trim_end();
+
+        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
         Frame::none()
             .fill(self.theme.code_bg_color())
@@ -643,11 +733,12 @@ impl<'a> RenderContext<'a> {
 
                 // 語法高亮 (快取 LayoutJob 避免每幀重複執行 syntect 正則高亮)
                 let cache_id = ui.make_persistent_id(format!(
-                    "md_cb_hl_{:p}_{}_{}_{}_{:?}",
+                    "md_cb_hl_{:p}_{}_{}_{}_{:?}_{:?}",
                     code.as_ptr(),
                     code.len(),
                     (self.font_scale * 100.0) as u32,
                     self.search_query,
+                    self.active_match_index,
                     self.theme
                 ));
 
@@ -669,15 +760,6 @@ impl<'a> RenderContext<'a> {
                         let font_id = FontId::monospace(13.0 * self.font_scale);
                         let mut job = LayoutJob::default();
 
-                        let hl_bg = match self.theme {
-                            AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
-                            AppTheme::Light => Color32::from_rgb(254, 240, 138),
-                        };
-                        let hl_fg = match self.theme {
-                            AppTheme::Dark => Color32::BLACK,
-                            AppTheme::Light => Color32::from_rgb(113, 63, 18),
-                        };
-
                         for line in syntect::util::LinesWithEndings::from(code) {
                             let ranges = highlighter
                                 .highlight_line(line, syntax_set)
@@ -694,7 +776,18 @@ impl<'a> RenderContext<'a> {
                                     color,
                                     ..Default::default()
                                 };
-                                append_highlighted_text(&mut job, text, self.search_query, base_fmt, hl_bg, hl_fg);
+                                append_highlighted_text(
+                                    &mut job,
+                                    text,
+                                    self.search_query,
+                                    base_fmt,
+                                    hl_bg,
+                                    hl_fg,
+                                    act_bg,
+                                    act_fg,
+                                    self.active_match_index,
+                                    &mut self.match_counter,
+                                );
                             }
                         }
 
@@ -808,6 +901,7 @@ pub fn render_code_viewer(
     code: &str,
     extension_or_lang: &str,
     search_query: &str,
+    active_match_index: Option<usize>,
 ) {
     let syntax_set = get_syntax_set();
     let theme_set = get_theme_set();
@@ -824,22 +918,29 @@ pub fn render_code_viewer(
     let gutter_color = theme.text_secondary().gamma_multiply(0.6);
     let border_color = theme.border_color();
 
-    let hl_bg = match theme {
-        AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
-        AppTheme::Light => Color32::from_rgb(254, 240, 138),
-    };
-    let hl_fg = match theme {
-        AppTheme::Dark => Color32::BLACK,
-        AppTheme::Light => Color32::from_rgb(113, 63, 18),
+    let (hl_bg, hl_fg, act_bg, act_fg) = match theme {
+        AppTheme::Dark => (
+            Color32::from_rgba_unmultiplied(234, 179, 8, 110),
+            Color32::from_rgb(254, 240, 138),
+            Color32::from_rgb(249, 115, 22),
+            Color32::BLACK,
+        ),
+        AppTheme::Light => (
+            Color32::from_rgb(254, 240, 138),
+            Color32::from_rgb(113, 63, 18),
+            Color32::from_rgb(234, 88, 12),
+            Color32::WHITE,
+        ),
     };
 
     // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算
     let cache_id = ui.make_persistent_id(format!(
-        "code_viewer_full_{:p}_{}_{}_{}_{:?}",
+        "code_viewer_full_{:p}_{}_{}_{}_{:?}_{:?}",
         code.as_ptr(),
         code.len(),
         (font_scale * 100.0) as u32,
         search_query,
+        active_match_index,
         theme
     ));
 
@@ -851,6 +952,7 @@ pub fn render_code_viewer(
             let mut gutter_job = LayoutJob::default();
             let mut code_job = LayoutJob::default();
             let mut line_count = 0;
+            let mut match_counter = 0;
 
             for line in syntect::util::LinesWithEndings::from(code) {
                 line_count += 1;
@@ -872,7 +974,18 @@ pub fn render_code_viewer(
                         ..Default::default()
                     };
 
-                    append_highlighted_text(&mut code_job, text, search_query, base_fmt, hl_bg, hl_fg);
+                    append_highlighted_text(
+                        &mut code_job,
+                        text,
+                        search_query,
+                        base_fmt,
+                        hl_bg,
+                        hl_fg,
+                        act_bg,
+                        act_fg,
+                        active_match_index,
+                        &mut match_counter,
+                    );
                 }
             }
 

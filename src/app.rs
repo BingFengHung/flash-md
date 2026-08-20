@@ -693,21 +693,44 @@ impl MdPreviewApp {
 
         // 鍵盤導航與瀏覽操作 (非文字編輯/搜尋輸入狀態下觸發)
         if !ctx.wants_keyboard_input() {
-            // ← / →: 切換同目錄上一個 / 下一個檔案
+            // / : Vim 搜尋快捷鍵 (開啟搜尋並聚焦輸入框)
+            if input.key_pressed(egui::Key::Slash) {
+                self.search_open = true;
+                self.search_focus_requested = true;
+            }
+
+            // n / N : Vim 搜尋跳轉 (n 下一筆，N / Shift+n 上一筆)
+            if input.key_pressed(egui::Key::N) && !input.modifiers.command && !input.modifiers.alt {
+                if input.modifiers.shift {
+                    self.navigate_search_match(false);
+                } else {
+                    self.navigate_search_match(true);
+                }
+            }
+
+            // ← / → 或 h / l (Vim): 切換同目錄上一個 / 下一個檔案
             if self.current_file.is_some() {
-                if input.key_pressed(egui::Key::ArrowLeft) {
+                if input.key_pressed(egui::Key::ArrowLeft)
+                    || (input.key_pressed(egui::Key::H) && !input.modifiers.command && !input.modifiers.alt)
+                {
                     self.navigate_sibling_file(false);
-                } else if input.key_pressed(egui::Key::ArrowRight) {
+                } else if input.key_pressed(egui::Key::ArrowRight)
+                    || (input.key_pressed(egui::Key::L) && !input.modifiers.command && !input.modifiers.alt)
+                {
                     self.navigate_sibling_file(true);
                 }
             }
 
-            // ↑ / ↓: 捲動瀏覽當前文件內容 (支援單擊與長按連續平滑捲動)
+            // ↑ / ↓ 或 j / k (Vim): 捲動瀏覽當前文件內容 (支援單擊與長按連續平滑捲動)
             let mut scroll_y = 0.0_f32;
-            if input.key_pressed(egui::Key::ArrowDown) || input.key_down(egui::Key::ArrowDown) {
+            if input.key_pressed(egui::Key::ArrowDown) || input.key_down(egui::Key::ArrowDown)
+                || input.key_pressed(egui::Key::J) || input.key_down(egui::Key::J)
+            {
                 scroll_y -= 32.0 * self.font_scale;
             }
-            if input.key_pressed(egui::Key::ArrowUp) || input.key_down(egui::Key::ArrowUp) {
+            if input.key_pressed(egui::Key::ArrowUp) || input.key_down(egui::Key::ArrowUp)
+                || input.key_pressed(egui::Key::K) || input.key_down(egui::Key::K)
+            {
                 scroll_y += 32.0 * self.font_scale;
             }
             if input.key_pressed(egui::Key::PageDown) {
@@ -716,10 +739,15 @@ impl MdPreviewApp {
             if input.key_pressed(egui::Key::PageUp) {
                 scroll_y += 360.0 * self.font_scale;
             }
-            if input.key_pressed(egui::Key::Home) {
+            // Home 或 g (Vim): 置頂；End 或 G / Shift+g (Vim): 置底
+            if input.key_pressed(egui::Key::Home)
+                || (input.key_pressed(egui::Key::G) && !input.modifiers.shift && !input.modifiers.command)
+            {
                 self.reset_scroll_to_top = true;
             }
-            if input.key_pressed(egui::Key::End) {
+            if input.key_pressed(egui::Key::End)
+                || (input.key_pressed(egui::Key::G) && input.modifiers.shift && !input.modifiers.command)
+            {
                 scroll_y -= 100000.0;
             }
 
@@ -1495,6 +1523,12 @@ impl eframe::App for MdPreviewApp {
                     // 極具現代質感的空狀態卡片介面 (Raycast / Linear Style)
                     self.render_empty_state(ui);
                 } else {
+                    let active_match_idx = if self.search_query.trim().is_empty() {
+                        None
+                    } else {
+                        Some(self.search_match_index)
+                    };
+
                     match self.view_mode {
                         ViewMode::Markdown => {
                             // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部與鍵盤方向鍵上下捲動)
@@ -1508,7 +1542,7 @@ impl eframe::App for MdPreviewApp {
                                 if self.keyboard_scroll_delta != 0.0 {
                                     ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
                                 }
-                                let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query);
+                                let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
                                 renderer.render(ui, &self.content);
                             });
                         }
@@ -1524,7 +1558,7 @@ impl eframe::App for MdPreviewApp {
                                 if self.keyboard_scroll_delta != 0.0 {
                                     ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
                                 }
-                                render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query);
+                                render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query, active_match_idx);
                             });
                         }
                         ViewMode::PlainText => {
@@ -1543,21 +1577,28 @@ impl eframe::App for MdPreviewApp {
                                 let font_scale = self.font_scale;
                                 let font_id = FontId::monospace(14.0 * font_scale);
                                 let text_color = self.theme.text_primary();
-                                let hl_bg = match self.theme {
-                                    AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
-                                    AppTheme::Light => Color32::from_rgb(254, 240, 138),
-                                };
-                                let hl_fg = match self.theme {
-                                    AppTheme::Dark => Color32::BLACK,
-                                    AppTheme::Light => Color32::from_rgb(113, 63, 18),
+                                let (hl_bg, hl_fg, act_bg, act_fg) = match self.theme {
+                                    AppTheme::Dark => (
+                                        Color32::from_rgba_unmultiplied(234, 179, 8, 110),
+                                        Color32::from_rgb(254, 240, 138),
+                                        Color32::from_rgb(249, 115, 22),
+                                        Color32::BLACK,
+                                    ),
+                                    AppTheme::Light => (
+                                        Color32::from_rgb(254, 240, 138),
+                                        Color32::from_rgb(113, 63, 18),
+                                        Color32::from_rgb(234, 88, 12),
+                                        Color32::WHITE,
+                                    ),
                                 };
 
                                 let cache_id = ui.make_persistent_id(format!(
-                                    "plaintext_job_{:p}_{}_{}_{}_{:?}",
+                                    "plaintext_job_{:p}_{}_{}_{}_{:?}_{:?}",
                                     self.content.as_ptr(),
                                     self.content.len(),
                                     (font_scale * 100.0) as u32,
                                     self.search_query,
+                                    active_match_idx,
                                     self.theme
                                 ));
 
@@ -1572,7 +1613,19 @@ impl eframe::App for MdPreviewApp {
                                             line_height: Some(22.0 * font_scale),
                                             ..Default::default()
                                         };
-                                        crate::markdown::append_highlighted_text(&mut job, &self.content, &self.search_query, base_fmt, hl_bg, hl_fg);
+                                        let mut match_counter = 0;
+                                        crate::markdown::append_highlighted_text(
+                                            &mut job,
+                                            &self.content,
+                                            &self.search_query,
+                                            base_fmt,
+                                            hl_bg,
+                                            hl_fg,
+                                            act_bg,
+                                            act_fg,
+                                            active_match_idx,
+                                            &mut match_counter,
+                                        );
                                         d.insert_temp(cache_id, job.clone());
                                         job
                                     }
@@ -1600,7 +1653,7 @@ impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!(
-                "flash-md v{}  •  快捷鍵: Alt + Space (預覽)  •  ← / → (切換檔案)  •  ↑ / ↓ (捲動瀏覽)  •  Ctrl + F / F3 (搜尋)  •  Enter / Shift+Enter (跳轉相符)  •  Ctrl + M (切換模式)  •  Esc (隱藏)",
+                "flash-md v{}  •  Alt + Space (預覽)  •  ←/→/h/l (檔案)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  n/N/Enter (跳轉)  •  Ctrl+M (模式)  •  Esc (隱藏)",
                 CURRENT_VERSION
             ))
             .color(self.theme.text_secondary())
