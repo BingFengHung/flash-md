@@ -246,3 +246,79 @@ fn point_in_polygon(px: f32, py: f32, poly: &[(f32, f32)]) -> bool {
     }
     inside
 }
+
+/// 產生 64x64 4x4 SSAA 超採樣抗鋸齒的極致精緻電光藍 Squircle 閃電視窗圖示 (供 eframe / egui 視窗左上角與工作列使用)
+pub fn create_app_icon_data() -> egui::IconData {
+    let width = 64usize;
+    let height = 64usize;
+    let mut rgba = Vec::with_capacity(width * height * 4);
+
+    let lightning_poly: [(f32, f32); 6] = [
+        (36.5, 9.0),   // 頂端銳利尖點
+        (19.5, 31.0),  // 中左外折角
+        (30.8, 31.0),  // 中左內凹折
+        (26.8, 55.0),  // 底部銳利尖點
+        (44.5, 27.0),  // 中右外折角
+        (33.2, 27.0),  // 中右內凹折
+    ];
+
+    let squircle_radius = 13.0_f32;
+    let min_xy = 3.0_f32;
+    let max_xy = 61.0_f32;
+    let sample_offsets = [0.125_f32, 0.375_f32, 0.625_f32, 0.875_f32];
+
+    for y in 0..height {
+        for x in 0..width {
+            let mut accum_r = 0.0_f32;
+            let mut accum_g = 0.0_f32;
+            let mut accum_b = 0.0_f32;
+            let mut accum_a = 0.0_f32;
+
+            for &sy in &sample_offsets {
+                for &sx in &sample_offsets {
+                    let px = x as f32 + sx;
+                    let py = y as f32 + sy;
+
+                    let in_squircle = is_inside_rounded_rect(px, py, min_xy, min_xy, max_xy, max_xy, squircle_radius);
+
+                    if in_squircle {
+                        let in_lightning = point_in_polygon(px, py, &lightning_poly);
+
+                        if in_lightning {
+                            accum_r += 255.0;
+                            accum_g += 255.0;
+                            accum_b += 255.0;
+                            accum_a += 255.0;
+                        } else {
+                            let t = (py - min_xy) / (max_xy - min_xy);
+                            let r = 15.0 * (1.0 - t) + 37.0 * t;
+                            let g = 23.0 * (1.0 - t) + 99.0 * t;
+                            let b = 42.0 * (1.0 - t) + 235.0 * t;
+
+                            accum_r += r;
+                            accum_g += g;
+                            accum_b += b;
+                            accum_a += 255.0;
+                        }
+                    }
+                }
+            }
+
+            let final_r = (accum_r / 16.0).round().clamp(0.0, 255.0) as u8;
+            let final_g = (accum_g / 16.0).round().clamp(0.0, 255.0) as u8;
+            let final_b = (accum_b / 16.0).round().clamp(0.0, 255.0) as u8;
+            let final_a = (accum_a / 16.0).round().clamp(0.0, 255.0) as u8;
+
+            rgba.push(final_r);
+            rgba.push(final_g);
+            rgba.push(final_b);
+            rgba.push(final_a);
+        }
+    }
+
+    egui::IconData {
+        rgba,
+        width: 64,
+        height: 64,
+    }
+}

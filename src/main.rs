@@ -133,6 +133,7 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("flash-md - 快捷鍵 Markdown 預覽")
+            .with_icon(tray::create_app_icon_data())
             .with_inner_size([940.0, 700.0])
             .with_min_inner_size([500.0, 400.0])
             .with_decorations(true)
