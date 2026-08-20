@@ -14,7 +14,8 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
 - 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs to automatically detect the selected file when `Alt + Space` is pressed.
-- ⬆️⬇️ **Keyboard Sibling File Navigation**: Press `↑` / `↓` or `←` / `→` (or click `◀` / `▶` buttons) to instantly browse previous/next files in the same directory, complete with index indicators `[3/18]`!
+- ⬅️➡️ **Keyboard Sibling File Navigation**: Press `←` / `→` (or click `◀` / `▶` buttons) to instantly browse previous/next files in the same directory, complete with index indicators `[3/18]`!
+- 📜 **Smooth Document Keyboard Scrolling**: Scroll through long documents seamlessly using `↑` / `↓` or `PageUp` / `PageDown` / `Home` / `End` keys!
 - 📋 **1-Click Code Block Copying**: Code blocks in Markdown and the standalone Code Viewer now feature dedicated copy buttons with instant green "✓ Copied" feedback.
 - 🔍 **Robust Full-Text Search (Ctrl + F)**: Live match count, auto-focus on open, and Unicode-safe case-insensitive text highlighting.
 - 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO, SVG, AVIF formats with smooth mouse wheel zooming, panning, and auto-fit to window!
@@ -33,7 +34,10 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | Shortcut | Description |
 | :--- | :--- |
 | **`Alt + Space`** | **Global Hotkey**: Preview selected file in File Explorer / Desktop (press again to close) |
-| **`↑` / `↓` or `←` / `→`** | **Browse Files**: Navigate to previous / next file in the same directory (with `[3/18]` index) |
+| **`←` / `→`** | **Browse Files**: Navigate to previous / next file in the same directory (with `[3/18]` index) |
+| **`↑` / `↓`** | **Scroll Document**: Scroll up / down inside the current document (supports continuous smooth scrolling) |
+| **`PageUp` / `PageDown`** | **Page Scroll**: Fast page up / page down scrolling |
+| **`Home` / `End`** | **Jump to Top / Bottom**: Jump directly to the top or bottom of the document |
 | **`Esc`** | Instantly hide preview window / close search bar |
 | **`Ctrl + F`** | Open search bar and auto-focus search input |
 | **`Ctrl + M`** | **Cycle View Mode**: Switch between Markdown rendering, Syntax Highlighting, Plain Text, and Image view |

@@ -67,6 +67,7 @@ pub struct MdPreviewApp {
 
     pub status_toast: Option<(String, std::time::Instant)>,
     pub reset_scroll_to_top: bool,
+    pub keyboard_scroll_delta: f32,
 }
 
 impl MdPreviewApp {
@@ -128,6 +129,7 @@ impl MdPreviewApp {
             ctx_holder: ctx_holder.clone(),
             status_toast: None,
             reset_scroll_to_top: false,
+            keyboard_scroll_delta: 0.0,
         };
 
         if !is_visible {
@@ -615,12 +617,41 @@ impl MdPreviewApp {
             }
         }
 
-        // 方向鍵 ↑ / ↓ 或 ← / →: 切換同目錄上一個 / 下一個檔案 (非文字編輯輸入狀態下觸發)
-        if !ctx.wants_keyboard_input() && self.current_file.is_some() {
-            if input.key_pressed(egui::Key::ArrowUp) || input.key_pressed(egui::Key::ArrowLeft) {
-                self.navigate_sibling_file(false);
-            } else if input.key_pressed(egui::Key::ArrowDown) || input.key_pressed(egui::Key::ArrowRight) {
-                self.navigate_sibling_file(true);
+        // 鍵盤導航與瀏覽操作 (非文字編輯/搜尋輸入狀態下觸發)
+        if !ctx.wants_keyboard_input() {
+            // ← / →: 切換同目錄上一個 / 下一個檔案
+            if self.current_file.is_some() {
+                if input.key_pressed(egui::Key::ArrowLeft) {
+                    self.navigate_sibling_file(false);
+                } else if input.key_pressed(egui::Key::ArrowRight) {
+                    self.navigate_sibling_file(true);
+                }
+            }
+
+            // ↑ / ↓: 捲動瀏覽當前文件內容 (支援單擊與長按連續平滑捲動)
+            let mut scroll_y = 0.0_f32;
+            if input.key_pressed(egui::Key::ArrowDown) || input.key_down(egui::Key::ArrowDown) {
+                scroll_y -= 32.0 * self.font_scale;
+            }
+            if input.key_pressed(egui::Key::ArrowUp) || input.key_down(egui::Key::ArrowUp) {
+                scroll_y += 32.0 * self.font_scale;
+            }
+            if input.key_pressed(egui::Key::PageDown) {
+                scroll_y -= 360.0 * self.font_scale;
+            }
+            if input.key_pressed(egui::Key::PageUp) {
+                scroll_y += 360.0 * self.font_scale;
+            }
+            if input.key_pressed(egui::Key::Home) {
+                self.reset_scroll_to_top = true;
+            }
+            if input.key_pressed(egui::Key::End) {
+                scroll_y -= 100000.0;
+            }
+
+            if scroll_y != 0.0 {
+                self.keyboard_scroll_delta += scroll_y;
+                ctx.request_repaint();
             }
         }
 
@@ -968,7 +999,7 @@ impl eframe::App for MdPreviewApp {
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(Stroke::NONE),
                         );
-                        if prev_resp.on_hover_text("上一個檔案 (↑ / ←)").clicked() {
+                        if prev_resp.on_hover_text("上一個檔案 (←)").clicked() {
                             self.navigate_sibling_file(false);
                         }
                     }
@@ -1014,7 +1045,7 @@ impl eframe::App for MdPreviewApp {
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(Stroke::NONE),
                         );
-                        if next_resp.on_hover_text("下一個檔案 (↓ / →)").clicked() {
+                        if next_resp.on_hover_text("下一個檔案 (→)").clicked() {
                             self.navigate_sibling_file(true);
                         }
                     }
@@ -1351,33 +1382,42 @@ impl eframe::App for MdPreviewApp {
                 } else {
                     match self.view_mode {
                         ViewMode::Markdown => {
-                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮與滾輪重置回頂部)
+                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、滾輪重置回頂部與鍵盤方向鍵上下捲動)
                             let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.vertical_scroll_offset(0.0);
                             }
                             scroll.show(ui, |ui| {
+                                if self.keyboard_scroll_delta != 0.0 {
+                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
+                                }
                                 let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query);
                                 renderer.render(ui, &self.content);
                             });
                         }
                         ViewMode::Code { ref lang } => {
-                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮與滾輪重置回頂部)
+                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮、滾輪重置與鍵盤捲動)
                             let mut scroll = ScrollArea::both().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.scroll_offset(Vec2::ZERO);
                             }
                             scroll.show(ui, |ui| {
+                                if self.keyboard_scroll_delta != 0.0 {
+                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
+                                }
                                 render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query);
                             });
                         }
                         ViewMode::PlainText => {
-                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮與滾輪重置回頂部)
+                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮、滾輪重置與鍵盤捲動)
                             let mut scroll = ScrollArea::both().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.scroll_offset(Vec2::ZERO);
                             }
                             scroll.show(ui, |ui| {
+                                if self.keyboard_scroll_delta != 0.0 {
+                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
+                                }
                                 ui.add_space(4.0);
                                 let font_scale = self.font_scale;
                                 let font_id = FontId::monospace(14.0 * font_scale);
@@ -1424,8 +1464,9 @@ impl eframe::App for MdPreviewApp {
                 }
             });
 
-        // 渲染完成後清除滾輪回到頂部旗標，允許使用者後續正常捲動
+        // 渲染完成後清除滾輪回到頂部與鍵盤捲動旗標，允許使用者後續正常捲動
         self.reset_scroll_to_top = false;
+        self.keyboard_scroll_delta = 0.0;
     }
 }
 
@@ -1433,7 +1474,7 @@ impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!(
-                "flash-md v{}  •  快捷鍵: Alt + Space (預覽)  •  ↑ / ↓ (同目錄切換檔案)  •  Ctrl + F (搜尋)  •  Ctrl + M (切換模式)  •  Esc (隱藏)",
+                "flash-md v{}  •  快捷鍵: Alt + Space (預覽)  •  ← / → (切換檔案)  •  ↑ / ↓ (捲動瀏覽)  •  Ctrl + F (搜尋)  •  Ctrl + M (切換模式)  •  Esc (隱藏)",
                 CURRENT_VERSION
             ))
             .color(self.theme.text_secondary())
@@ -1657,7 +1698,10 @@ impl MdPreviewApp {
                 scroll = scroll.scroll_offset(Vec2::ZERO);
             }
             scroll.show(ui, |ui| {
-                    ui.centered_and_justified(|ui| {
+                if self.keyboard_scroll_delta != 0.0 {
+                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
+                }
+                ui.centered_and_justified(|ui| {
                         let mut img = egui::Image::from_uri(uri.clone())
                             .rounding(Rounding::same(6.0));
 
