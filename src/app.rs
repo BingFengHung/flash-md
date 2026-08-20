@@ -977,18 +977,31 @@ impl eframe::App for MdPreviewApp {
             .show(ctx, |ui| {
                 // 第一階：品牌徽章、檔案切換導航、檔案名稱、檢視模式與檔案屬性資訊
                 ui.horizontal(|ui| {
-                    // 左側：精緻品牌徽章
+                    // 左側：精緻品牌徽章 (高對比度配色)
+                    let (badge_bg, badge_border, badge_fg) = match self.theme {
+                        AppTheme::Dark => (
+                            Color32::from_rgb(18, 38, 58),
+                            Color32::from_rgb(56, 189, 248),
+                            Color32::from_rgb(56, 189, 248),
+                        ),
+                        AppTheme::Light => (
+                            Color32::from_rgb(224, 242, 254),
+                            Color32::from_rgb(186, 230, 253),
+                            Color32::from_rgb(3, 105, 161),
+                        ),
+                    };
+
                     Frame::none()
-                        .fill(self.theme.accent_bg())
+                        .fill(badge_bg)
                         .rounding(Rounding::same(5.0))
-                        .stroke(Stroke::new(1.0_f32, self.theme.accent_color()))
+                        .stroke(Stroke::new(1.0_f32, badge_border))
                         .inner_margin(Margin::symmetric(7.0, 3.0))
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new("⚡ flash-md")
                                     .size(11.5)
                                     .strong()
-                                    .color(self.theme.accent_color()),
+                                    .color(badge_fg),
                             );
                         });
 
@@ -1235,9 +1248,9 @@ impl eframe::App for MdPreviewApp {
                             ));
                         }
 
-                        // 主題切換按鈕
+                        // 主題切換按鈕 (使用同字元家族的 🔆 與 🌙 保持一致的字圖間距)
                         let (theme_icon, theme_tip) = match self.theme {
-                            AppTheme::Dark => ("☀️ 淺色", "切換為淺色主題"),
+                            AppTheme::Dark => ("🔆 淺色", "切換為淺色主題"),
                             AppTheme::Light => ("🌙 深色", "切換為深色主題"),
                         };
                         if render_nav_button(ui, self.theme, theme_icon, false, theme_tip).clicked() {

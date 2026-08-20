@@ -68,8 +68,8 @@ impl AppTheme {
 
     pub fn accent_bg(&self) -> Color32 {
         match self {
-            AppTheme::Dark => Color32::from_rgba_premultiplied(56, 189, 248, 25), // 淺透青光
-            AppTheme::Light => Color32::from_rgba_premultiplied(2, 132, 199, 20),
+            AppTheme::Dark => Color32::from_rgba_unmultiplied(56, 189, 248, 30), // 淺透青光
+            AppTheme::Light => Color32::from_rgba_unmultiplied(2, 132, 199, 25),
         }
     }
 
