@@ -13,15 +13,12 @@ targets = [
 
 # ── 安全漏洞掃描 (Advisories) ────────────────────────────────────────────────
 # 比對 RustSec Advisory Database (https://rustsec.org/) 中的已知 CVE 漏洞
+# v2 預設已將 vulnerability 與 unsound 視為錯誤，無需額外設定
 [advisories]
-# 依賴存在已知安全漏洞時 → 建置失敗
-vulnerability = "deny"
-# 依賴被標記為已 yank（撤回）時 → 建置失敗（本次 arrayref 攻擊事件即可攔截）
-yanked = "deny"
-# 依賴被標記為無人維護時 → 警告
-unmaintained = "warn"
-# 依賴存在安全公告但非漏洞時 → 警告
-notice = "warn"
+# 依賴被標記為無人維護時 → 僅檢查 workspace 直接依賴
+unmaintained = "workspace"
+# 依賴被標記為已 yank（撤回）時 → 全部檢查（本次 arrayref 攻擊事件即可攔截）
+yanked = "all"
 
 # ── 授權條款檢查 (Licenses) ──────────────────────────────────────────────────
 [licenses]
@@ -49,8 +46,6 @@ confidence-threshold = 0.8
 [bans]
 # 存在同一 crate 的多個主版本時 → 警告（有助於減少二進制檔體積）
 multiple-versions = "warn"
-# 允許重複的 crate（某些上游無法避免）
-allow-wildcard-paths = true
 
 # ── 來源管控 (Sources) ────────────────────────────────────────────────────────
 [sources]
