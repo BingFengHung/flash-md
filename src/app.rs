@@ -849,15 +849,16 @@ impl eframe::App for MdPreviewApp {
             self.trigger_self_update();
         }
 
-        // 頂部現代精緻導航列 (Fluent / macOS 玻璃質感風格)
+        // 頂部現代精緻導航列 (Fluent / macOS 玻璃質感風格，雙階層防遮擋設計)
         egui::TopBottomPanel::top("top_header")
             .frame(
                 Frame::none()
                     .fill(self.theme.card_bg_color())
                     .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
-                    .inner_margin(Margin::symmetric(14.0, 8.0)),
+                    .inner_margin(Margin::symmetric(14.0, 7.0)),
             )
             .show(ctx, |ui| {
+                // 第一階：品牌徽章、檔案切換導航、檔案名稱、檢視模式與檔案屬性資訊
                 ui.horizontal(|ui| {
                     // 左側：精緻品牌徽章
                     Frame::none()
@@ -1005,39 +1006,91 @@ impl eframe::App for MdPreviewApp {
                         if mode_btn.hovered() {
                             mode_btn.on_hover_text(badge_tip);
                         }
-
-                        // 檔案屬性標籤 (同目錄序號、行數/尺寸、大小、修改時間)
-                        ui.add_space(2.0);
-                        Frame::none()
-                            .fill(self.theme.code_bg_color())
-                            .rounding(Rounding::same(4.0))
-                            .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
-                            .inner_margin(Margin::symmetric(6.0, 3.0))
-                            .show(ui, |ui| {
-                                let sibling_str = self
-                                    .get_sibling_info()
-                                    .map(|(cur, total)| format!("[{}/{}]  •  ", cur, total))
-                                    .unwrap_or_default();
-
-                                let info_text = if let ViewMode::Image { ref format } = self.view_mode {
-                                    format!("{}{format_upper}  •  {}  •  {}", sibling_str, self.file_size_str, self.last_modified_str, format_upper = format.to_uppercase())
-                                } else {
-                                    format!("{}{} 行  •  {}  •  {}", sibling_str, self.line_count, self.file_size_str, self.last_modified_str)
-                                };
-                                ui.label(
-                                    RichText::new(info_text)
-                                        .size(10.5)
-                                        .color(self.theme.text_secondary()),
-                                );
-                            });
                     }
 
-                    // 右側現代簡約功能按鈕列 (一致化精緻按鈕)
+                    // 第一階右側：檔案屬性標籤 (同目錄序號、行數/尺寸、大小、修改時間)
+                    if !self.content.is_empty() || self.image_uri.is_some() {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            Frame::none()
+                                .fill(self.theme.code_bg_color())
+                                .rounding(Rounding::same(4.0))
+                                .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
+                                .inner_margin(Margin::symmetric(6.0, 3.0))
+                                .show(ui, |ui| {
+                                    let sibling_str = self
+                                        .get_sibling_info()
+                                        .map(|(cur, total)| format!("[{}/{}]  •  ", cur, total))
+                                        .unwrap_or_default();
+
+                                    let info_text = if let ViewMode::Image { ref format } = self.view_mode {
+                                        format!("{}{format_upper}  •  {}  •  {}", sibling_str, self.file_size_str, self.last_modified_str, format_upper = format.to_uppercase())
+                                    } else {
+                                        format!("{}{} 行  •  {}  •  {}", sibling_str, self.line_count, self.file_size_str, self.last_modified_str)
+                                    };
+                                    ui.label(
+                                        RichText::new(info_text)
+                                            .size(10.5)
+                                            .color(self.theme.text_secondary()),
+                                    );
+                                });
+                        });
+                    }
+                });
+
+                ui.add_space(5.0);
+
+                // 第二階：現代精緻功能工具按鈕列
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+
+                    // 開啟檔案按鈕
+                    if render_nav_button(ui, self.theme, "📂 開啟", false, "開啟本機 Markdown、程式碼或圖片檔案").clicked() {
+                        self.open_file_dialog();
+                    }
+
+                    // 搜尋按鈕 (僅文字/程式碼模式可用)
+                    if !matches!(self.view_mode, ViewMode::Image { .. }) {
+                        if render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F)").clicked() {
+                            self.search_open = !self.search_open;
+                            if self.search_open {
+                                self.search_focus_requested = true;
+                            }
+                        }
+                    }
+
+                    // 複製全文 / 複製路徑按鈕
+                    if render_nav_button(ui, self.theme, "📋 複製", false, "複製檔案內容或路徑 (Ctrl + Shift + C)").clicked() {
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            if let ViewMode::Image { .. } = self.view_mode {
+                                if let Some(ref path) = self.current_file {
+                                    let _ = clipboard.set_text(path.to_string_lossy().to_string());
+                                    self.set_toast("已複製圖片檔案路徑 📋".to_string());
+                                }
+                            } else {
+                                let _ = clipboard.set_text(self.content.clone());
+                                self.set_toast("已複製全文至剪貼簿 📋".to_string());
+                            }
+                        }
+                    }
+
+                    // 外部編輯器開啟
+                    if render_nav_button(ui, self.theme, "↗ 編輯器", false, "在系統預設編輯器中開啟 (Ctrl + O)").clicked() {
+                        if let Some(ref path) = self.current_file {
+                            let _ = open::that(path);
+                        }
+                    }
+
+                    // 檢查更新按鈕
+                    if render_nav_button(ui, self.theme, "🔄 更新", false, "檢查 GitHub 最新版本").clicked() {
+                        self.check_update_manually();
+                    }
+
+                    // 第二階右側：視窗控制與主題切換
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 5.0;
 
                         // 關閉按鈕
-                        if render_nav_button(ui, self.theme, "✕", false, "隱藏預覽視窗 (Esc)").clicked() {
+                        if render_nav_button(ui, self.theme, "✕ 關閉", false, "隱藏預覽視窗 (Esc)").clicked() {
                             self.visible = false;
                             hide_app_window();
                             if self.is_standalone {
@@ -1073,54 +1126,12 @@ impl eframe::App for MdPreviewApp {
                             self.theme.toggle();
                             self.theme.apply_to_ctx(ctx);
                         }
-
-                        // 檢查更新按鈕
-                        if render_nav_button(ui, self.theme, "🔄 更新", false, "檢查 GitHub 最新版本").clicked() {
-                            self.check_update_manually();
-                        }
-
-                        // 外部編輯器開啟
-                        if render_nav_button(ui, self.theme, "↗ 編輯器", false, "在系統預設編輯器中開啟 (Ctrl + O)").clicked() {
-                            if let Some(ref path) = self.current_file {
-                                let _ = open::that(path);
-                            }
-                        }
-
-                        // 複製全文 / 複製路徑按鈕
-                        if render_nav_button(ui, self.theme, "📋 複製", false, "複製檔案內容或路徑 (Ctrl + Shift + C)").clicked() {
-                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                if let ViewMode::Image { .. } = self.view_mode {
-                                    if let Some(ref path) = self.current_file {
-                                        let _ = clipboard.set_text(path.to_string_lossy().to_string());
-                                        self.set_toast("已複製圖片檔案路徑 📋".to_string());
-                                    }
-                                } else {
-                                    let _ = clipboard.set_text(self.content.clone());
-                                    self.set_toast("已複製全文至剪貼簿 📋".to_string());
-                                }
-                            }
-                        }
-
-                        // 搜尋按鈕 (僅文字/程式碼模式可用)
-                        if !matches!(self.view_mode, ViewMode::Image { .. }) {
-                            if render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F)").clicked() {
-                                self.search_open = !self.search_open;
-                                if self.search_open {
-                                    self.search_focus_requested = true;
-                                }
-                            }
-                        }
-
-                        // 開啟檔案按鈕
-                        if render_nav_button(ui, self.theme, "📂 開啟", false, "開啟本機 Markdown、程式碼或圖片檔案").clicked() {
-                            self.open_file_dialog();
-                        }
                     });
                 });
 
                 // 搜尋列展開區 (Ctrl + F)
                 if self.search_open && !matches!(self.view_mode, ViewMode::Image { .. }) {
-                    ui.add_space(8.0);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("🔍 尋找內文:").size(12.5).color(self.theme.accent_color()).strong());
                         let search_input_resp = ui.add(
