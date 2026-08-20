@@ -26,19 +26,25 @@ yanked = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "MPL-2.0",
     "CC0-1.0",
-    "OpenSSL",
+    "BSL-1.0",
+    "OFL-1.1",
+    "CDLA-Permissive-2.0",
 ]
 # 使用 SPDX 表達式解析授權條款
 confidence-threshold = 0.8
+
+# epaint_default_fonts 使用非 SPDX 標準的 UFL-1.0 (Ubuntu Font License)，需個別例外處理
+[[licenses.clarify]]
+name = "epaint_default_fonts"
+expression = "(MIT OR Apache-2.0) AND OFL-1.1 AND LicenseRef-UFL-1.0"
+license-files = [{ path = "*", hash = 0 }]
 
 # ── 禁用 crate 檢查 (Bans) ──────────────────────────────────────────────────
 [bans]
