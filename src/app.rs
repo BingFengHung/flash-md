@@ -841,12 +841,34 @@ impl eframe::App for MdPreviewApp {
         if let Some(ref release) = self.available_update {
             let release_tag = release.tag_name.clone();
             let is_updating = self.is_updating;
+
+            let banner_bg = match self.theme {
+                AppTheme::Dark => Color32::from_rgb(20, 30, 48),    // 質感暗夜深藍底
+                AppTheme::Light => Color32::from_rgb(238, 246, 255), // 清爽透亮淺藍底
+            };
+            let banner_border = match self.theme {
+                AppTheme::Dark => Color32::from_rgb(56, 189, 248),   // 科技青藍
+                AppTheme::Light => Color32::from_rgb(186, 230, 253), // 柔和淺天藍
+            };
+            let text_color = match self.theme {
+                AppTheme::Dark => Color32::from_rgb(224, 242, 254),  // 明亮淺白藍
+                AppTheme::Light => Color32::from_rgb(12, 74, 110),   // 高對比深海軍藍 (極度清晰可讀)
+            };
+            let btn_primary_bg = match self.theme {
+                AppTheme::Dark => Color32::from_rgb(14, 165, 233),   // 亮天藍
+                AppTheme::Light => Color32::from_rgb(2, 132, 199),   // 深天藍
+            };
+            let btn_dismiss_bg = match self.theme {
+                AppTheme::Dark => Color32::from_rgb(30, 41, 59),
+                AppTheme::Light => Color32::from_rgb(255, 255, 255),
+            };
+
             egui::TopBottomPanel::top("update_banner")
                 .frame(
                     Frame::none()
-                        .fill(self.theme.accent_bg())
-                        .stroke(Stroke::new(1.0_f32, self.theme.accent_color()))
-                        .inner_margin(Margin::symmetric(16.0, 8.0)),
+                        .fill(banner_bg)
+                        .stroke(Stroke::new(1.0_f32, banner_border))
+                        .inner_margin(Margin::symmetric(16.0, 7.0)),
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -858,28 +880,45 @@ impl eframe::App for MdPreviewApp {
 
                         ui.label(
                             RichText::new(banner_text)
-                                .color(self.theme.accent_color())
+                                .color(text_color)
                                 .strong()
                                 .size(12.5),
                         );
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if !is_updating {
-                                if ui.button(RichText::new("✕ 稍後").size(11.0)).clicked() {
+                                let dismiss_btn = egui::Button::new(
+                                    RichText::new("✕ 稍後")
+                                        .size(11.5)
+                                        .color(self.theme.text_secondary()),
+                                )
+                                .fill(btn_dismiss_bg)
+                                .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
+                                .rounding(Rounding::same(5.0));
+
+                                if ui.add(dismiss_btn).clicked() {
                                     dismiss_update = true;
                                 }
 
-                                if ui
-                                    .button(RichText::new(" 🚀 一鍵自動升級 ").strong().size(12.0).color(Color32::WHITE))
-                                    .clicked()
-                                {
+                                let upgrade_btn = egui::Button::new(
+                                    RichText::new(" 🚀 一鍵自動升級 ")
+                                        .strong()
+                                        .size(12.0)
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(btn_primary_bg)
+                                .stroke(Stroke::NONE)
+                                .rounding(Rounding::same(5.0));
+
+                                if ui.add(upgrade_btn).clicked() {
                                     do_self_update = true;
                                 }
                             } else {
                                 ui.label(
                                     RichText::new("⚡ 即時熱替換中...")
                                         .size(11.5)
-                                        .color(self.theme.text_secondary()),
+                                        .strong()
+                                        .color(text_color),
                                 );
                             }
                         });
