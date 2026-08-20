@@ -17,8 +17,8 @@ targets = [
 [advisories]
 # 依賴被標記為無人維護時 → 僅檢查 workspace 直接依賴
 unmaintained = "workspace"
-# 依賴被標記為已 yank（撤回）時 → 全部檢查（本次 arrayref 攻擊事件即可攔截）
-yanked = "all"
+# 依賴被標記為已 yank（撤回）時 → 建置失敗（本次 arrayref 攻擊事件即可攔截）
+yanked = "deny"
 
 # ── 授權條款檢查 (Licenses) ──────────────────────────────────────────────────
 [licenses]
