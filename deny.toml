@@ -13,7 +13,7 @@ targets = [
 
 # ── 安全漏洞掃描 (Advisories) ────────────────────────────────────────────────
 # 比對 RustSec Advisory Database (https://rustsec.org/) 中的已知 CVE 漏洞
-# v2 預設已將 vulnerability 與 unsound 視為錯誤，無需額外設定
+# v2 預設已將 vulnerability 視為錯誤，無需額外設定
 [advisories]
 # 依賴被標記為無人維護時 → 僅檢查 workspace 直接依賴
 unmaintained = "workspace"
@@ -22,9 +22,7 @@ yanked = "deny"
 
 # ── 授權條款檢查 (Licenses) ──────────────────────────────────────────────────
 [licenses]
-# 使用未宣告授權條款的 crate → 建置失敗
-unlicensed = "deny"
-# 允許的授權條款白名單
+# 允許的授權條款白名單（未列入的授權條款將導致建置失敗）
 allow = [
     "MIT",
     "Apache-2.0",
