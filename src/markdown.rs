@@ -854,39 +854,57 @@ impl<'a> RenderContext<'a> {
     }
 }
 
-/// 依語言副檔名或標記尋找最佳 Syntect 語法定義
+/// 依語言副檔名或標記尋找最佳 Syntect 語法定義 (包含多層備援機制)
 pub fn find_syntax_by_lang<'a>(lang_lower: &str, syntax_set: &'a SyntaxSet) -> &'a syntect::parsing::SyntaxReference {
     syntax_set
         .find_syntax_by_token(lang_lower)
         .or_else(|| syntax_set.find_syntax_by_extension(lang_lower))
         .or_else(|| {
             match lang_lower {
-                "rs" => syntax_set.find_syntax_by_name("Rust"),
-                "py" => syntax_set.find_syntax_by_name("Python"),
-                "js" | "mjs" | "cjs" => syntax_set.find_syntax_by_name("JavaScript"),
-                "jsx" => syntax_set.find_syntax_by_name("JavaScript (JSX)"),
-                "ts" => syntax_set.find_syntax_by_name("TypeScript"),
-                "tsx" => syntax_set.find_syntax_by_name("TypeScript (TSX)"),
-                "toml" => syntax_set.find_syntax_by_name("TOML"),
+                "rs" | "rust" => syntax_set.find_syntax_by_name("Rust"),
+                "py" | "python" => syntax_set.find_syntax_by_name("Python"),
+                "js" | "mjs" | "cjs" | "javascript" => syntax_set.find_syntax_by_name("JavaScript"),
+                "jsx" => syntax_set.find_syntax_by_name("JavaScript (JSX)").or_else(|| syntax_set.find_syntax_by_name("JavaScript")),
+                "ts" | "typescript" => syntax_set.find_syntax_by_name("TypeScript").or_else(|| syntax_set.find_syntax_by_name("JavaScript")),
+                "tsx" => syntax_set.find_syntax_by_name("TypeScript (TSX)").or_else(|| syntax_set.find_syntax_by_name("JavaScript (JSX)")).or_else(|| syntax_set.find_syntax_by_name("JavaScript")),
+                "toml" => syntax_set.find_syntax_by_name("TOML").or_else(|| syntax_set.find_syntax_by_name("YAML")),
+                "ini" | "conf" | "cfg" | "env" => syntax_set.find_syntax_by_name("INI").or_else(|| syntax_set.find_syntax_by_name("YAML")),
                 "yaml" | "yml" => syntax_set.find_syntax_by_name("YAML"),
-                "json" => syntax_set.find_syntax_by_name("JSON"),
+                "json" | "json5" | "jsonc" => syntax_set.find_syntax_by_name("JSON"),
                 "c" | "h" => syntax_set.find_syntax_by_name("C"),
                 "cpp" | "cc" | "cxx" | "hpp" => syntax_set.find_syntax_by_name("C++"),
-                "cs" => syntax_set.find_syntax_by_name("C#"),
-                "go" => syntax_set.find_syntax_by_name("Go"),
+                "cs" | "csharp" => syntax_set.find_syntax_by_name("C#"),
+                "go" | "golang" => syntax_set.find_syntax_by_name("Go"),
                 "java" => syntax_set.find_syntax_by_name("Java"),
-                "kt" | "kts" => syntax_set.find_syntax_by_name("Kotlin"),
-                "html" | "htm" => syntax_set.find_syntax_by_name("HTML"),
+                "kt" | "kts" | "kotlin" => syntax_set.find_syntax_by_name("Kotlin").or_else(|| syntax_set.find_syntax_by_name("Java")),
+                "html" | "htm" | "xhtml" => syntax_set.find_syntax_by_name("HTML"),
                 "css" => syntax_set.find_syntax_by_name("CSS"),
-                "scss" | "sass" => syntax_set.find_syntax_by_name("Sass"),
+                "scss" | "sass" | "less" => syntax_set.find_syntax_by_name("Sass").or_else(|| syntax_set.find_syntax_by_name("CSS")),
                 "sql" => syntax_set.find_syntax_by_name("SQL"),
-                "sh" | "bash" | "zsh" => syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"),
-                "ps1" | "psm1" => syntax_set.find_syntax_by_name("PowerShell"),
-                "bat" | "cmd" => syntax_set.find_syntax_by_name("Batch File"),
+                "sh" | "bash" | "zsh" | "fish" | "shell" => {
+                    syntax_set.find_syntax_by_name("Bourne Again Shell (bash)")
+                        .or_else(|| syntax_set.find_syntax_by_name("Shell-Unix-Generic"))
+                }
+                "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" | "ps" => {
+                    syntax_set.find_syntax_by_name("PowerShell")
+                        .or_else(|| syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"))
+                        .or_else(|| syntax_set.find_syntax_by_name("Shell-Unix-Generic"))
+                }
+                "bat" | "cmd" | "batch" => {
+                    syntax_set.find_syntax_by_name("Batch File")
+                        .or_else(|| syntax_set.find_syntax_by_name("Batch File (DOS)"))
+                        .or_else(|| syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"))
+                }
+                "dockerfile" | "containerfile" => {
+                    syntax_set.find_syntax_by_name("Dockerfile")
+                        .or_else(|| syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"))
+                }
                 "xml" | "svg" => syntax_set.find_syntax_by_name("XML"),
                 "lua" => syntax_set.find_syntax_by_name("Lua"),
                 "php" => syntax_set.find_syntax_by_name("PHP"),
-                "rb" => syntax_set.find_syntax_by_name("Ruby"),
+                "rb" | "ruby" => syntax_set.find_syntax_by_name("Ruby"),
+                "graphql" | "gql" => syntax_set.find_syntax_by_name("JSON"),
+                "vue" | "svelte" => syntax_set.find_syntax_by_name("HTML"),
                 _ => None,
             }
         })
@@ -1118,7 +1136,7 @@ pub fn is_code_extension(ext: &str) -> bool {
         ext.to_lowercase().as_str(),
         "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "json" | "json5" | "jsonc" | "toml" | "yaml" | "yml"
             | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "cs" | "go" | "java" | "kt" | "kts"
-            | "html" | "htm" | "xhtml" | "css" | "scss" | "sass" | "sql" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "psm1" | "bat"
+            | "html" | "htm" | "xhtml" | "css" | "scss" | "sass" | "sql" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" | "ps" | "bat"
             | "cmd" | "xml" | "lua" | "php" | "rb" | "swift" | "dart" | "vue" | "svelte"
             | "csv" | "tsv" | "ini" | "conf" | "env" | "dockerfile" | "graphql" | "gql"
             | "diff" | "patch" | "log" | "r" | "scala" | "zig" | "proto"
@@ -1150,7 +1168,7 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
         "scss" | "sass" => ("SCSS".to_string(), "🎨"),
         "sql" => ("SQL".to_string(), "🗄️"),
         "sh" | "bash" | "zsh" | "fish" => ("Shell".to_string(), "🐚"),
-        "ps1" | "psm1" => ("PowerShell".to_string(), "💻"),
+        "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" | "ps" => ("PowerShell".to_string(), "💻"),
         "bat" | "cmd" => ("Batch".to_string(), "📜"),
         "xml" => ("XML".to_string(), "📑"),
         "lua" => ("Lua".to_string(), "🌙"),
