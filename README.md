@@ -17,7 +17,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - ⬅️➡️ **Keyboard Sibling File Navigation**: Press `←` / `→` (or click `◀` / `▶` buttons) to instantly browse previous/next files in the same directory, complete with index indicators `[3/18]`!
 - 📜 **Smooth Document Keyboard Scrolling**: Scroll through long documents seamlessly using `↑` / `↓` or `PageUp` / `PageDown` / `Home` / `End` keys!
 - 📋 **1-Click Code Block Copying**: Code blocks in Markdown and the standalone Code Viewer now feature dedicated copy buttons with instant green "✓ Copied" feedback.
-- 🔍 **Robust Full-Text Search (Ctrl + F)**: Live match count, auto-focus on open, and Unicode-safe case-insensitive text highlighting.
+- 🔍 **Robust Full-Text Search (Ctrl + F)**: Live match count (`Match X / Y`), auto-focus on open, jump to next/previous matches via `Enter` / `Shift + Enter` or `F3` / `Shift + F3`, and Unicode-safe case-insensitive text highlighting.
 - 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO, SVG, AVIF formats with smooth mouse wheel zooming, panning, and auto-fit to window!
 - 💻 **100+ Formats & Syntax Highlighting**: Supports Markdown, Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, CSV, SQL, Dockerfile, and more!
 - 📝 **Multi-Track Mode Switching**: Automatically routes Markdown, Source Code, Plain Text, and Images to their optimal viewers, with instant cycling via `Ctrl + M`.
@@ -40,6 +40,8 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | **`Home` / `End`** | **Jump to Top / Bottom**: Jump directly to the top or bottom of the document |
 | **`Esc`** | Instantly hide preview window / close search bar |
 | **`Ctrl + F`** | Open search bar and auto-focus search input |
+| **`Enter` / `F3`** | **Next Match**: Automatically scroll and jump to the next search match |
+| **`Shift + Enter` / `Shift + F3`** | **Previous Match**: Automatically scroll and jump to the previous search match |
 | **`Ctrl + M`** | **Cycle View Mode**: Switch between Markdown rendering, Syntax Highlighting, Plain Text, and Image view |
 | **`Ctrl + O`** | Open current file in default system editor / image viewer |
 | **`Ctrl + Shift + C`** | Copy entire document content or file path to clipboard |

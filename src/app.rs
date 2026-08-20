@@ -53,6 +53,8 @@ pub struct MdPreviewApp {
     pub search_open: bool,
     pub search_query: String,
     pub search_focus_requested: bool,
+    pub search_match_index: usize,
+    pub target_scroll_offset: Option<f32>,
 
     pub available_update: Option<ReleaseInfo>,
     pub is_updating: bool,
@@ -118,6 +120,8 @@ impl MdPreviewApp {
             search_open: false,
             search_query: String::new(),
             search_focus_requested: false,
+            search_match_index: 0,
+            target_scroll_offset: None,
             available_update: None,
             is_updating: false,
             update_tx: update_tx.clone(),
@@ -222,8 +226,10 @@ impl MdPreviewApp {
 
     pub fn load_file(&mut self, path: &Path) {
         info!("嘗試載入檔案: {:?}", path);
-        // 切換或載入檔案時自動將滾輪捲動至最頂部
+        // 切換或載入檔案時自動將滾輪捲動至最頂部與重置搜尋索引
         self.reset_scroll_to_top = true;
+        self.search_match_index = 0;
+        self.target_scroll_offset = None;
 
         if path.is_dir() {
             self.set_toast(format!("已選取資料夾: {:?}", path.file_name().unwrap_or_default()));
@@ -594,6 +600,61 @@ impl MdPreviewApp {
         Some((idx + 1, files.len()))
     }
 
+    /// 取得目前文字中符合搜尋關鍵字的所有出現行號清單
+    pub fn get_search_matches(&self) -> Vec<usize> {
+        let q = self.search_query.trim();
+        if q.is_empty() || self.content.is_empty() {
+            return Vec::new();
+        }
+        let q_lower = q.to_lowercase();
+        let mut matches = Vec::new();
+        for (line_idx, line) in self.content.lines().enumerate() {
+            let line_lower = line.to_lowercase();
+            let mut start = 0;
+            while let Some(pos) = line_lower[start..].find(&q_lower) {
+                matches.push(line_idx);
+                start += pos + q_lower.len();
+            }
+        }
+        matches
+    }
+
+    /// 依方向導航搜尋結果 (next: true 為下一筆，false 為上一筆)
+    pub fn navigate_search_match(&mut self, next: bool) {
+        let matches = self.get_search_matches();
+        if matches.is_empty() {
+            return;
+        }
+
+        if next {
+            self.search_match_index = (self.search_match_index + 1) % matches.len();
+        } else {
+            self.search_match_index = if self.search_match_index == 0 {
+                matches.len() - 1
+            } else {
+                self.search_match_index - 1
+            };
+        }
+
+        let target_line = matches[self.search_match_index];
+        self.scroll_to_line(target_line);
+    }
+
+    /// 將視圖滾動至指定行號並居中
+    pub fn scroll_to_line(&mut self, line_idx: usize) {
+        let line_height = match self.view_mode {
+            ViewMode::Markdown => 24.0 * self.font_scale,
+            ViewMode::Code { .. } => 21.0 * self.font_scale,
+            ViewMode::PlainText => 22.0 * self.font_scale,
+            ViewMode::Image { .. } => return,
+        };
+
+        let target_y = (line_idx as f32) * line_height;
+        // 預留頂部 180px 空間，使搜尋結果落在視窗上半部黃金視覺區域
+        let target_offset = (target_y - 180.0).max(0.0);
+        self.target_scroll_offset = Some(target_offset);
+    }
+
     fn open_file_dialog(&mut self) {
         if let Some(path) = rfd_open_file() {
             self.load_file(&path);
@@ -608,12 +669,25 @@ impl MdPreviewApp {
             if self.search_open {
                 self.search_open = false;
                 self.search_query.clear();
+                self.search_match_index = 0;
             } else {
                 self.visible = false;
                 hide_app_window();
                 if self.is_standalone {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
+            }
+        }
+
+        // F3 / Shift + F3: 搜尋結果上一筆 / 下一筆跳轉
+        if input.key_pressed(egui::Key::F3) {
+            if !self.search_open {
+                self.search_open = true;
+                self.search_focus_requested = true;
+            } else if input.modifiers.shift {
+                self.navigate_search_match(false);
+            } else {
+                self.navigate_search_match(true);
             }
         }
 
@@ -1260,14 +1334,14 @@ impl eframe::App for MdPreviewApp {
                     });
                 });
 
-                // 搜尋列展開區 (Ctrl + F)
+                // 搜尋列展開區 (Ctrl + F / F3)
                 if self.search_open && !matches!(self.view_mode, ViewMode::Image { .. }) {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("🔍 尋找內文:").size(12.5).color(self.theme.accent_color()).strong());
                         let search_input_resp = ui.add(
                             TextEdit::singleline(&mut self.search_query)
-                                .hint_text("輸入搜尋關鍵字...")
+                                .hint_text("輸入關鍵字 (Enter 下一筆, Shift+Enter 上一筆)...")
                                 .desired_width(260.0),
                         );
 
@@ -1276,33 +1350,59 @@ impl eframe::App for MdPreviewApp {
                             self.search_focus_requested = false;
                         }
 
+                        let matches = self.get_search_matches();
+                        let match_count = matches.len();
+
+                        // 當搜尋字串變更時，自動跳轉至第一筆相符項目
+                        if search_input_resp.changed() {
+                            self.search_match_index = 0;
+                            if let Some(&first_line) = matches.first() {
+                                self.scroll_to_line(first_line);
+                            }
+                        }
+
+                        // 在搜尋框內按下 Enter 或 Shift + Enter 進行上一筆/下一筆跳轉
+                        if search_input_resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let shift = ui.input(|i| i.modifiers.shift);
+                            self.navigate_search_match(!shift);
+                        }
+
                         let query_clean = self.search_query.trim();
                         if !query_clean.is_empty() {
-                            let match_count = self.content.to_lowercase().matches(&query_clean.to_lowercase()).count();
-                            let count_text = if match_count > 0 {
-                                format!("找到 {} 筆相符", match_count)
+                            let (count_text, count_color) = if match_count > 0 {
+                                (
+                                    format!("第 {} / {} 筆", self.search_match_index.min(match_count.saturating_sub(1)) + 1, match_count),
+                                    self.theme.accent_color(),
+                                )
                             } else {
-                                "無相符項目".to_string()
+                                ("無相符項目".to_string(), self.theme.text_secondary())
                             };
-                            let count_color = if match_count > 0 {
-                                self.theme.accent_color()
-                            } else {
-                                self.theme.text_secondary()
-                            };
+
                             ui.label(
                                 RichText::new(count_text)
                                     .size(11.5)
                                     .color(count_color)
                                     .strong(),
                             );
+
+                            if match_count > 0 {
+                                if ui.button(RichText::new("▲ 上一個").size(11.0)).on_hover_text("上一個相符項目 (Shift + Enter 或 Shift + F3)").clicked() {
+                                    self.navigate_search_match(false);
+                                }
+                                if ui.button(RichText::new("▼ 下一個").size(11.0)).on_hover_text("下一個相符項目 (Enter 或 F3)").clicked() {
+                                    self.navigate_search_match(true);
+                                }
+                            }
                         }
 
                         if ui.button(RichText::new("✕ 清除").size(11.0)).clicked() {
                             self.search_query.clear();
+                            self.search_match_index = 0;
                         }
                         if ui.button(RichText::new("關閉 (Esc)").size(11.0)).clicked() {
                             self.search_open = false;
                             self.search_query.clear();
+                            self.search_match_index = 0;
                         }
                     });
                 }
@@ -1397,10 +1497,12 @@ impl eframe::App for MdPreviewApp {
                 } else {
                     match self.view_mode {
                         ViewMode::Markdown => {
-                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、滾輪重置回頂部與鍵盤方向鍵上下捲動)
+                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部與鍵盤方向鍵上下捲動)
                             let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.vertical_scroll_offset(0.0);
+                            } else if let Some(offset) = self.target_scroll_offset {
+                                scroll = scroll.vertical_scroll_offset(offset);
                             }
                             scroll.show(ui, |ui| {
                                 if self.keyboard_scroll_delta != 0.0 {
@@ -1411,10 +1513,12 @@ impl eframe::App for MdPreviewApp {
                             });
                         }
                         ViewMode::Code { ref lang } => {
-                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮、滾輪重置與鍵盤捲動)
+                            // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動)
                             let mut scroll = ScrollArea::both().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.scroll_offset(Vec2::ZERO);
+                            } else if let Some(offset) = self.target_scroll_offset {
+                                scroll = scroll.scroll_offset(Vec2::new(0.0, offset));
                             }
                             scroll.show(ui, |ui| {
                                 if self.keyboard_scroll_delta != 0.0 {
@@ -1424,10 +1528,12 @@ impl eframe::App for MdPreviewApp {
                             });
                         }
                         ViewMode::PlainText => {
-                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮、滾輪重置與鍵盤捲動，快取 LayoutJob 零拷貝)
+                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動，快取 LayoutJob 零拷貝)
                             let mut scroll = ScrollArea::both().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.scroll_offset(Vec2::ZERO);
+                            } else if let Some(offset) = self.target_scroll_offset {
+                                scroll = scroll.scroll_offset(Vec2::new(0.0, offset));
                             }
                             scroll.show(ui, |ui| {
                                 if self.keyboard_scroll_delta != 0.0 {
@@ -1483,8 +1589,9 @@ impl eframe::App for MdPreviewApp {
                 }
             });
 
-        // 渲染完成後清除滾輪回到頂部與鍵盤捲動旗標，允許使用者後續正常捲動
+        // 渲染完成後清除滾輪回到頂部、目標搜尋偏移與鍵盤捲動旗標，允許使用者後續正常捲動
         self.reset_scroll_to_top = false;
+        self.target_scroll_offset = None;
         self.keyboard_scroll_delta = 0.0;
     }
 }
@@ -1493,7 +1600,7 @@ impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!(
-                "flash-md v{}  •  快捷鍵: Alt + Space (預覽)  •  ← / → (切換檔案)  •  ↑ / ↓ (捲動瀏覽)  •  Ctrl + F (搜尋)  •  Ctrl + M (切換模式)  •  Esc (隱藏)",
+                "flash-md v{}  •  快捷鍵: Alt + Space (預覽)  •  ← / → (切換檔案)  •  ↑ / ↓ (捲動瀏覽)  •  Ctrl + F / F3 (搜尋)  •  Enter / Shift+Enter (跳轉相符)  •  Ctrl + M (切換模式)  •  Esc (隱藏)",
                 CURRENT_VERSION
             ))
             .color(self.theme.text_secondary())
