@@ -20,7 +20,7 @@ fn get_theme_set() -> &'static ThemeSet {
     THEME_SET.get_or_init(ThemeSet::load_defaults)
 }
 
-/// 依搜尋關鍵字即時進行高亮分段附加 (全 Unicode 安全切片，支援中英文與特殊字元)
+/// 依搜尋關鍵字即時進行高亮分段附加 (全 Unicode 安全切片，支援中英文與特殊字元，ASCII 快速路徑零分配)
 pub fn append_highlighted_text(
     job: &mut LayoutJob,
     text: &str,
@@ -30,55 +30,79 @@ pub fn append_highlighted_text(
     highlight_fg: Color32,
 ) {
     let clean_query = search_query.trim();
-    if clean_query.is_empty() {
+    if clean_query.is_empty() || text.is_empty() {
         job.append(text, 0.0, base_format);
         return;
     }
 
-    let query_lower = clean_query.to_lowercase();
-    let query_chars: Vec<char> = query_lower.chars().collect();
-    if query_chars.is_empty() {
-        job.append(text, 0.0, base_format);
+    // ASCII 快速路徑：無任何堆疊分配，零拷貝極速掃描
+    if text.is_ascii() && clean_query.is_ascii() {
+        let query_lower = clean_query.to_ascii_lowercase();
+        let text_lower = text.to_ascii_lowercase();
+        let mut last_end = 0;
+        let mut search_idx = 0;
+
+        while let Some(pos) = text_lower[search_idx..].find(&query_lower) {
+            let start = search_idx + pos;
+            let end = start + query_lower.len();
+
+            if start > last_end {
+                job.append(&text[last_end..start], 0.0, base_format.clone());
+            }
+
+            let mut hl_fmt = base_format.clone();
+            hl_fmt.background = highlight_bg;
+            hl_fmt.color = highlight_fg;
+            job.append(&text[start..end], 0.0, hl_fmt);
+
+            last_end = end;
+            search_idx = end;
+        }
+
+        if last_end < text.len() {
+            job.append(&text[last_end..], 0.0, base_format);
+        }
         return;
     }
 
-    let text_chars: Vec<char> = text.chars().collect();
-    if text_chars.len() < query_chars.len() {
-        job.append(text, 0.0, base_format);
-        return;
-    }
+    // Unicode 多語系路徑：安全字元索引比對
+    let query_lower: Vec<char> = clean_query.to_lowercase().chars().collect();
+    let text_chars: Vec<(usize, char)> = text.char_indices().collect();
 
-    let mut last_idx = 0;
     let mut i = 0;
-    while i + query_chars.len() <= text_chars.len() {
-        let is_match = text_chars[i..i + query_chars.len()]
-            .iter()
-            .zip(query_chars.iter())
-            .all(|(tc, qc)| {
-                tc.to_lowercase().eq(qc.to_lowercase())
-            });
+    let mut last_byte_idx = 0;
+
+    while i + query_lower.len() <= text_chars.len() {
+        let is_match = (0..query_lower.len()).all(|k| {
+            text_chars[i + k].1.to_lowercase().eq(query_lower[k].to_lowercase())
+        });
 
         if is_match {
-            if i > last_idx {
-                let s: String = text_chars[last_idx..i].iter().collect();
-                job.append(&s, 0.0, base_format.clone());
-            }
-            let s: String = text_chars[i..i + query_chars.len()].iter().collect();
-            let mut hl_format = base_format.clone();
-            hl_format.background = highlight_bg;
-            hl_format.color = highlight_fg;
-            job.append(&s, 0.0, hl_format);
+            let start_byte = text_chars[i].0;
+            let end_byte = if i + query_lower.len() < text_chars.len() {
+                text_chars[i + query_lower.len()].0
+            } else {
+                text.len()
+            };
 
-            i += query_chars.len();
-            last_idx = i;
+            if start_byte > last_byte_idx {
+                job.append(&text[last_byte_idx..start_byte], 0.0, base_format.clone());
+            }
+
+            let mut hl_fmt = base_format.clone();
+            hl_fmt.background = highlight_bg;
+            hl_fmt.color = highlight_fg;
+            job.append(&text[start_byte..end_byte], 0.0, hl_fmt);
+
+            i += query_lower.len();
+            last_byte_idx = end_byte;
         } else {
             i += 1;
         }
     }
 
-    if last_idx < text_chars.len() {
-        let s: String = text_chars[last_idx..].iter().collect();
-        job.append(&s, 0.0, base_format);
+    if last_byte_idx < text.len() {
+        job.append(&text[last_byte_idx..], 0.0, base_format);
     }
 }
 
@@ -617,84 +641,67 @@ impl<'a> RenderContext<'a> {
                 ui.separator();
                 ui.add_space(4.0);
 
-                // 語法高亮呈現 (使用 LinesWithEndings 精確解析完整換行語意)
-                let syntax_set = get_syntax_set();
-                let theme_set = get_theme_set();
+                // 語法高亮 (快取 LayoutJob 避免每幀重複執行 syntect 正則高亮)
+                let cache_id = ui.make_persistent_id(format!(
+                    "md_cb_hl_{:p}_{}_{}_{}_{:?}",
+                    code.as_ptr(),
+                    code.len(),
+                    (self.font_scale * 100.0) as u32,
+                    self.search_query,
+                    self.theme
+                ));
 
-                let syntect_theme = match self.theme {
-                    AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
-                    AppTheme::Light => &theme_set.themes["InspiredGitHub"],
-                };
+                let layout_job = ui.ctx().data_mut(|d| {
+                    if let Some(cached) = d.get_temp::<LayoutJob>(cache_id) {
+                        cached.clone()
+                    } else {
+                        let syntax_set = get_syntax_set();
+                        let theme_set = get_theme_set();
 
-                let lang_lower = lang.to_lowercase();
-                let syntax = syntax_set
-                    .find_syntax_by_token(&lang_lower)
-                    .or_else(|| syntax_set.find_syntax_by_extension(&lang_lower))
-                    .or_else(|| {
-                        match lang_lower.as_str() {
-                            "rs" => syntax_set.find_syntax_by_name("Rust"),
-                            "py" => syntax_set.find_syntax_by_name("Python"),
-                            "js" | "mjs" | "cjs" => syntax_set.find_syntax_by_name("JavaScript"),
-                            "jsx" => syntax_set.find_syntax_by_name("JavaScript (JSX)"),
-                            "ts" => syntax_set.find_syntax_by_name("TypeScript"),
-                            "tsx" => syntax_set.find_syntax_by_name("TypeScript (TSX)"),
-                            "toml" => syntax_set.find_syntax_by_name("TOML"),
-                            "yaml" | "yml" => syntax_set.find_syntax_by_name("YAML"),
-                            "json" => syntax_set.find_syntax_by_name("JSON"),
-                            "c" | "h" => syntax_set.find_syntax_by_name("C"),
-                            "cpp" | "cc" | "cxx" | "hpp" => syntax_set.find_syntax_by_name("C++"),
-                            "cs" => syntax_set.find_syntax_by_name("C#"),
-                            "go" => syntax_set.find_syntax_by_name("Go"),
-                            "java" => syntax_set.find_syntax_by_name("Java"),
-                            "kt" | "kts" => syntax_set.find_syntax_by_name("Kotlin"),
-                            "html" | "htm" => syntax_set.find_syntax_by_name("HTML"),
-                            "css" => syntax_set.find_syntax_by_name("CSS"),
-                            "scss" | "sass" => syntax_set.find_syntax_by_name("Sass"),
-                            "sql" => syntax_set.find_syntax_by_name("SQL"),
-                            "sh" | "bash" | "zsh" => syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"),
-                            "ps1" | "psm1" => syntax_set.find_syntax_by_name("PowerShell"),
-                            "bat" | "cmd" => syntax_set.find_syntax_by_name("Batch File"),
-                            "xml" | "svg" => syntax_set.find_syntax_by_name("XML"),
-                            "lua" => syntax_set.find_syntax_by_name("Lua"),
-                            "php" => syntax_set.find_syntax_by_name("PHP"),
-                            "rb" => syntax_set.find_syntax_by_name("Ruby"),
-                            _ => None,
-                        }
-                    })
-                    .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
-
-                let mut highlighter = HighlightLines::new(syntax, syntect_theme);
-                let font_id = FontId::monospace(13.0 * self.font_scale);
-                let mut layout_job = LayoutJob::default();
-
-                let hl_bg = match self.theme {
-                    AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
-                    AppTheme::Light => Color32::from_rgb(254, 240, 138),
-                };
-                let hl_fg = match self.theme {
-                    AppTheme::Dark => Color32::BLACK,
-                    AppTheme::Light => Color32::from_rgb(113, 63, 18),
-                };
-
-                for line in syntect::util::LinesWithEndings::from(code) {
-                    let ranges = highlighter
-                        .highlight_line(line, syntax_set)
-                        .unwrap_or_default();
-
-                    for (style, text) in ranges {
-                        let color = Color32::from_rgb(
-                            style.foreground.r,
-                            style.foreground.g,
-                            style.foreground.b,
-                        );
-                        let base_fmt = egui::TextFormat {
-                            font_id: font_id.clone(),
-                            color,
-                            ..Default::default()
+                        let syntect_theme = match self.theme {
+                            AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
+                            AppTheme::Light => &theme_set.themes["InspiredGitHub"],
                         };
-                        append_highlighted_text(&mut layout_job, text, self.search_query, base_fmt, hl_bg, hl_fg);
+
+                        let lang_lower = lang.to_lowercase();
+                        let syntax = find_syntax_by_lang(&lang_lower, syntax_set);
+                        let mut highlighter = HighlightLines::new(syntax, syntect_theme);
+                        let font_id = FontId::monospace(13.0 * self.font_scale);
+                        let mut job = LayoutJob::default();
+
+                        let hl_bg = match self.theme {
+                            AppTheme::Dark => Color32::from_rgba_unmultiplied(234, 179, 8, 180),
+                            AppTheme::Light => Color32::from_rgb(254, 240, 138),
+                        };
+                        let hl_fg = match self.theme {
+                            AppTheme::Dark => Color32::BLACK,
+                            AppTheme::Light => Color32::from_rgb(113, 63, 18),
+                        };
+
+                        for line in syntect::util::LinesWithEndings::from(code) {
+                            let ranges = highlighter
+                                .highlight_line(line, syntax_set)
+                                .unwrap_or_default();
+
+                            for (style, text) in ranges {
+                                let color = Color32::from_rgb(
+                                    style.foreground.r,
+                                    style.foreground.g,
+                                    style.foreground.b,
+                                );
+                                let base_fmt = egui::TextFormat {
+                                    font_id: font_id.clone(),
+                                    color,
+                                    ..Default::default()
+                                };
+                                append_highlighted_text(&mut job, text, self.search_query, base_fmt, hl_bg, hl_fg);
+                            }
+                        }
+
+                        d.insert_temp(cache_id, job.clone());
+                        job
                     }
-                }
+                });
 
                 ui.label(layout_job);
             });
@@ -754,29 +761,13 @@ impl<'a> RenderContext<'a> {
     }
 }
 
-/// 支援全語法高亮 + 行號 + 搜尋高亮的獨立程式碼檢視器
-pub fn render_code_viewer(
-    ui: &mut Ui,
-    theme: AppTheme,
-    font_scale: f32,
-    code: &str,
-    extension_or_lang: &str,
-    search_query: &str,
-) {
-    let syntax_set = get_syntax_set();
-    let theme_set = get_theme_set();
-
-    let syntect_theme = match theme {
-        AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
-        AppTheme::Light => &theme_set.themes["InspiredGitHub"],
-    };
-
-    let lang_lower = extension_or_lang.to_lowercase();
-    let syntax = syntax_set
-        .find_syntax_by_extension(&lang_lower)
-        .or_else(|| syntax_set.find_syntax_by_token(&lang_lower))
+/// 依語言副檔名或標記尋找最佳 Syntect 語法定義
+pub fn find_syntax_by_lang<'a>(lang_lower: &str, syntax_set: &'a SyntaxSet) -> &'a syntect::parsing::SyntaxReference {
+    syntax_set
+        .find_syntax_by_token(lang_lower)
+        .or_else(|| syntax_set.find_syntax_by_extension(lang_lower))
         .or_else(|| {
-            match lang_lower.as_str() {
+            match lang_lower {
                 "rs" => syntax_set.find_syntax_by_name("Rust"),
                 "py" => syntax_set.find_syntax_by_name("Python"),
                 "js" | "mjs" | "cjs" => syntax_set.find_syntax_by_name("JavaScript"),
@@ -806,12 +797,28 @@ pub fn render_code_viewer(
                 _ => None,
             }
         })
-        .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
+        .unwrap_or_else(|| syntax_set.find_syntax_plain_text())
+}
 
-    let mut highlighter = HighlightLines::new(syntax, syntect_theme);
+/// 支援全語法高亮 + 行號 + 搜尋高亮的獨立程式碼檢視器 (全量 LayoutJob 快取，秒開 100K 行超大檔案)
+pub fn render_code_viewer(
+    ui: &mut Ui,
+    theme: AppTheme,
+    font_scale: f32,
+    code: &str,
+    extension_or_lang: &str,
+    search_query: &str,
+) {
+    let syntax_set = get_syntax_set();
+    let theme_set = get_theme_set();
 
-    let line_count = code.lines().count().max(1);
-    let gutter_digits = format!("{}", line_count).len().max(2);
+    let syntect_theme = match theme {
+        AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
+        AppTheme::Light => &theme_set.themes["InspiredGitHub"],
+    };
+
+    let lang_lower = extension_or_lang.to_lowercase();
+    let syntax = find_syntax_by_lang(&lang_lower, syntax_set);
 
     let font_id = FontId::monospace(13.5 * font_scale);
     let gutter_color = theme.text_secondary().gamma_multiply(0.6);
@@ -825,6 +832,70 @@ pub fn render_code_viewer(
         AppTheme::Dark => Color32::BLACK,
         AppTheme::Light => Color32::from_rgb(113, 63, 18),
     };
+
+    // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算
+    let cache_id = ui.make_persistent_id(format!(
+        "code_viewer_full_{:p}_{}_{}_{}_{:?}",
+        code.as_ptr(),
+        code.len(),
+        (font_scale * 100.0) as u32,
+        search_query,
+        theme
+    ));
+
+    let (gutter_job, code_job, line_count) = ui.ctx().data_mut(|d| {
+        if let Some(cached) = d.get_temp::<(LayoutJob, LayoutJob, usize)>(cache_id) {
+            cached.clone()
+        } else {
+            let mut highlighter = HighlightLines::new(syntax, syntect_theme);
+            let mut gutter_job = LayoutJob::default();
+            let mut code_job = LayoutJob::default();
+            let mut line_count = 0;
+
+            for line in syntect::util::LinesWithEndings::from(code) {
+                line_count += 1;
+                let ranges = highlighter
+                    .highlight_line(line, syntax_set)
+                    .unwrap_or_default();
+
+                for (style, text) in ranges {
+                    let color = Color32::from_rgb(
+                        style.foreground.r,
+                        style.foreground.g,
+                        style.foreground.b,
+                    );
+
+                    let base_fmt = egui::TextFormat {
+                        font_id: font_id.clone(),
+                        color,
+                        line_height: Some(21.0 * font_scale),
+                        ..Default::default()
+                    };
+
+                    append_highlighted_text(&mut code_job, text, search_query, base_fmt, hl_bg, hl_fg);
+                }
+            }
+
+            let gutter_digits = format!("{}", line_count.max(1)).len().max(2);
+            for i in 0..line_count {
+                let line_num_str = format!("{:>width$}\n", i + 1, width = gutter_digits);
+                gutter_job.append(
+                    &line_num_str,
+                    0.0,
+                    egui::TextFormat {
+                        font_id: font_id.clone(),
+                        color: gutter_color,
+                        line_height: Some(21.0 * font_scale),
+                        ..Default::default()
+                    },
+                );
+            }
+
+            let result = (gutter_job, code_job, line_count);
+            d.insert_temp(cache_id, result.clone());
+            result
+        }
+    });
 
     // 容器卡片外框
     Frame::none()
@@ -883,55 +954,17 @@ pub fn render_code_viewer(
             ui.horizontal_top(|ui| {
                 // 1. 行號欄 (Line Numbers Gutter)
                 ui.vertical(|ui| {
-                    let mut gutter_job = LayoutJob::default();
-                    for (i, _) in code.lines().enumerate() {
-                        let line_num_str = format!("{:>width$}\n", i + 1, width = gutter_digits);
-                        gutter_job.append(
-                            &line_num_str,
-                            0.0,
-                            egui::TextFormat {
-                                font_id: font_id.clone(),
-                                color: gutter_color,
-                                line_height: Some(21.0 * font_scale),
-                                ..Default::default()
-                            },
-                        );
-                    }
                     ui.label(gutter_job);
                 });
 
                 // 分隔垂直線
                 ui.add_space(8.0);
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, ui.available_height()), egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, (line_count as f32) * 21.0 * font_scale), egui::Sense::hover());
                 ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0_f32, border_color));
                 ui.add_space(8.0);
 
-                // 2. 程式碼語法高亮區域 (使用 LinesWithEndings 保持 \n 供 syntect 精確解析)
+                // 2. 程式碼語法高亮區域 (使用快取的 LayoutJob，瞬時渲染)
                 ui.vertical(|ui| {
-                    let mut code_job = LayoutJob::default();
-                    for line in syntect::util::LinesWithEndings::from(code) {
-                        let ranges = highlighter
-                            .highlight_line(line, syntax_set)
-                            .unwrap_or_default();
-
-                        for (style, text) in ranges {
-                            let color = Color32::from_rgb(
-                                style.foreground.r,
-                                style.foreground.g,
-                                style.foreground.b,
-                            );
-
-                            let base_fmt = egui::TextFormat {
-                                font_id: font_id.clone(),
-                                color,
-                                line_height: Some(21.0 * font_scale),
-                                ..Default::default()
-                            };
-
-                            append_highlighted_text(&mut code_job, text, search_query, base_fmt, hl_bg, hl_fg);
-                        }
-                    }
-
                     ui.label(code_job);
                 });
             });

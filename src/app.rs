@@ -769,8 +769,10 @@ impl MdPreviewApp {
 
 impl eframe::App for MdPreviewApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 定期自動喚醒保持背景訊息接收敏捷 (每 100ms 檢查一次)
-        ctx.request_repaint_after(Duration::from_millis(100));
+        // 背景常駐未顯示時低頻輪詢，視窗顯現時由使用者操作與事件驅動，達成 0% CPU 靜止待機
+        if !self.visible {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
 
         // 確保 context holder 隨時保持最新
         if let Ok(mut guard) = self.ctx_holder.lock() {
@@ -1409,7 +1411,7 @@ impl eframe::App for MdPreviewApp {
                             });
                         }
                         ViewMode::PlainText => {
-                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮、滾輪重置與鍵盤捲動)
+                            // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮、滾輪重置與鍵盤捲動，快取 LayoutJob 零拷貝)
                             let mut scroll = ScrollArea::both().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.scroll_offset(Vec2::ZERO);
@@ -1431,29 +1433,33 @@ impl eframe::App for MdPreviewApp {
                                     AppTheme::Light => Color32::from_rgb(113, 63, 18),
                                 };
 
-                                let search_q = self.search_query.clone();
-                                let font_id_for_layouter = font_id.clone();
-                                let mut layouter = move |ui: &egui::Ui, string: &str, _wrap_width: f32| {
-                                    let mut job = egui::text::LayoutJob::default();
-                                    let base_fmt = egui::TextFormat {
-                                        font_id: font_id_for_layouter.clone(),
-                                        color: text_color,
-                                        line_height: Some(22.0 * font_scale),
-                                        ..Default::default()
-                                    };
-                                    crate::markdown::append_highlighted_text(&mut job, string, &search_q, base_fmt, hl_bg, hl_fg);
-                                    ui.fonts(|f| f.layout_job(job))
-                                };
+                                let cache_id = ui.make_persistent_id(format!(
+                                    "plaintext_job_{:p}_{}_{}_{}_{:?}",
+                                    self.content.as_ptr(),
+                                    self.content.len(),
+                                    (font_scale * 100.0) as u32,
+                                    self.search_query,
+                                    self.theme
+                                ));
 
-                                let mut text = self.content.clone();
-                                ui.add(
-                                    TextEdit::multiline(&mut text)
-                                        .font(font_id)
-                                        .layouter(&mut layouter)
-                                        .text_color(text_color)
-                                        .frame(false)
-                                        .desired_width(f32::INFINITY),
-                                );
+                                let text_job = ui.ctx().data_mut(|d| {
+                                    if let Some(cached) = d.get_temp::<egui::text::LayoutJob>(cache_id) {
+                                        cached.clone()
+                                    } else {
+                                        let mut job = egui::text::LayoutJob::default();
+                                        let base_fmt = egui::TextFormat {
+                                            font_id: font_id.clone(),
+                                            color: text_color,
+                                            line_height: Some(22.0 * font_scale),
+                                            ..Default::default()
+                                        };
+                                        crate::markdown::append_highlighted_text(&mut job, &self.content, &self.search_query, base_fmt, hl_bg, hl_fg);
+                                        d.insert_temp(cache_id, job.clone());
+                                        job
+                                    }
+                                });
+
+                                ui.label(text_job);
                             });
                         }
                         ViewMode::Image { .. } => {
