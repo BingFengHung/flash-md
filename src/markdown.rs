@@ -577,7 +577,7 @@ impl<'a> RenderContext<'a> {
             ui.label(job);
         } else {
             ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0_f32;
+                ui.spacing_mut().item_spacing.x = 0.0_f32;
 
                 for span in spans {
                     if span.code {
@@ -612,26 +612,43 @@ impl<'a> RenderContext<'a> {
                                 ui.label(code_job);
                             });
                     } else if let Some(url) = span.link_url {
-                        // Hyperlink or Internal Document Anchor Link
-                        let link_text = RichText::new(&span.text)
-                            .color(self.theme.accent_color())
-                            .underline()
-                            .size(14.0_f32 * self.font_scale);
+                        // Hyperlink or Internal Document Anchor Link (使用 LayoutJob + Label 確保與普通文字完全等高並水平對齊)
+                        let mut link_job = LayoutJob::default();
+                        let base_fmt = egui::TextFormat {
+                            font_id: FontId::proportional(14.5_f32 * self.font_scale),
+                            color: self.theme.accent_color(),
+                            underline: Stroke::new(1.0_f32, self.theme.accent_color()),
+                            italics: span.italic,
+                            strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, self.theme.accent_color()),
+                            line_height: Some(22.0_f32 * self.font_scale),
+                            valign: egui::Align::Center,
+                            ..Default::default()
+                        };
+                        append_highlighted_text(
+                            &mut link_job,
+                            &span.text,
+                            self.search_query,
+                            base_fmt,
+                            hl_bg,
+                            hl_fg,
+                            act_bg,
+                            act_fg,
+                            self.active_match_index,
+                            &mut self.match_counter,
+                        );
 
-                        if url.starts_with('#') {
-                            let resp = ui.add(egui::Button::new(link_text).frame(false));
-                            if resp.hovered() {
-                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                            }
-                            if resp.clicked() {
+                        let resp = ui.add(egui::Label::new(link_job).sense(egui::Sense::click()));
+                        if resp.hovered() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                        }
+                        if resp.clicked() {
+                            if url.starts_with('#') {
                                 self.clicked_anchor = Some(url.trim_start_matches('#').to_string());
-                            }
-                        } else {
-                            let resp = ui.add(egui::Hyperlink::from_label_and_url(link_text, &url));
-                            if resp.hovered() {
-                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                            } else {
+                                let _ = open::that(&url);
                             }
                         }
+                        resp.on_hover_text(&url);
                     } else {
                         let mut span_job = LayoutJob::default();
                         let base_fmt = egui::TextFormat {
