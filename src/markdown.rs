@@ -250,6 +250,29 @@ struct RenderContext<'a> {
     ordered_list_index: Option<u64>,
 }
 
+/// 快取 Mermaid 圖表渲染結果（避免每次捲動 frame 重複編譯 SVG，大幅提升效能）
+pub fn get_or_render_mermaid(code: &str) -> Option<String> {
+    use std::sync::Mutex;
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+    static CACHE: Mutex<Option<HashMap<u64, Option<String>>>> = Mutex::new(None);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let mut guard = CACHE.lock().ok()?;
+    let map = guard.get_or_insert_with(HashMap::new);
+
+    if let Some(cached) = map.get(&key) {
+        return cached.clone();
+    }
+
+    let rendered = mermaid_rs_renderer::render(code).ok();
+    map.insert(key, rendered.clone());
+    rendered
+}
+
 impl<'a> RenderContext<'a> {
     fn new(
         theme: AppTheme,
@@ -756,29 +779,6 @@ impl<'a> RenderContext<'a> {
             *idx += 1;
         }
     }
-
-/// 快取 Mermaid 圖表渲染結果（避免每次捲動 frame 重複編譯 SVG，大幅提升效能）
-pub fn get_or_render_mermaid(code: &str) -> Option<String> {
-    use std::sync::Mutex;
-    use std::collections::HashMap;
-    use std::hash::{Hash, Hasher};
-    static CACHE: Mutex<Option<HashMap<u64, Option<String>>>> = Mutex::new(None);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut hasher);
-    let key = hasher.finish();
-
-    let mut guard = CACHE.lock().ok()?;
-    let map = guard.get_or_insert_with(HashMap::new);
-
-    if let Some(cached) = map.get(&key) {
-        return cached.clone();
-    }
-
-    let rendered = mermaid_rs_renderer::render(code).ok();
-    map.insert(key, rendered.clone());
-    rendered
-}
 
     fn render_code_block(&mut self, ui: &mut Ui) {
         let lang = self.code_block_lang.trim();
