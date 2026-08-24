@@ -951,8 +951,11 @@ impl MdPreviewApp {
         self.set_toast("已壓縮為單行 JSON 📦".to_string());
     }
 
-    /// 渲染 Markdown TOC 目錄大綱側邊欄
-    pub fn render_toc_sidebar(&mut self, ui: &mut egui::Ui) {
+    /// 渲染 Markdown TOC 目錄大綱側邊欄，回傳 (是否收起大綱, 選取的目標行號)
+    pub fn render_toc_sidebar(&self, ui: &mut egui::Ui) -> (bool, Option<usize>) {
+        let mut should_close = false;
+        let mut target_line = None;
+
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("📑 目錄大綱")
@@ -962,7 +965,7 @@ impl MdPreviewApp {
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.small_button("✕").on_hover_text("收起大綱 (Ctrl+T)").clicked() {
-                    self.toc_open = false;
+                    should_close = true;
                 }
             });
         });
@@ -978,7 +981,7 @@ impl MdPreviewApp {
                     .color(self.theme.text_secondary())
                     .size(11.5 * self.font_scale),
             );
-            return;
+            return (should_close, None);
         }
 
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -1004,11 +1007,13 @@ impl MdPreviewApp {
 
                     let btn = ui.add(egui::Button::new(text).frame(false));
                     if btn.on_hover_text(format!("跳轉至 H{}: {}", item.level, item.title)).clicked() {
-                        self.scroll_to_line(item.line_idx);
+                        target_line = Some(item.line_idx);
                     }
                 });
             }
         });
+
+        (should_close, target_line)
     }
 }
 
@@ -1724,6 +1729,9 @@ impl eframe::App for MdPreviewApp {
 
                     match self.view_mode {
                         ViewMode::Markdown => {
+                            let mut should_close_toc = false;
+                            let mut toc_target_line = None;
+
                             if self.toc_open {
                                 ui.horizontal(|ui| {
                                     // 左側 TOC 大綱側邊欄
@@ -1731,7 +1739,13 @@ impl eframe::App for MdPreviewApp {
                                         Vec2::new(210.0 * self.font_scale, ui.available_height()),
                                         Layout::top_down(Align::Min),
                                         |ui| {
-                                            self.render_toc_sidebar(ui);
+                                            let (close, line) = self.render_toc_sidebar(ui);
+                                            if close {
+                                                should_close_toc = true;
+                                            }
+                                            if line.is_some() {
+                                                toc_target_line = line;
+                                            }
                                         },
                                     );
                                     ui.separator();
@@ -1766,6 +1780,13 @@ impl eframe::App for MdPreviewApp {
                                     let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
                                     renderer.render(ui, &self.content);
                                 });
+                            }
+
+                            if should_close_toc {
+                                self.toc_open = false;
+                            }
+                            if let Some(line) = toc_target_line {
+                                self.scroll_to_line(line);
                             }
                         }
                         ViewMode::Table { separator } => {
