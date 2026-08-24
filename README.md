@@ -19,6 +19,10 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - 📋 **1-Click Code Block Copying**: Code blocks in Markdown and the standalone Code Viewer now feature dedicated copy buttons with instant green "✓ Copied" feedback.
 - 🔍 **Robust Full-Text Search (Ctrl + F or /)**: Live match count (`Match X / Y`), auto-focus on open, **vivid electric orange active focus highlight**, jump to next/previous matches via `Enter` / `n` or `Shift + Enter` / `N` / `F3`, and Unicode-safe text highlighting.
 - ⚡ **Vim-Style Navigation**: Supports `/` to search, `n` / `N` to navigate matches, `h` / `l` for sibling files, `j` / `k` for smooth scrolling, and `g` / `G` to jump to top/bottom!
+- 📑 **Markdown TOC Outline Sidebar (Ctrl + T)**: Toggle document table of contents outline to jump instantly to any heading!
+- 📊 **CSV / TSV Zebra-Striped Data Tables**: Automatically renders structured tabular data with zebra striping, search highlighting, and smooth scrolling!
+- ⚡ **Zero-Dependency JSON Format & Minify**: One-click beautify (2-space indent) or compress minified JSON files directly in the toolbar.
+- 📁 **Locate in Windows File Explorer (Ctrl + Shift + O)**: Instantly reveals and highlights the currently previewed file in Windows File Explorer.
 - 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO, SVG, AVIF formats with smooth mouse wheel zooming, panning, and auto-fit to window!
 - 💻 **100+ Formats & Syntax Highlighting**: Supports Markdown, Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, CSV, SQL, Dockerfile, and more!
 - 📝 **Multi-Track Mode Switching**: Automatically routes Markdown, Source Code, Plain Text, and Images to their optimal viewers, with instant cycling via `Ctrl + M`.
@@ -43,7 +47,9 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | **`Ctrl + F`** or **`/`** | Open search bar and auto-focus search input (Vim style) |
 | **`Enter`** / **`n`** / **`F3`** | **Next Match**: Automatically scroll and jump to next search match (vivid orange focus highlight) |
 | **`Shift + Enter`** / **`N`** / **`Shift + F3`** | **Previous Match**: Automatically scroll and jump to previous search match |
-| **`Ctrl + M`** | **Cycle View Mode**: Switch between Markdown rendering, Syntax Highlighting, Plain Text, and Image view |
+| **`Ctrl + T`** | **Outline / TOC**: Toggle Markdown TOC outline sidebar to navigate headings |
+| **`Ctrl + Shift + O`** | **Locate in Explorer**: Reveal and select the file in Windows File Explorer |
+| **`Ctrl + M`** | **Cycle View Mode**: Switch between Markdown, Data Table, Code Highlight, Plain Text, and Image view |
 | **`Ctrl + O`** | Open current file in default system editor / image viewer |
 | **`Ctrl + Shift + C`** | Copy entire document content or file path to clipboard |
 | **`Ctrl + P`** | Toggle Always on Top window pin |

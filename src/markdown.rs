@@ -1191,4 +1191,326 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
     }
 }
 
+/// 單元章節大綱項目
+#[derive(Debug, Clone)]
+pub struct TocItem {
+    pub level: u8,
+    pub title: String,
+    pub line_idx: usize,
+}
+
+/// 解析 Markdown 內容提取 H1~H6 章節標題
+pub fn extract_markdown_toc(content: &str) -> Vec<TocItem> {
+    let mut toc = Vec::new();
+    let mut in_code_block = false;
+
+    for (line_idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+
+        if trimmed.starts_with('#') {
+            let hash_count = trimmed.chars().take_while(|&c| c == '#').count();
+            if hash_count <= 6 {
+                let rest = trimmed[hash_count..].trim();
+                if !rest.is_empty() {
+                    let clean_title = rest
+                        .replace("**", "")
+                        .replace('*', "")
+                        .replace('`', "")
+                        .replace("~~", "");
+                    toc.push(TocItem {
+                        level: hash_count as u8,
+                        title: clean_title,
+                        line_idx,
+                    });
+                }
+            }
+        }
+    }
+    toc
+}
+
+/// CSV / TSV 資料表格結構體
+#[derive(Debug, Clone)]
+pub struct CsvTableData {
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub total_rows: usize,
+    pub total_cols: usize,
+}
+
+/// 解析 CSV 或 TSV 檔案內容 (支援雙引號轉義與逗號/Tab 欄位分隔)
+pub fn parse_csv_or_tsv(content: &str, separator: char) -> CsvTableData {
+    let mut all_rows = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut row = Vec::new();
+        let mut current_field = String::new();
+        let mut in_quotes = false;
+        let mut chars = line.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '"' {
+                if in_quotes && chars.peek() == Some(&'"') {
+                    current_field.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = !in_quotes;
+                }
+            } else if ch == separator && !in_quotes {
+                row.push(current_field.trim().to_string());
+                current_field.clear();
+            } else {
+                current_field.push(ch);
+            }
+        }
+        row.push(current_field.trim().to_string());
+        all_rows.push(row);
+    }
+
+    if all_rows.is_empty() {
+        return CsvTableData {
+            headers: Vec::new(),
+            rows: Vec::new(),
+            total_rows: 0,
+            total_cols: 0,
+        };
+    }
+
+    let headers = all_rows.remove(0);
+    let total_cols = headers.len().max(all_rows.iter().map(|r| r.len()).max().unwrap_or(0));
+    let total_rows = all_rows.len();
+
+    CsvTableData {
+        headers,
+        rows: all_rows,
+        total_rows,
+        total_cols,
+    }
+}
+
+/// 渲染現代斑馬紋資料表格
+pub fn render_csv_table(
+    ui: &mut Ui,
+    theme: AppTheme,
+    font_scale: f32,
+    table: &CsvTableData,
+    search_query: &str,
+    active_match_index: Option<usize>,
+    match_counter: &mut usize,
+) {
+    if table.headers.is_empty() && table.rows.is_empty() {
+        ui.label("表格內容為空");
+        return;
+    }
+
+    let header_bg = theme.card_bg_color();
+    let border_color = theme.border_color();
+    let even_row_bg = theme.bg_color();
+    let odd_row_bg = match theme {
+        AppTheme::Dark => Color32::from_rgba_unmultiplied(255, 255, 255, 6),
+        AppTheme::Light => Color32::from_rgba_unmultiplied(0, 0, 0, 8),
+    };
+
+    let (hl_bg, hl_fg, act_bg, act_fg) = match theme {
+        AppTheme::Dark => (
+            Color32::from_rgba_unmultiplied(234, 179, 8, 110),
+            Color32::from_rgb(254, 240, 138),
+            Color32::from_rgb(249, 115, 22),
+            Color32::BLACK,
+        ),
+        AppTheme::Light => (
+            Color32::from_rgb(254, 240, 138),
+            Color32::from_rgb(113, 63, 18),
+            Color32::from_rgb(234, 88, 12),
+            Color32::WHITE,
+        ),
+    };
+
+    egui::Grid::new("csv_grid_table")
+        .striped(false)
+        .spacing(egui::Vec2::new(0.0, 0.0))
+        .min_col_width(80.0 * font_scale)
+        .show(ui, |ui| {
+            // 表頭行 (Header)
+            for header in &table.headers {
+                Frame::none()
+                    .fill(header_bg)
+                    .stroke(Stroke::new(1.0_f32, border_color))
+                    .inner_margin(Margin::symmetric(10.0 * font_scale, 6.0 * font_scale))
+                    .show(ui, |ui| {
+                        let mut job = LayoutJob::default();
+                        let base_fmt = egui::TextFormat {
+                            font_id: FontId::proportional(13.0 * font_scale),
+                            color: theme.accent_color(),
+                            ..Default::default()
+                        };
+                        append_highlighted_text(
+                            &mut job,
+                            header,
+                            search_query,
+                            base_fmt,
+                            hl_bg,
+                            hl_fg,
+                            act_bg,
+                            act_fg,
+                            active_match_index,
+                            match_counter,
+                        );
+                        ui.label(job);
+                    });
+            }
+            ui.end_row();
+
+            // 資料行 (Data Rows with Zebra Striping)
+            for (row_idx, row) in table.rows.iter().enumerate() {
+                let row_bg = if row_idx % 2 == 0 { even_row_bg } else { odd_row_bg };
+
+                for col_idx in 0..table.total_cols {
+                    let cell_text = row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
+
+                    Frame::none()
+                        .fill(row_bg)
+                        .stroke(Stroke::new(0.5_f32, border_color))
+                        .inner_margin(Margin::symmetric(10.0 * font_scale, 5.0 * font_scale))
+                        .show(ui, |ui| {
+                            let mut job = LayoutJob::default();
+                            let base_fmt = egui::TextFormat {
+                                font_id: FontId::proportional(12.5 * font_scale),
+                                color: theme.text_primary(),
+                                line_height: Some(18.0 * font_scale),
+                                ..Default::default()
+                            };
+                            append_highlighted_text(
+                                &mut job,
+                                cell_text,
+                                search_query,
+                                base_fmt,
+                                hl_bg,
+                                hl_fg,
+                                act_bg,
+                                act_fg,
+                                active_match_index,
+                                match_counter,
+                            );
+                            ui.label(job);
+                        });
+                }
+                ui.end_row();
+            }
+        });
+}
+
+/// JSON 零依賴極速排版美化 (Pretty Print with 2 Spaces)
+pub fn format_json(input: &str) -> Result<String, String> {
+    let mut result = String::with_capacity(input.len() + 128);
+    let mut indent_level: usize = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if in_string {
+            result.push(ch);
+            if escape_next {
+                escape_next = false;
+            } else if ch == '\\' {
+                escape_next = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                result.push(ch);
+            }
+            '{' | '[' => {
+                result.push(ch);
+                let mut next_idx = i + 1;
+                while next_idx < chars.len() && chars[next_idx].is_whitespace() {
+                    next_idx += 1;
+                }
+                if next_idx < chars.len() && ((ch == '{' && chars[next_idx] == '}') || (ch == '[' && chars[next_idx] == ']')) {
+                    // 空物件/陣列保持單行 {} 或 []
+                } else {
+                    indent_level += 1;
+                    result.push('\n');
+                    result.push_str(&"  ".repeat(indent_level));
+                }
+            }
+            '}' | ']' => {
+                indent_level = indent_level.saturating_sub(1);
+                if !result.ends_with('\n') && !result.ends_with('{') && !result.ends_with('[') {
+                    result.push('\n');
+                    result.push_str(&"  ".repeat(indent_level));
+                }
+                result.push(ch);
+            }
+            ',' => {
+                result.push(ch);
+                result.push('\n');
+                result.push_str(&"  ".repeat(indent_level));
+            }
+            ':' => {
+                result.push(':');
+                result.push(' ');
+            }
+            c if c.is_whitespace() => {
+                // 忽略字串外部空白
+            }
+            c => {
+                result.push(c);
+            }
+        }
+        i += 1;
+    }
+    Ok(result)
+}
+
+/// JSON 零依賴壓縮為單行 (Minify)
+pub fn minify_json(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut in_string = false;
+    let mut escape_next = false;
+    for ch in input.chars() {
+        if in_string {
+            result.push(ch);
+            if escape_next {
+                escape_next = false;
+            } else if ch == '\\' {
+                escape_next = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+        } else {
+            match ch {
+                '"' => {
+                    in_string = true;
+                    result.push(ch);
+                }
+                c if c.is_whitespace() => {}
+                c => result.push(c),
+            }
+        }
+    }
+    result
+}
+
 

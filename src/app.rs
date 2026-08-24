@@ -28,6 +28,7 @@ pub enum ViewMode {
     Markdown,
     Code { lang: String },
     PlainText,
+    Table { separator: char },
     Image { format: String },
 }
 
@@ -55,6 +56,8 @@ pub struct MdPreviewApp {
     pub search_focus_requested: bool,
     pub search_match_index: usize,
     pub target_scroll_offset: Option<f32>,
+
+    pub toc_open: bool,
 
     pub available_update: Option<ReleaseInfo>,
     pub is_updating: bool,
@@ -122,6 +125,7 @@ impl MdPreviewApp {
             search_focus_requested: false,
             search_match_index: 0,
             target_scroll_offset: None,
+            toc_open: false,
             available_update: None,
             is_updating: false,
             update_tx: update_tx.clone(),
@@ -296,6 +300,10 @@ impl MdPreviewApp {
                 self.image_bytes = None;
                 if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
                     self.view_mode = ViewMode::Markdown;
+                } else if ext == "csv" {
+                    self.view_mode = ViewMode::Table { separator: ',' };
+                } else if ext == "tsv" {
+                    self.view_mode = ViewMode::Table { separator: '\t' };
                 } else if is_code_extension(&ext) {
                     self.view_mode = ViewMode::Code { lang: ext.clone() };
                 } else {
@@ -330,6 +338,13 @@ impl MdPreviewApp {
                 let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
                 let mode_desc = match self.view_mode {
                     ViewMode::Markdown => "Markdown 渲染".to_string(),
+                    ViewMode::Table { separator } => {
+                        if separator == '\t' {
+                            "TSV 資料表格 📊".to_string()
+                        } else {
+                            "CSV 資料表格 📊".to_string()
+                        }
+                    }
                     ViewMode::Code { ref lang } => {
                         let (name, emoji) = get_language_badge(lang);
                         format!("{} {} 語法高亮", emoji, name)
@@ -402,6 +417,10 @@ impl MdPreviewApp {
                         self.image_bytes = None;
                         if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
                             self.view_mode = ViewMode::Markdown;
+                        } else if ext == "csv" {
+                            self.view_mode = ViewMode::Table { separator: ',' };
+                        } else if ext == "tsv" {
+                            self.view_mode = ViewMode::Table { separator: '\t' };
                         } else if is_code_extension(&ext) {
                             self.view_mode = ViewMode::Code { lang: ext.clone() };
                         } else {
@@ -757,7 +776,7 @@ impl MdPreviewApp {
             }
         }
 
-        // Ctrl + F: 搜尋開關與自動聚焦
+        // Ctrl + F: 啟動搜尋列並自動聚焦輸入框
         if input.modifiers.command && input.key_pressed(egui::Key::F) {
             if !self.search_open {
                 self.search_open = true;
@@ -765,14 +784,27 @@ impl MdPreviewApp {
             self.search_focus_requested = true;
         }
 
+        // Ctrl + T: 開啟/收起 Markdown 目錄大綱側邊欄
+        if input.modifiers.command && input.key_pressed(egui::Key::T) {
+            if matches!(self.view_mode, ViewMode::Markdown) {
+                self.toc_open = !self.toc_open;
+                self.set_toast(if self.toc_open { "已開啟目錄大綱 📑".to_string() } else { "已收起目錄大綱".to_string() });
+            }
+        }
+
+        // Ctrl + Shift + O: 在 Windows 檔案總管中高亮定位目前檔案
+        if input.modifiers.command && input.modifiers.shift && input.key_pressed(egui::Key::O) {
+            self.locate_current_file_in_explorer();
+        }
+
         // Ctrl + O: 在外部預設編輯器開啟
-        if input.modifiers.command && input.key_pressed(egui::Key::O) {
+        if input.modifiers.command && !input.modifiers.shift && input.key_pressed(egui::Key::O) {
             if let Some(ref path) = self.current_file {
                 let _ = open::that(path);
             }
         }
 
-        // Ctrl + M: 切換 Markdown 預覽 / 程式碼語法高亮 / 純文字模式 / 圖片檢視模式
+        // Ctrl + M: 切換 Markdown 預覽 / 程式碼語法高亮 / 斑馬紋表格 / 純文字模式 / 圖片檢視模式
         if input.modifiers.command && input.key_pressed(egui::Key::M) {
             let ext = self
                 .current_file
@@ -786,15 +818,26 @@ impl MdPreviewApp {
                 ViewMode::Markdown => {
                     if is_image_extension(&ext) {
                         ViewMode::Image { format: ext }
+                    } else if ext == "csv" {
+                        ViewMode::Table { separator: ',' }
+                    } else if ext == "tsv" {
+                        ViewMode::Table { separator: '\t' }
                     } else if is_code_extension(&ext) {
                         ViewMode::Code { lang: ext }
                     } else {
                         ViewMode::PlainText
                     }
                 }
+                ViewMode::Table { separator } => {
+                    ViewMode::Code { lang: if separator == '\t' { "tsv".to_string() } else { "csv".to_string() } }
+                }
                 ViewMode::Code { .. } => {
                     if is_image_extension(&ext) {
                         ViewMode::Image { format: ext }
+                    } else if ext == "csv" {
+                        ViewMode::Table { separator: ',' }
+                    } else if ext == "tsv" {
+                        ViewMode::Table { separator: '\t' }
                     } else {
                         ViewMode::PlainText
                     }
@@ -802,6 +845,10 @@ impl MdPreviewApp {
                 ViewMode::PlainText => {
                     if is_image_extension(&ext) {
                         ViewMode::Image { format: ext }
+                    } else if ext == "csv" {
+                        ViewMode::Table { separator: ',' }
+                    } else if ext == "tsv" {
+                        ViewMode::Table { separator: '\t' }
                     } else {
                         ViewMode::Markdown
                     }
@@ -819,6 +866,13 @@ impl MdPreviewApp {
 
             self.set_toast(match self.view_mode {
                 ViewMode::Markdown => "已切換至 Markdown 渲染模式 📄".to_string(),
+                ViewMode::Table { separator } => {
+                    if separator == '\t' {
+                        "已切換至 TSV 資料表格模式 📊".to_string()
+                    } else {
+                        "已切換至 CSV 資料表格模式 📊".to_string()
+                    }
+                }
                 ViewMode::Code { ref lang } => {
                     let (name, emoji) = get_language_badge(lang);
                     format!("已切換至 {} {} 語法高亮模式", emoji, name)
@@ -866,6 +920,95 @@ impl MdPreviewApp {
                 "視窗置頂: 已關閉".to_string()
             });
         }
+    }
+
+    /// 在 Windows 檔案總管中高亮定位目前檔案
+    pub fn locate_current_file_in_explorer(&mut self) {
+        if let Some(ref path) = self.current_file {
+            let path_str = path.to_string_lossy().to_string();
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(format!("/select,{}", path_str))
+                .spawn();
+            self.set_toast("已在檔案總管中定位檔案 📁".to_string());
+        }
+    }
+
+    /// 一鍵排版美化 JSON / JSON5 / JSONC
+    pub fn format_json_content(&mut self) {
+        if let Ok(formatted) = crate::markdown::format_json(&self.content) {
+            self.content = formatted;
+            self.line_count = self.content.lines().count();
+            self.set_toast("已完成 JSON 排版美化 ⚡".to_string());
+        } else {
+            self.set_toast("JSON 格式無效或解析失敗 ⚠️".to_string());
+        }
+    }
+
+    /// 一鍵壓縮 JSON 為單行
+    pub fn minify_json_content(&mut self) {
+        self.content = crate::markdown::minify_json(&self.content);
+        self.line_count = self.content.lines().count();
+        self.set_toast("已壓縮為單行 JSON 📦".to_string());
+    }
+
+    /// 渲染 Markdown TOC 目錄大綱側邊欄
+    pub fn render_toc_sidebar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("📑 目錄大綱")
+                    .strong()
+                    .size(12.5 * self.font_scale)
+                    .color(self.theme.accent_color()),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button("✕").on_hover_text("收起大綱 (Ctrl+T)").clicked() {
+                    self.toc_open = false;
+                }
+            });
+        });
+        ui.add_space(3.0);
+        ui.separator();
+        ui.add_space(3.0);
+
+        let toc = crate::markdown::extract_markdown_toc(&self.content);
+        if toc.is_empty() {
+            ui.label(
+                RichText::new("此文件無章節標題")
+                    .italics()
+                    .color(self.theme.text_secondary())
+                    .size(11.5 * self.font_scale),
+            );
+            return;
+        }
+
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            for item in toc {
+                let indent = ((item.level.saturating_sub(1)) as f32) * 10.0 * self.font_scale;
+                let (font_size, is_h1) = match item.level {
+                    1 => (12.5 * self.font_scale, true),
+                    2 => (12.0 * self.font_scale, false),
+                    3 => (11.5 * self.font_scale, false),
+                    _ => (11.0 * self.font_scale, false),
+                };
+
+                ui.horizontal(|ui| {
+                    if indent > 0.0 {
+                        ui.add_space(indent);
+                    }
+                    let text = if is_h1 {
+                        RichText::new(&item.title).strong().size(font_size).color(self.theme.text_primary())
+                    } else {
+                        RichText::new(&item.title).size(font_size).color(self.theme.text_secondary())
+                    };
+
+                    let btn = ui.add(egui::Button::new(text).frame(false));
+                    if btn.on_hover_text(format!("跳轉至 H{}: {}", item.level, item.title)).clicked() {
+                        self.scroll_to_line(item.line_idx);
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -1167,10 +1310,17 @@ impl eframe::App for MdPreviewApp {
                         }
                     }
 
-                    // 模式切換膠囊 (支援 Markdown / 語言語法高亮 / 純文字 / 圖片向量圖)
+                    // 模式切換膠囊 (支援 Markdown / 語言語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖)
                     if !self.content.is_empty() || self.image_uri.is_some() {
                         let (badge_text, badge_tip) = match self.view_mode {
                             ViewMode::Markdown => ("📄 Markdown".to_string(), "目前為 Markdown 模式 (點擊切換 Ctrl+M)".to_string()),
+                            ViewMode::Table { separator } => {
+                                if separator == '\t' {
+                                    ("📊 TSV 表格".to_string(), "目前為 TSV 資料表格模式 (點擊切換 Ctrl+M)".to_string())
+                                } else {
+                                    ("📊 CSV 表格".to_string(), "目前為 CSV 資料表格模式 (點擊切換 Ctrl+M)".to_string())
+                                }
+                            }
                             ViewMode::Code { ref lang } => {
                                 let (name, emoji) = get_language_badge(lang);
                                 (format!("{} {}", emoji, name), format!("目前為 {} 語法高亮 (點擊切換 Ctrl+M)", name))
@@ -1206,15 +1356,26 @@ impl eframe::App for MdPreviewApp {
                                 ViewMode::Markdown => {
                                     if is_image_extension(&ext) {
                                         ViewMode::Image { format: ext }
+                                    } else if ext == "csv" {
+                                        ViewMode::Table { separator: ',' }
+                                    } else if ext == "tsv" {
+                                        ViewMode::Table { separator: '\t' }
                                     } else if is_code_extension(&ext) {
                                         ViewMode::Code { lang: ext }
                                     } else {
                                         ViewMode::PlainText
                                     }
                                 }
+                                ViewMode::Table { separator } => {
+                                    ViewMode::Code { lang: if separator == '\t' { "tsv".to_string() } else { "csv".to_string() } }
+                                }
                                 ViewMode::Code { .. } => {
                                     if is_image_extension(&ext) {
                                         ViewMode::Image { format: ext }
+                                    } else if ext == "csv" {
+                                        ViewMode::Table { separator: ',' }
+                                    } else if ext == "tsv" {
+                                        ViewMode::Table { separator: '\t' }
                                     } else {
                                         ViewMode::PlainText
                                     }
@@ -1222,6 +1383,10 @@ impl eframe::App for MdPreviewApp {
                                 ViewMode::PlainText => {
                                     if is_image_extension(&ext) {
                                         ViewMode::Image { format: ext }
+                                    } else if ext == "csv" {
+                                        ViewMode::Table { separator: ',' }
+                                    } else if ext == "tsv" {
+                                        ViewMode::Table { separator: '\t' }
                                     } else {
                                         ViewMode::Markdown
                                     }
@@ -1283,12 +1448,40 @@ impl eframe::App for MdPreviewApp {
 
                     // 搜尋按鈕 (僅文字/程式碼模式可用)
                     if !matches!(self.view_mode, ViewMode::Image { .. }) {
-                        if render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F)").clicked() {
+                        if render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F 或 /)").clicked() {
                             self.search_open = !self.search_open;
                             if self.search_open {
                                 self.search_focus_requested = true;
                             }
                         }
+                    }
+
+                    // Markdown 大綱側邊欄開關按鈕
+                    if matches!(self.view_mode, ViewMode::Markdown) {
+                        if render_nav_button(ui, self.theme, "📑 大綱", self.toc_open, "開啟/收起章節目錄大綱 (Ctrl + T)").clicked() {
+                            self.toc_open = !self.toc_open;
+                        }
+                    }
+
+                    // JSON 格式化與壓縮按鈕
+                    let current_ext = self.current_file.as_ref()
+                        .and_then(|p| p.extension())
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+
+                    if matches!(current_ext.as_str(), "json" | "jsonc" | "json5" | "jsonl") {
+                        if render_nav_button(ui, self.theme, "⚡ 格式化", false, "一鍵排版美化 JSON (縮排對齊)").clicked() {
+                            self.format_json_content();
+                        }
+                        if render_nav_button(ui, self.theme, "📦 壓縮", false, "一鍵壓縮為單行 JSON (去除空白與換行)").clicked() {
+                            self.minify_json_content();
+                        }
+                    }
+
+                    // 在檔案總管中定位按鈕
+                    if render_nav_button(ui, self.theme, "📁 定位", false, "在 Windows 檔案總管中高亮選取目前檔案 (Ctrl + Shift + O)").clicked() {
+                        self.locate_current_file_in_explorer();
                     }
 
                     // 複製全文 / 複製路徑按鈕
@@ -1511,7 +1704,7 @@ impl eframe::App for MdPreviewApp {
                 });
             });
 
-        // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 純文字 / 圖片向量圖)
+        // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖)
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
@@ -1531,19 +1724,73 @@ impl eframe::App for MdPreviewApp {
 
                     match self.view_mode {
                         ViewMode::Markdown => {
-                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部與鍵盤方向鍵上下捲動)
-                            let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                            if self.toc_open {
+                                ui.horizontal(|ui| {
+                                    // 左側 TOC 大綱側邊欄
+                                    ui.allocate_ui_with_layout(
+                                        Vec2::new(210.0 * self.font_scale, ui.available_height()),
+                                        Layout::top_down(Align::Min),
+                                        |ui| {
+                                            self.render_toc_sidebar(ui);
+                                        },
+                                    );
+                                    ui.separator();
+
+                                    // 右側 Markdown 富文字渲染
+                                    let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                                    if self.reset_scroll_to_top {
+                                        scroll = scroll.vertical_scroll_offset(0.0);
+                                    } else if let Some(offset) = self.target_scroll_offset {
+                                        scroll = scroll.vertical_scroll_offset(offset);
+                                    }
+                                    scroll.show(ui, |ui| {
+                                        if self.keyboard_scroll_delta != 0.0 {
+                                            ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
+                                        }
+                                        let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
+                                        renderer.render(ui, &self.content);
+                                    });
+                                });
+                            } else {
+                                // 單欄 Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部與鍵盤方向鍵上下捲動)
+                                let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                                if self.reset_scroll_to_top {
+                                    scroll = scroll.vertical_scroll_offset(0.0);
+                                } else if let Some(offset) = self.target_scroll_offset {
+                                    scroll = scroll.vertical_scroll_offset(offset);
+                                }
+                                scroll.show(ui, |ui| {
+                                    if self.keyboard_scroll_delta != 0.0 {
+                                        ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
+                                    }
+                                    let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
+                                    renderer.render(ui, &self.content);
+                                });
+                            }
+                        }
+                        ViewMode::Table { separator } => {
+                            // 現代斑馬紋資料表格模式 (支援 CSV 與 TSV 欄位解析、搜尋高亮與滾動)
+                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
-                                scroll = scroll.vertical_scroll_offset(0.0);
+                                scroll = scroll.scroll_offset(Vec2::ZERO);
                             } else if let Some(offset) = self.target_scroll_offset {
-                                scroll = scroll.vertical_scroll_offset(offset);
+                                scroll = scroll.scroll_offset(Vec2::new(0.0, offset));
                             }
                             scroll.show(ui, |ui| {
                                 if self.keyboard_scroll_delta != 0.0 {
                                     ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
                                 }
-                                let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
-                                renderer.render(ui, &self.content);
+                                let table_data = crate::markdown::parse_csv_or_tsv(&self.content, separator);
+                                let mut match_counter = 0;
+                                crate::markdown::render_csv_table(
+                                    ui,
+                                    self.theme,
+                                    self.font_scale,
+                                    &table_data,
+                                    &self.search_query,
+                                    active_match_idx,
+                                    &mut match_counter,
+                                );
                             });
                         }
                         ViewMode::Code { ref lang } => {
@@ -1653,7 +1900,7 @@ impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(format!(
-                "flash-md v{}  •  Alt + Space (預覽)  •  ←/→/h/l (檔案)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  n/N/Enter (跳轉)  •  Ctrl+M (模式)  •  Esc (隱藏)",
+                "flash-md v{}  •  Alt+Space (預覽)  •  ←/→/h/l (切換)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  Ctrl+T (大綱)  •  Ctrl+Shift+O (定位)  •  Ctrl+M (模式)  •  Esc (隱藏)",
                 CURRENT_VERSION
             ))
             .color(self.theme.text_secondary())
