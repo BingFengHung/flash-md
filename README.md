@@ -14,8 +14,9 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
 - 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs to automatically detect the selected file when `Alt + Space` is pressed.
+- 📊 **Instant Mermaid Diagrams**: Pure Rust, zero-browser in-memory rendering of ````mermaid ```` code blocks into crisp vector SVGs (flowcharts, sequence diagrams, mindmaps, state diagrams, etc.)!
 - 📑 **Instant PDF Text Preview**: Instant in-memory text extraction for `.pdf` files, formatted into structured Markdown pages with TOC and search!
-- 📊 **Word Count & Reading Time Estimation**: Real-time CJK / English word count, estimated reading time, and an elegant top reading progress bar.
+- 📊 **Word Count & Reading Time Estimation**: Real-time CJK / English word count, estimated reading time, and an elegant top reading progress bar!
 - ⬅️➡️ **Keyboard Sibling File Navigation**: Press `←` / `→` (or click `◀` / `▶` buttons) to instantly browse previous/next files in the same directory, complete with index indicators `[3/18]`!
 - 📜 **Smooth Document Keyboard Scrolling**: Scroll through long documents seamlessly using `↑` / `↓` or `PageUp` / `PageDown` / `Home` / `End` keys!
 - 📋 **1-Click Code Block Copying**: Code blocks in Markdown and the standalone Code Viewer now feature dedicated copy buttons with instant green "✓ Copied" feedback.

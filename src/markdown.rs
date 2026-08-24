@@ -684,6 +684,70 @@ impl<'a> RenderContext<'a> {
         let lang = self.code_block_lang.trim();
         let code = self.code_block_content.trim_end();
 
+        // 1. Mermaid 向量流程圖即時渲染
+        if lang.eq_ignore_ascii_case("mermaid") && !code.trim().is_empty() {
+            if let Ok(svg_str) = mermaid_rs_renderer::render(code) {
+                ui.add_space(4.0_f32);
+                Frame::none()
+                    .fill(self.theme.card_bg_color())
+                    .rounding(Rounding::same(8.0_f32))
+                    .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
+                    .inner_margin(Margin::same(12.0_f32))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("📊 Mermaid 流程圖")
+                                    .font(FontId::proportional(12.0_f32 * self.font_scale))
+                                    .color(self.theme.accent_color())
+                                    .strong(),
+                            );
+
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let copy_id = ui.make_persistent_id(format!("md_mermaid_copy_{:p}_{}", code.as_ptr(), code.len()));
+                                let is_copied = ui.ctx().data(|d| {
+                                    d.get_temp::<std::time::Instant>(copy_id)
+                                        .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
+                                        .unwrap_or(false)
+                                });
+
+                                let btn_text = if is_copied {
+                                    RichText::new("✓ 已複製代碼")
+                                        .color(Color32::from_rgb(34, 197, 94))
+                                        .size(11.5_f32 * self.font_scale)
+                                        .strong()
+                                } else {
+                                    RichText::new("📋 複製代碼")
+                                        .color(self.theme.text_secondary())
+                                        .size(11.5_f32 * self.font_scale)
+                                };
+
+                                if ui.button(btn_text).clicked() {
+                                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                        let _ = clipboard.set_text(code.to_string());
+                                    }
+                                    ui.ctx().data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
+                                }
+                            });
+                        });
+
+                        ui.add_space(6.0_f32);
+                        ui.separator();
+                        ui.add_space(8.0_f32);
+
+                        let uri = format!("bytes://mermaid_{:p}_{}.svg", code.as_ptr(), code.len());
+                        let img = egui::Image::from_bytes(uri, svg_str.into_bytes())
+                            .rounding(Rounding::same(4.0_f32))
+                            .fit_to_original_size(self.font_scale);
+
+                        ui.centered_and_justified(|ui| {
+                            ui.add(img);
+                        });
+                    });
+                ui.add_space(4.0_f32);
+                return;
+            }
+        }
+
         let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
         Frame::none()
