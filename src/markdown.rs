@@ -1238,6 +1238,7 @@ pub fn extract_markdown_toc(content: &str) -> Vec<TocItem> {
 
 /// CSV / TSV 資料表格結構體
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CsvTableData {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,

@@ -663,6 +663,7 @@ impl MdPreviewApp {
     pub fn scroll_to_line(&mut self, line_idx: usize) {
         let line_height = match self.view_mode {
             ViewMode::Markdown => 24.0 * self.font_scale,
+            ViewMode::Table { .. } => 26.0 * self.font_scale,
             ViewMode::Code { .. } => 21.0 * self.font_scale,
             ViewMode::PlainText => 22.0 * self.font_scale,
             ViewMode::Image { .. } => return,
