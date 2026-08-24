@@ -492,7 +492,7 @@ impl<'a> RenderContext<'a> {
         if !has_hyperlinks {
             for span in spans {
                 let font_id = if span.code {
-                    FontId::monospace(13.0_f32 * self.font_scale)
+                    FontId::monospace(13.5_f32 * self.font_scale)
                 } else {
                     FontId::proportional(14.5_f32 * self.font_scale)
                 };
@@ -509,6 +509,7 @@ impl<'a> RenderContext<'a> {
                     italics: span.italic,
                     strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
                     line_height: Some(22.0_f32 * self.font_scale),
+                    valign: egui::Align::Center,
                     background: if span.code {
                         self.theme.code_bg_color()
                     } else {
@@ -548,8 +549,9 @@ impl<'a> RenderContext<'a> {
                             .show(ui, |ui| {
                                 let mut code_job = LayoutJob::default();
                                 let base_fmt = egui::TextFormat {
-                                    font_id: FontId::monospace(13.0_f32 * self.font_scale),
+                                    font_id: FontId::monospace(13.5_f32 * self.font_scale),
                                     color: self.theme.accent_color(),
+                                    valign: egui::Align::Center,
                                     ..Default::default()
                                 };
                                 append_highlighted_text(
@@ -584,6 +586,7 @@ impl<'a> RenderContext<'a> {
                             italics: span.italic,
                             strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, self.theme.text_primary()),
                             line_height: Some(22.0_f32 * self.font_scale),
+                            valign: egui::Align::Center,
                             ..Default::default()
                         };
                         append_highlighted_text(
@@ -817,40 +820,108 @@ impl<'a> RenderContext<'a> {
             return;
         }
 
-        Frame::none()
-            .fill(self.theme.card_bg_color())
-            .rounding(Rounding::same(6.0))
-            .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
-            .inner_margin(Margin::same(8.0))
-            .show(ui, |ui| {
-                egui::Grid::new("markdown_table_grid")
-                    .striped(true)
-                    .spacing(Vec2::new(14.0, 8.0))
-                    .show(ui, |ui| {
-                        // Header
-                        if !self.table_headers.is_empty() {
-                            for (_i, header) in self.table_headers.iter().enumerate() {
-                                let text = RichText::new(header)
-                                    .strong()
-                                    .size(13.5 * self.font_scale)
-                                    .color(self.theme.text_primary());
-                                ui.label(text);
-                            }
-                            ui.end_row();
-                        }
+        let border_color = self.theme.border_color();
+        let header_bg = self.theme.card_bg_color();
+        let even_row_bg = self.theme.bg_color();
+        let odd_row_bg = match self.theme {
+            AppTheme::Dark => Color32::from_rgba_unmultiplied(255, 255, 255, 6),
+            AppTheme::Light => Color32::from_rgba_unmultiplied(0, 0, 0, 8),
+        };
 
-                        // Rows
-                        for row in &self.table_rows {
-                            for (_i, cell) in row.iter().enumerate() {
-                                let text = RichText::new(cell)
-                                    .size(13.0 * self.font_scale)
-                                    .color(self.theme.text_secondary());
-                                ui.label(text);
-                            }
-                            ui.end_row();
-                        }
+        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
+
+        ui.add_space(4.0_f32);
+        egui::ScrollArea::horizontal()
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                Frame::none()
+                    .fill(self.theme.card_bg_color())
+                    .rounding(Rounding::same(6.0_f32))
+                    .stroke(Stroke::new(1.0_f32, border_color))
+                    .inner_margin(Margin::same(6.0_f32))
+                    .show(ui, |ui| {
+                        egui::Grid::new(ui.next_auto_id())
+                            .striped(false)
+                            .min_col_width(70.0_f32 * self.font_scale)
+                            .spacing(Vec2::new(12.0_f32 * self.font_scale, 6.0_f32 * self.font_scale))
+                            .show(ui, |ui| {
+                                // Header
+                                if !self.table_headers.is_empty() {
+                                    for header in &self.table_headers {
+                                        Frame::none()
+                                            .fill(header_bg)
+                                            .stroke(Stroke::new(1.0_f32, border_color))
+                                            .rounding(Rounding::same(4.0_f32))
+                                            .inner_margin(Margin::symmetric(10.0_f32 * self.font_scale, 6.0_f32 * self.font_scale))
+                                            .show(ui, |ui| {
+                                                let mut job = LayoutJob::default();
+                                                let base_fmt = egui::TextFormat {
+                                                    font_id: FontId::proportional(13.5_f32 * self.font_scale),
+                                                    color: self.theme.accent_color(),
+                                                    valign: egui::Align::Center,
+                                                    ..Default::default()
+                                                };
+                                                let mut counter = 0;
+                                                append_highlighted_text(
+                                                    &mut job,
+                                                    header,
+                                                    self.search_query,
+                                                    base_fmt,
+                                                    hl_bg,
+                                                    hl_fg,
+                                                    act_bg,
+                                                    act_fg,
+                                                    self.active_match_index,
+                                                    &mut counter,
+                                                );
+                                                ui.label(job);
+                                            });
+                                    }
+                                    ui.end_row();
+                                }
+
+                                // Rows
+                                for (row_idx, row) in self.table_rows.iter().enumerate() {
+                                    let row_bg = if row_idx % 2 == 0 { even_row_bg } else { odd_row_bg };
+
+                                    for col_idx in 0..num_cols {
+                                        let cell = row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
+                                        Frame::none()
+                                            .fill(row_bg)
+                                            .stroke(Stroke::new(0.5_f32, border_color))
+                                            .rounding(Rounding::same(4.0_f32))
+                                            .inner_margin(Margin::symmetric(10.0_f32 * self.font_scale, 6.0_f32 * self.font_scale))
+                                            .show(ui, |ui| {
+                                                let mut job = LayoutJob::default();
+                                                let base_fmt = egui::TextFormat {
+                                                    font_id: FontId::proportional(13.0_f32 * self.font_scale),
+                                                    color: self.theme.text_primary(),
+                                                    line_height: Some(19.0_f32 * self.font_scale),
+                                                    valign: egui::Align::Center,
+                                                    ..Default::default()
+                                                };
+                                                let mut counter = 0;
+                                                append_highlighted_text(
+                                                    &mut job,
+                                                    cell,
+                                                    self.search_query,
+                                                    base_fmt,
+                                                    hl_bg,
+                                                    hl_fg,
+                                                    act_bg,
+                                                    act_fg,
+                                                    self.active_match_index,
+                                                    &mut counter,
+                                                );
+                                                ui.label(job);
+                                            });
+                                    }
+                                    ui.end_row();
+                                }
+                            });
                     });
             });
+        ui.add_space(6.0_f32);
     }
 }
 
