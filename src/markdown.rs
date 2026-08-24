@@ -268,7 +268,12 @@ pub fn get_or_render_mermaid(code: &str) -> Option<String> {
         return cached.clone();
     }
 
-    let rendered = mermaid_rs_renderer::render(code).ok();
+    let rendered = mermaid_rs_renderer::render(code).ok().map(|mut svg| {
+        svg = svg.replace("&quot;Inter&quot;, &quot;system-ui&quot;, &quot;Segoe UI&quot;", "sans-serif, Arial, 'Microsoft JhengHei'");
+        svg = svg.replace("\"Inter\", \"system-ui\"", "sans-serif, Arial, 'Microsoft JhengHei'");
+        svg = svg.replace("font-family=\"Inter\"", "font-family=\"sans-serif, Arial, 'Microsoft JhengHei'\"");
+        svg
+    });
     map.insert(key, rendered.clone());
     rendered
 }

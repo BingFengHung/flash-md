@@ -1,6 +1,6 @@
 [package]
 name = "flash-md"
-version = "1.0.44"
+version = "1.0.45"
 edition = "2021"
 authors = ["flash-md contributors"]
 description = "A blazing-fast macOS Quick Look style Markdown preview tool for Windows built with Rust & egui."
@@ -18,7 +18,7 @@ eframe = { version = "0.29.1", default-features = false, features = [
     "persistence",
 ] }
 egui = "0.29.1"
-egui_extras = { version = "0.29.1", features = ["all_loaders", "svg_text"] }
+egui_extras = { version = "0.29.1", features = ["all_loaders"] }
 pulldown-cmark = { version = "0.12.2", default-features = false, features = ["simd"] }
 syntect = { version = "5.2.0", default-features = false, features = ["default-fancy"] }
 
