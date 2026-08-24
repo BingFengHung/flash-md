@@ -126,11 +126,44 @@ pub fn append_highlighted_text(
     }
 }
 
+/// 將標題或錨點字串正規化（去除符號、空格與 URL 編碼，保留中英文字母與數字）
+pub fn normalize_anchor_slug(input: &str) -> String {
+    let decoded = crate::explorer::url_decode(input);
+    let trimmed = decoded.trim().trim_start_matches('#');
+    trimmed
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c >= '\u{4E00}')
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// 智慧比對標題與目標錨點（支援精確比對、GitHub Slug 比對與中文字元子字串模糊匹配）
+pub fn is_anchor_match(heading: &str, anchor: &str) -> bool {
+    let clean_heading = heading.trim();
+    let clean_anchor = anchor.trim().trim_start_matches('#');
+
+    if clean_heading.eq_ignore_ascii_case(clean_anchor) {
+        return true;
+    }
+
+    let slug_h = normalize_anchor_slug(clean_heading);
+    let slug_a = normalize_anchor_slug(clean_anchor);
+
+    if !slug_h.is_empty() && !slug_a.is_empty() {
+        if slug_h == slug_a || slug_h.contains(&slug_a) || slug_a.contains(&slug_h) {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub struct MarkdownRenderer<'a> {
     pub theme: AppTheme,
     pub font_scale: f32,
     pub search_query: &'a str,
     pub active_match_index: Option<usize>,
+    pub target_anchor: Option<&'a str>,
     pub _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -140,17 +173,19 @@ impl<'a> MarkdownRenderer<'a> {
         font_scale: f32,
         search_query: &'a str,
         active_match_index: Option<usize>,
+        target_anchor: Option<&'a str>,
     ) -> Self {
         Self {
             theme,
             font_scale,
             search_query,
             active_match_index,
+            target_anchor,
             _marker: std::marker::PhantomData,
         }
     }
 
-    pub fn render(&self, ui: &mut Ui, markdown_text: &str) {
+    pub fn render(&self, ui: &mut Ui, markdown_text: &str) -> Option<String> {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_FOOTNOTES);
@@ -164,6 +199,7 @@ impl<'a> MarkdownRenderer<'a> {
             self.font_scale,
             self.search_query,
             self.active_match_index,
+            self.target_anchor,
         );
 
         for event in parser {
@@ -172,6 +208,8 @@ impl<'a> MarkdownRenderer<'a> {
 
         // 刷新剩餘段落
         context.flush_inline(ui);
+
+        context.clicked_anchor
     }
 }
 
@@ -189,6 +227,8 @@ struct RenderContext<'a> {
     font_scale: f32,
     search_query: &'a str,
     active_match_index: Option<usize>,
+    target_anchor: Option<&'a str>,
+    clicked_anchor: Option<String>,
     match_counter: usize,
     inlines: Vec<InlineSpan>,
     current_bold: bool,
@@ -216,12 +256,15 @@ impl<'a> RenderContext<'a> {
         font_scale: f32,
         search_query: &'a str,
         active_match_index: Option<usize>,
+        target_anchor: Option<&'a str>,
     ) -> Self {
         Self {
             theme,
             font_scale,
             search_query,
             active_match_index,
+            target_anchor,
+            clicked_anchor: None,
             match_counter: 0,
             inlines: Vec::new(),
             current_bold: false,
@@ -569,14 +612,25 @@ impl<'a> RenderContext<'a> {
                                 ui.label(code_job);
                             });
                     } else if let Some(url) = span.link_url {
-                        // Hyperlink
+                        // Hyperlink or Internal Document Anchor Link
                         let link_text = RichText::new(&span.text)
                             .color(self.theme.accent_color())
                             .underline()
                             .size(14.0_f32 * self.font_scale);
-                        let resp = ui.add(egui::Hyperlink::from_label_and_url(link_text, &url));
-                        if resp.hovered() {
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+
+                        if url.starts_with('#') {
+                            let resp = ui.add(egui::Button::new(link_text).frame(false));
+                            if resp.hovered() {
+                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                            }
+                            if resp.clicked() {
+                                self.clicked_anchor = Some(url.trim_start_matches('#').to_string());
+                            }
+                        } else {
+                            let resp = ui.add(egui::Hyperlink::from_label_and_url(link_text, &url));
+                            if resp.hovered() {
+                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                            }
                         }
                     } else {
                         let mut span_job = LayoutJob::default();
@@ -643,7 +697,13 @@ impl<'a> RenderContext<'a> {
             self.active_match_index,
             &mut self.match_counter,
         );
-        ui.label(job);
+        let heading_resp = ui.label(job);
+
+        if let Some(target) = self.target_anchor {
+            if is_anchor_match(&heading_text, target) {
+                heading_resp.scroll_to_me(Some(egui::Align::TOP));
+            }
+        }
 
         if is_h1_or_h2 {
             ui.add_space(2.0);

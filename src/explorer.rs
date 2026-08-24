@@ -513,7 +513,7 @@ fn decode_hex_digit(b: u8) -> Option<u8> {
     }
 }
 
-fn url_decode(input: &str) -> String {
+pub fn url_decode(input: &str) -> String {
     let mut bytes = Vec::new();
     let mut chars = input.bytes();
     while let Some(b) = chars.next() {

@@ -56,6 +56,7 @@ pub struct MdPreviewApp {
     pub search_focus_requested: bool,
     pub search_match_index: usize,
     pub target_scroll_offset: Option<f32>,
+    pub target_anchor: Option<String>,
 
     pub toc_open: bool,
 
@@ -126,6 +127,7 @@ impl MdPreviewApp {
             search_focus_requested: false,
             search_match_index: 0,
             target_scroll_offset: None,
+            target_anchor: None,
             toc_open: false,
             available_update: None,
             is_updating: false,
@@ -236,6 +238,7 @@ impl MdPreviewApp {
         self.reset_scroll_to_top = true;
         self.search_match_index = 0;
         self.target_scroll_offset = None;
+        self.target_anchor = None;
 
         if path.is_dir() {
             self.set_toast(format!("已選取資料夾: {:?}", path.file_name().unwrap_or_default()));
@@ -1014,10 +1017,10 @@ impl MdPreviewApp {
         self.set_toast("已壓縮為單行 JSON 📦".to_string());
     }
 
-    /// 渲染 Markdown TOC 目錄大綱側邊欄，回傳 (是否收起大綱, 選取的目標行號)
-    pub fn render_toc_sidebar(&self, ui: &mut egui::Ui) -> (bool, Option<usize>) {
+    /// 渲染 Markdown TOC 目錄大綱側邊欄，回傳 (是否收起大綱, 選取的目標標題錨點)
+    pub fn render_toc_sidebar(&self, ui: &mut egui::Ui) -> (bool, Option<String>) {
         let mut should_close = false;
-        let mut target_line = None;
+        let mut target_anchor = None;
 
         let toc = crate::markdown::extract_markdown_toc(&self.content);
 
@@ -1107,16 +1110,16 @@ impl MdPreviewApp {
                     if btn.hovered() {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                     }
-                    btn.on_hover_text(format!("第 {} 行: {}", item.line_idx + 1, item.title))
+                    btn.on_hover_text(format!("點擊跳轉至: {}", item.title))
                 });
 
                 if item_resp.inner.clicked() {
-                    target_line = Some(item.line_idx);
+                    target_anchor = Some(item.title.clone());
                 }
             }
         });
 
-        (should_close, target_line)
+        (should_close, target_anchor)
     }
 }
 
@@ -1833,7 +1836,7 @@ impl eframe::App for MdPreviewApp {
             });
 
         let mut should_close_toc = false;
-        let mut toc_target_line = None;
+        let mut toc_target_anchor = None;
 
         // 如果開啟大綱模式且處於 Markdown 檢視，先掛載獨立可調整寬度的左側側邊欄 (SidePanel)
         if self.toc_open && matches!(self.view_mode, ViewMode::Markdown) && !self.content.is_empty() {
@@ -1849,12 +1852,12 @@ impl eframe::App for MdPreviewApp {
                         .stroke(Stroke::new(1.0_f32, self.theme.border_color())),
                 )
                 .show(ctx, |ui| {
-                    let (close, target_line) = self.render_toc_sidebar(ui);
+                    let (close, target_anchor) = self.render_toc_sidebar(ui);
                     if close {
                         should_close_toc = true;
                     }
-                    if target_line.is_some() {
-                        toc_target_line = target_line;
+                    if target_anchor.is_some() {
+                        toc_target_anchor = target_anchor;
                     }
                 });
         }
@@ -1862,8 +1865,9 @@ impl eframe::App for MdPreviewApp {
         if should_close_toc {
             self.toc_open = false;
         }
-        if let Some(line) = toc_target_line {
-            self.scroll_to_line(line);
+        if let Some(anchor) = toc_target_anchor {
+            self.target_anchor = Some(anchor);
+            ctx.request_repaint();
         }
 
         // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖)
@@ -1897,8 +1901,20 @@ impl eframe::App for MdPreviewApp {
                                 if self.keyboard_scroll_delta != 0.0 {
                                     ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
                                 }
-                                let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
-                                renderer.render(ui, &self.content);
+                                let anchor_to_jump = self.target_anchor.clone();
+                                let renderer = MarkdownRenderer::new(
+                                    self.theme,
+                                    self.font_scale,
+                                    &self.search_query,
+                                    active_match_idx,
+                                    anchor_to_jump.as_deref(),
+                                );
+                                if let Some(clicked_anchor) = renderer.render(ui, &self.content) {
+                                    self.target_anchor = Some(clicked_anchor);
+                                    ctx.request_repaint();
+                                } else if self.target_anchor.is_some() {
+                                    self.target_anchor = None;
+                                }
                             });
 
                             let max_scroll = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(1.0);
