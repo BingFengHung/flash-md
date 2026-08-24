@@ -1340,8 +1340,7 @@ pub fn render_csv_table(
 
     egui::Grid::new("csv_grid_table")
         .striped(false)
-        .spacing(egui::Vec2::new(0.0, 0.0))
-        .min_col_width(80.0 * font_scale)
+        .spacing(Vec2::new(14.0 * font_scale, 8.0 * font_scale))
         .show(ui, |ui| {
             // 表頭行 (Header)
             for header in &table.headers {
