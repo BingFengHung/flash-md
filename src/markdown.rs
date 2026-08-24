@@ -962,8 +962,8 @@ pub fn render_code_viewer(
         theme
     ));
 
-    let (gutter_job, code_job, line_count) = ui.ctx().data_mut(|d| {
-        if let Some(cached) = d.get_temp::<(LayoutJob, LayoutJob, usize)>(cache_id) {
+    let (gutter_job, code_job, line_count, is_large_file) = ui.ctx().data_mut(|d| {
+        if let Some(cached) = d.get_temp::<(LayoutJob, LayoutJob, usize, bool)>(cache_id) {
             cached.clone()
         } else {
             let mut highlighter = HighlightLines::new(syntax, syntect_theme);
@@ -971,30 +971,96 @@ pub fn render_code_viewer(
             let mut code_job = LayoutJob::default();
             let mut line_count = 0;
             let mut match_counter = 0;
+            const MAX_HIGHLIGHT_LINES: usize = 3500;
+            const MAX_LINE_CHAR_LIMIT: usize = 2500;
+            let mut is_large = false;
+
+            let default_text_color = match theme {
+                AppTheme::Dark => Color32::from_rgb(226, 232, 240),
+                AppTheme::Light => Color32::from_rgb(30, 41, 59),
+            };
 
             for line in syntect::util::LinesWithEndings::from(code) {
                 line_count += 1;
-                let ranges = highlighter
-                    .highlight_line(line, syntax_set)
-                    .unwrap_or_default();
 
-                for (style, text) in ranges {
-                    let color = Color32::from_rgb(
-                        style.foreground.r,
-                        style.foreground.g,
-                        style.foreground.b,
-                    );
+                if line_count <= MAX_HIGHLIGHT_LINES {
+                    // 超長單行截斷防護 (例如未排版的單行 minified JSON)，避免正則回溯卡頓
+                    let (highlight_chunk, remaining_chunk) = if line.len() > MAX_LINE_CHAR_LIMIT {
+                        is_large = true;
+                        let boundary = line
+                            .char_indices()
+                            .nth(MAX_LINE_CHAR_LIMIT)
+                            .map(|(idx, _)| idx)
+                            .unwrap_or(line.len());
+                        (&line[..boundary], Some(&line[boundary..]))
+                    } else {
+                        (line, None)
+                    };
 
+                    let ranges = highlighter
+                        .highlight_line(highlight_chunk, syntax_set)
+                        .unwrap_or_default();
+
+                    for (style, text) in ranges {
+                        let color = Color32::from_rgb(
+                            style.foreground.r,
+                            style.foreground.g,
+                            style.foreground.b,
+                        );
+
+                        let base_fmt = egui::TextFormat {
+                            font_id: font_id.clone(),
+                            color,
+                            line_height: Some(21.0 * font_scale),
+                            ..Default::default()
+                        };
+
+                        append_highlighted_text(
+                            &mut code_job,
+                            text,
+                            search_query,
+                            base_fmt,
+                            hl_bg,
+                            hl_fg,
+                            act_bg,
+                            act_fg,
+                            active_match_index,
+                            &mut match_counter,
+                        );
+                    }
+
+                    if let Some(rest) = remaining_chunk {
+                        let base_fmt = egui::TextFormat {
+                            font_id: font_id.clone(),
+                            color: default_text_color,
+                            line_height: Some(21.0 * font_scale),
+                            ..Default::default()
+                        };
+                        append_highlighted_text(
+                            &mut code_job,
+                            rest,
+                            search_query,
+                            base_fmt,
+                            hl_bg,
+                            hl_fg,
+                            act_bg,
+                            act_fg,
+                            active_match_index,
+                            &mut match_counter,
+                        );
+                    }
+                } else {
+                    is_large = true;
+                    // 超過 3,500 行的超大型檔案，採用極速純文字格式化，免除 syntect 正則狀態機消耗
                     let base_fmt = egui::TextFormat {
                         font_id: font_id.clone(),
-                        color,
+                        color: default_text_color,
                         line_height: Some(21.0 * font_scale),
                         ..Default::default()
                     };
-
                     append_highlighted_text(
                         &mut code_job,
-                        text,
+                        line,
                         search_query,
                         base_fmt,
                         hl_bg,
@@ -1022,7 +1088,7 @@ pub fn render_code_viewer(
                 );
             }
 
-            let result = (gutter_job, code_job, line_count);
+            let result = (gutter_job, code_job, line_count, is_large);
             d.insert_temp(cache_id, result.clone());
             result
         }
@@ -1049,6 +1115,19 @@ pub fn render_code_viewer(
                         .size(11.0 * font_scale)
                         .color(theme.text_secondary()),
                 );
+                if is_large_file {
+                    Frame::none()
+                        .fill(theme.code_bg_color())
+                        .rounding(Rounding::same(3.0))
+                        .inner_margin(Margin::symmetric(5.0, 1.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("⚡ 極速模式 (3,500+ 行加速)")
+                                    .size(10.0 * font_scale)
+                                    .color(theme.accent_color()),
+                            );
+                        });
+                }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let copy_id = ui.make_persistent_id(format!("viewer_cb_copy_{:p}_{}", code.as_ptr(), code.len()));
@@ -1412,17 +1491,15 @@ pub fn render_csv_table(
         });
 }
 
-/// JSON 零依賴極速排版美化 (Pretty Print with 2 Spaces)
+/// JSON 零依賴極速排版美化 (Pretty Print with 2 Spaces，串流零多餘拷貝)
 pub fn format_json(input: &str) -> Result<String, String> {
-    let mut result = String::with_capacity(input.len() + 128);
+    let mut result = String::with_capacity(input.len() + input.len() / 2);
     let mut indent_level: usize = 0;
     let mut in_string = false;
     let mut escape_next = false;
+    let mut chars = input.chars().peekable();
 
-    let chars: Vec<char> = input.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i];
+    while let Some(ch) = chars.next() {
         if in_string {
             result.push(ch);
             if escape_next {
@@ -1432,41 +1509,46 @@ pub fn format_json(input: &str) -> Result<String, String> {
             } else if ch == '"' {
                 in_string = false;
             }
-            i += 1;
             continue;
         }
 
         match ch {
             '"' => {
                 in_string = true;
-                result.push(ch);
+                result.push('"');
             }
             '{' | '[' => {
                 result.push(ch);
-                let mut next_idx = i + 1;
-                while next_idx < chars.len() && chars[next_idx].is_whitespace() {
-                    next_idx += 1;
+                // 檢查是否緊接著閉合括號
+                while let Some(&next_ch) = chars.peek() {
+                    if next_ch.is_whitespace() {
+                        chars.next();
+                    } else {
+                        break;
+                    }
                 }
-                if next_idx < chars.len() && ((ch == '{' && chars[next_idx] == '}') || (ch == '[' && chars[next_idx] == ']')) {
-                    // 空物件/陣列保持單行 {} 或 []
-                } else {
-                    indent_level += 1;
-                    result.push('\n');
-                    result.push_str(&"  ".repeat(indent_level));
+                if let Some(&next_ch) = chars.peek() {
+                    if (ch == '{' && next_ch == '}') || (ch == '[' && next_ch == ']') {
+                        // 空物件/陣列保持單行 {} 或 []
+                        continue;
+                    }
                 }
+                indent_level += 1;
+                result.push('\n');
+                append_indent_spaces(&mut result, indent_level);
             }
             '}' | ']' => {
                 indent_level = indent_level.saturating_sub(1);
                 if !result.ends_with('\n') && !result.ends_with('{') && !result.ends_with('[') {
                     result.push('\n');
-                    result.push_str(&"  ".repeat(indent_level));
+                    append_indent_spaces(&mut result, indent_level);
                 }
                 result.push(ch);
             }
             ',' => {
-                result.push(ch);
+                result.push(',');
                 result.push('\n');
-                result.push_str(&"  ".repeat(indent_level));
+                append_indent_spaces(&mut result, indent_level);
             }
             ':' => {
                 result.push(':');
@@ -1479,12 +1561,18 @@ pub fn format_json(input: &str) -> Result<String, String> {
                 result.push(c);
             }
         }
-        i += 1;
     }
     Ok(result)
 }
 
-/// JSON 零依賴壓縮為單行 (Minify)
+#[inline(always)]
+fn append_indent_spaces(buf: &mut String, level: usize) {
+    for _ in 0..level {
+        buf.push_str("  ");
+    }
+}
+
+/// JSON 零依賴壓縮為單行 (Minify，串流高效版)
 pub fn minify_json(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut in_string = false;
