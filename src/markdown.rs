@@ -256,7 +256,7 @@ pub fn get_or_render_mermaid(code: &str) -> Option<Vec<u8>> {
     use std::collections::HashMap;
     use std::hash::{Hash, Hasher};
     use std::sync::Arc;
-    use resvg::usvg::TreeParsing;
+    use resvg::usvg::{TreeParsing, TreeTextToPath};
     static CACHE: Mutex<Option<HashMap<u64, Option<Vec<u8>>>>> = Mutex::new(None);
     static FONT_DB: std::sync::OnceLock<Arc<resvg::usvg::fontdb::Database>> = std::sync::OnceLock::new();
 
@@ -280,15 +280,13 @@ pub fn get_or_render_mermaid(code: &str) -> Option<Vec<u8>> {
             Arc::new(db)
         });
 
-        let mut opt = resvg::usvg::Options::default();
-        opt.fontdb = fontdb.clone();
+        let opt = resvg::usvg::Options::default();
+        let mut tree = resvg::usvg::Tree::from_str(&svg_str, &opt).ok()?;
+        tree.convert_text(fontdb.as_ref());
 
-        let tree = resvg::usvg::Tree::from_str(&svg_str, &opt).ok()?;
-
-        let size = tree.size.to_int_size();
         let scale = 2.0_f32;
-        let width = ((size.width() as f32) * scale).round() as u32;
-        let height = ((size.height() as f32) * scale).round() as u32;
+        let width = ((tree.size().width()) * scale).round() as u32;
+        let height = ((tree.size().height()) * scale).round() as u32;
 
         let mut pixmap = resvg::tiny_skia::Pixmap::new(width.max(1), height.max(1))?;
         resvg::render(
