@@ -28,6 +28,12 @@
   - `README.zh-TW.md`（繁體中文版）
 - 兩份文件頂部需互相提供語系切換連結。
 
+### 5. 🔍 GitHub Actions CI/CD 雲端編譯追蹤與驗證 (Mandatory CI/CD Verification)
+- **推送 Tag 後必須主動追蹤 GitHub Actions 建置狀態**：
+  - 推送 Release Tag 後，Agent 必須透過 `read_url_content` 輪詢或檢查 GitHub Actions Workflow 執行進度與 Release 發布狀態。
+  - 若 CI/CD 發生編譯失敗（如依賴版本衝突、型別不相容、警告錯誤等），**必須立即深入定位問題並修復**，重新升級版本號並推送新 Tag，絕不可放任失敗的建置或未發布的 Release。
+  - 確認雲端 Release（包含 Windows x86_64 與 aarch64 的 `.zip` 產物）完整發布成功後，方可引導使用者執行更新或結束任務。
+
 ---
 
 ## 🛠️ Windows API 與 Rust 開發經驗庫 (Technical Gotchas & Best Practices)
@@ -164,11 +170,21 @@
   - **步驟 3**：依序呼叫 `folder_view.ItemCount(SVGIO_SELECTION)`、`folder_view.Items::<IShellItemArray>(SVGIO_SELECTION)`、`SVGIO_CHECKED`（支援核取方塊）以及 `GetFocusedItem()` + `SHGetPathFromIDListW(pidl, &mut [u16; 260])`。
   - **步驟 4**：透過 `IShellItemArray.GetItemAt(i).GetDisplayName(SIGDN_FILESYSPATH)` 取得絕對路徑，穿透所有 Windows 10/11 分頁與勾選模式！
 
+### 14. Mermaid 圖表混合渲染架構 (Hybrid SVG Layout + Native Font Overlay)
+- **純 SVG 渲染字型丟失與依賴衝突問題**：
+  - `egui_extras` 內建的 SVG 渲染器在解析 Mermaid 生成的 SVG 時，因缺乏向量文字路徑化引擎，會忽略 `<text>` 標籤導致方框內文字空白。
+  - 若強行引入外部重型套件（如不同版本的 `resvg` / `usvg`），會因依賴樹版本衝突引發雲端 CI/CD 建置失敗。
+- **標準混合渲染解決架構**：
+  - **步驟 1**：透過 `mermaid_rs_renderer::render(code)` 取得 SVG 字串與 viewBox 尺寸。
+  - **步驟 2**：輕量解析 `<text ...>` 節點的座標 `(x, y)`、`text-anchor`、`font-size`、`fill` 與文字內容。
+  - **步驟 3**：使用 `egui::Image::from_bytes` 以 `paint_at` 渲染底層 SVG 形狀（節點框、連線、箭頭）。
+  - **步驟 4**：使用 `ui.painter().text(...)` 將文字疊加於精確座標上，直接運用 `egui` 已載入的微軟正黑體與 Emoji 字型，兼具 100% CJK 中文支援、深色主題適應、0 外部衝突依賴與 60fps 高效渲染！
+
 ---
 
 ## 🚀 標準開發與發布工作流程 (Standard Release Workflow)
 
-當進行程式碼修改與功能更新時，請遵循以下四步驟標準流程：
+當進行程式碼修改與功能更新時，請遵循以下五步驟標準流程：
 
 ```bash
 # 1. 升級版本號與相關程式碼、雙語 README、AGENTS.md
@@ -183,4 +199,7 @@ git push origin main
 # 4. 建立對應版本的 Release Tag 並推送 (觸發 GitHub Actions 雲端自動編譯與發布)
 git tag vX.Y.Z
 git push origin vX.Y.Z
+
+# 5. 追蹤 GitHub Actions CI/CD 雲端編譯狀態並驗證發布 (Mandatory)
+# 透過 https://github.com/BingFengHung/flash-md/actions 確認 Workflow 成功通過並產出 Release
 ```
