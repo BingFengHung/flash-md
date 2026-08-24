@@ -740,13 +740,41 @@ impl<'a> RenderContext<'a> {
         }
     }
 
+/// 快取 Mermaid 圖表渲染結果（避免每次捲動 frame 重複編譯 SVG，大幅提升效能）
+pub fn get_or_render_mermaid(code: &str) -> Option<String> {
+    use std::sync::Mutex;
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+    static CACHE: Mutex<Option<HashMap<u64, Option<String>>>> = Mutex::new(None);
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let mut guard = CACHE.lock().ok()?;
+    let map = guard.get_or_insert_with(HashMap::new);
+
+    if let Some(cached) = map.get(&key) {
+        return cached.clone();
+    }
+
+    let rendered = mermaid_rs_renderer::render(code).ok();
+    map.insert(key, rendered.clone());
+    rendered
+}
+
     fn render_code_block(&mut self, ui: &mut Ui) {
         let lang = self.code_block_lang.trim();
         let code = self.code_block_content.trim_end();
 
-        // 1. Mermaid 向量流程圖即時渲染
+        // 1. Mermaid 向量流程圖即時渲染 (具備記憶體快取與 60fps 滑順捲動)
         if lang.eq_ignore_ascii_case("mermaid") && !code.trim().is_empty() {
-            if let Ok(svg_str) = mermaid_rs_renderer::render(code) {
+            if let Some(svg_str) = get_or_render_mermaid(code) {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                code.hash(&mut hasher);
+                let code_hash = hasher.finish();
+
                 ui.add_space(4.0_f32);
                 Frame::none()
                     .fill(self.theme.card_bg_color())
@@ -763,7 +791,7 @@ impl<'a> RenderContext<'a> {
                             );
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let copy_id = ui.make_persistent_id(format!("md_mermaid_copy_{:p}_{}", code.as_ptr(), code.len()));
+                                let copy_id = ui.make_persistent_id(format!("md_mermaid_copy_{:x}", code_hash));
                                 let is_copied = ui.ctx().data(|d| {
                                     d.get_temp::<std::time::Instant>(copy_id)
                                         .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
@@ -794,7 +822,7 @@ impl<'a> RenderContext<'a> {
                         ui.separator();
                         ui.add_space(8.0_f32);
 
-                        let uri = format!("bytes://mermaid_{:p}_{}.svg", code.as_ptr(), code.len());
+                        let uri = format!("bytes://mermaid_{:x}.svg", code_hash);
                         let img = egui::Image::from_bytes(uri, svg_str.into_bytes())
                             .rounding(Rounding::same(4.0_f32))
                             .fit_to_original_size(self.font_scale);
