@@ -957,36 +957,53 @@ impl MdPreviewApp {
         let mut should_close = false;
         let mut target_line = None;
 
+        let toc = crate::markdown::extract_markdown_toc(&self.content);
+
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("📑 目錄大綱")
                     .strong()
-                    .size(12.5 * self.font_scale)
+                    .size(13.0 * self.font_scale)
                     .color(self.theme.accent_color()),
             );
+            if !toc.is_empty() {
+                Frame::none()
+                    .fill(self.theme.code_bg_color())
+                    .rounding(Rounding::same(4.0))
+                    .inner_margin(Margin::symmetric(5.0, 1.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!("{} 節", toc.len()))
+                                .size(10.5 * self.font_scale)
+                                .color(self.theme.text_secondary()),
+                        );
+                    });
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.small_button("✕").on_hover_text("收起大綱 (Ctrl+T)").clicked() {
                     should_close = true;
                 }
             });
         });
-        ui.add_space(3.0);
+        ui.add_space(4.0);
         ui.separator();
-        ui.add_space(3.0);
+        ui.add_space(4.0);
 
-        let toc = crate::markdown::extract_markdown_toc(&self.content);
         if toc.is_empty() {
-            ui.label(
-                RichText::new("此文件無章節標題")
-                    .italics()
-                    .color(self.theme.text_secondary())
-                    .size(11.5 * self.font_scale),
-            );
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                ui.label(
+                    RichText::new("此文件無章節標題")
+                        .italics()
+                        .color(self.theme.text_secondary())
+                        .size(12.0 * self.font_scale),
+                );
+            });
             return (should_close, None);
         }
 
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.spacing_mut().item_spacing.y = 4.0;
             for item in toc {
                 let indent = ((item.level.saturating_sub(1)) as f32) * 10.0 * self.font_scale;
                 let (font_size, is_h1) = match item.level {
@@ -996,21 +1013,44 @@ impl MdPreviewApp {
                     _ => (11.0 * self.font_scale, false),
                 };
 
-                ui.horizontal(|ui| {
+                let item_resp = ui.horizontal(|ui| {
                     if indent > 0.0 {
                         ui.add_space(indent);
                     }
-                    let text = if is_h1 {
+                    Frame::none()
+                        .fill(self.theme.code_bg_color())
+                        .rounding(Rounding::same(3.0))
+                        .stroke(Stroke::new(0.5_f32, if is_h1 { self.theme.accent_color() } else { self.theme.border_color() }))
+                        .inner_margin(Margin::symmetric(4.0, 1.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(format!("H{}", item.level))
+                                    .size(9.0 * self.font_scale)
+                                    .color(if is_h1 { self.theme.accent_color() } else { self.theme.text_secondary() })
+                                    .monospace(),
+                            );
+                        });
+
+                    let title_text = if is_h1 {
                         RichText::new(&item.title).strong().size(font_size).color(self.theme.text_primary())
                     } else {
                         RichText::new(&item.title).size(font_size).color(self.theme.text_secondary())
                     };
 
-                    let btn = ui.add(egui::Button::new(text).frame(false));
-                    if btn.on_hover_text(format!("跳轉至 H{}: {}", item.level, item.title)).clicked() {
-                        target_line = Some(item.line_idx);
+                    let btn = ui.add(
+                        egui::Button::new(title_text)
+                            .wrap()
+                            .frame(false),
+                    );
+                    if btn.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                     }
+                    btn.on_hover_text(format!("第 {} 行: {}", item.line_idx + 1, item.title))
                 });
+
+                if item_resp.inner.clicked() {
+                    target_line = Some(item.line_idx);
+                }
             }
         });
 
@@ -1710,6 +1750,40 @@ impl eframe::App for MdPreviewApp {
                 });
             });
 
+        let mut should_close_toc = false;
+        let mut toc_target_line = None;
+
+        // 如果開啟大綱模式且處於 Markdown 檢視，先掛載獨立可調整寬度的左側側邊欄 (SidePanel)
+        if self.toc_open && matches!(self.view_mode, ViewMode::Markdown) && !self.content.is_empty() {
+            egui::SidePanel::left("toc_side_panel")
+                .resizable(true)
+                .default_width(260.0 * self.font_scale)
+                .min_width(180.0 * self.font_scale)
+                .max_width(450.0 * self.font_scale)
+                .frame(
+                    Frame::none()
+                        .fill(self.theme.card_bg_color())
+                        .inner_margin(Margin::same(12.0 * self.font_scale))
+                        .stroke(Stroke::new(1.0_f32, self.theme.border_color())),
+                )
+                .show(ctx, |ui| {
+                    let (close, target_line) = self.render_toc_sidebar(ui);
+                    if close {
+                        should_close_toc = true;
+                    }
+                    if target_line.is_some() {
+                        toc_target_line = target_line;
+                    }
+                });
+        }
+
+        if should_close_toc {
+            self.toc_open = false;
+        }
+        if let Some(line) = toc_target_line {
+            self.scroll_to_line(line);
+        }
+
         // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖)
         egui::CentralPanel::default()
             .frame(
@@ -1730,65 +1804,20 @@ impl eframe::App for MdPreviewApp {
 
                     match self.view_mode {
                         ViewMode::Markdown => {
-                            let mut should_close_toc = false;
-                            let mut toc_target_line = None;
-
-                            if self.toc_open {
-                                ui.horizontal(|ui| {
-                                    // 左側 TOC 大綱側邊欄
-                                    ui.allocate_ui_with_layout(
-                                        Vec2::new(210.0 * self.font_scale, ui.available_height()),
-                                        Layout::top_down(Align::Min),
-                                        |ui| {
-                                            let (close, line) = self.render_toc_sidebar(ui);
-                                            if close {
-                                                should_close_toc = true;
-                                            }
-                                            if line.is_some() {
-                                                toc_target_line = line;
-                                            }
-                                        },
-                                    );
-                                    ui.separator();
-
-                                    // 右側 Markdown 富文字渲染
-                                    let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
-                                    if self.reset_scroll_to_top {
-                                        scroll = scroll.vertical_scroll_offset(0.0);
-                                    } else if let Some(offset) = self.target_scroll_offset {
-                                        scroll = scroll.vertical_scroll_offset(offset);
-                                    }
-                                    scroll.show(ui, |ui| {
-                                        if self.keyboard_scroll_delta != 0.0 {
-                                            ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
-                                        }
-                                        let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
-                                        renderer.render(ui, &self.content);
-                                    });
-                                });
-                            } else {
-                                // 單欄 Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部與鍵盤方向鍵上下捲動)
-                                let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
-                                if self.reset_scroll_to_top {
-                                    scroll = scroll.vertical_scroll_offset(0.0);
-                                } else if let Some(offset) = self.target_scroll_offset {
-                                    scroll = scroll.vertical_scroll_offset(offset);
+                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部與鍵盤方向鍵上下捲動)
+                            let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                            if self.reset_scroll_to_top {
+                                scroll = scroll.vertical_scroll_offset(0.0);
+                            } else if let Some(offset) = self.target_scroll_offset {
+                                scroll = scroll.vertical_scroll_offset(offset);
+                            }
+                            scroll.show(ui, |ui| {
+                                if self.keyboard_scroll_delta != 0.0 {
+                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
                                 }
-                                scroll.show(ui, |ui| {
-                                    if self.keyboard_scroll_delta != 0.0 {
-                                        ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
-                                    }
-                                    let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
-                                    renderer.render(ui, &self.content);
-                                });
-                            }
-
-                            if should_close_toc {
-                                self.toc_open = false;
-                            }
-                            if let Some(line) = toc_target_line {
-                                self.scroll_to_line(line);
-                            }
+                                let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
+                                renderer.render(ui, &self.content);
+                            });
                         }
                         ViewMode::Table { separator } => {
                             // 現代斑馬紋資料表格模式 (支援 CSV 與 TSV 欄位解析、搜尋高亮與滾動)
