@@ -14,7 +14,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow,
-    GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowThreadProcessId, IsWindowVisible,
+    GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT, GUITHREADINFO,
     HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE,
     SW_SHOW,
@@ -63,9 +63,12 @@ pub fn show_and_focus_app_window() {
                 let _ = AttachThreadInput(cur_thread, fg_thread, true);
             }
 
-            // 2. 顯示並還原視窗
-            let _ = ShowWindow(hwnd, SW_RESTORE);
-            let _ = ShowWindow(hwnd, SW_SHOW);
+            // 2. 顯示視窗：若視窗被最小化則還原；若已最大化或正常展開則保持現有大小與最大化狀態
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            } else {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+            }
             let _ = BringWindowToTop(hwnd);
 
             // 3. 瞬間切換為 TOPMOST 彈至最前端，再還原為一般層級
