@@ -255,8 +255,10 @@ pub fn get_or_render_mermaid(code: &str) -> Option<Vec<u8>> {
     use std::sync::Mutex;
     use std::collections::HashMap;
     use std::hash::{Hash, Hasher};
+    use std::sync::Arc;
+    use resvg::usvg::TreeParsing;
     static CACHE: Mutex<Option<HashMap<u64, Option<Vec<u8>>>>> = Mutex::new(None);
-    static FONT_DB: std::sync::OnceLock<resvg::usvg::fontdb::Database> = std::sync::OnceLock::new();
+    static FONT_DB: std::sync::OnceLock<Arc<resvg::usvg::fontdb::Database>> = std::sync::OnceLock::new();
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut hasher);
@@ -275,16 +277,13 @@ pub fn get_or_render_mermaid(code: &str) -> Option<Vec<u8>> {
         let fontdb = FONT_DB.get_or_init(|| {
             let mut db = resvg::usvg::fontdb::Database::new();
             db.load_system_fonts();
-            db
+            Arc::new(db)
         });
 
-        let opt = resvg::usvg::Options::default();
-        let mut tree = resvg::usvg::Tree::from_str(&svg_str, &opt).ok()?;
+        let mut opt = resvg::usvg::Options::default();
+        opt.fontdb = fontdb.clone();
 
-        let steps = resvg::usvg::PostProcessingSteps {
-            convert_text_into_paths: true,
-        };
-        tree.postprocess(steps, fontdb);
+        let tree = resvg::usvg::Tree::from_str(&svg_str, &opt).ok()?;
 
         let size = tree.size.to_int_size();
         let scale = 2.0_f32;
