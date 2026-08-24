@@ -1,7 +1,7 @@
 use crate::theme::AppTheme;
 use egui::{
-    text::LayoutJob, Align, Color32, FontId, Frame, Layout, Margin,
-    RichText, Rounding, Stroke, Ui, Vec2,
+    text::LayoutJob, Align, Align2, Color32, FontId, Frame, Layout, Margin,
+    RichText, Rounding, Sense, Stroke, Ui, Vec2,
 };
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::sync::OnceLock;
