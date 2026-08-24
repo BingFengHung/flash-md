@@ -1,8 +1,8 @@
 use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
 use crate::markdown::{
-    get_image_badge, get_language_badge, is_code_extension, is_image_extension,
-    render_code_viewer, MarkdownRenderer,
+    calculate_text_stats, get_image_badge, get_language_badge, is_code_extension,
+    is_image_extension, is_pdf_extension, render_code_viewer, MarkdownRenderer,
 };
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
@@ -73,6 +73,7 @@ pub struct MdPreviewApp {
     pub status_toast: Option<(String, std::time::Instant)>,
     pub reset_scroll_to_top: bool,
     pub keyboard_scroll_delta: f32,
+    pub reading_progress: f32,
 }
 
 impl MdPreviewApp {
@@ -138,6 +139,7 @@ impl MdPreviewApp {
             status_toast: None,
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
+            reading_progress: 0.0,
         };
 
         if !is_visible {
@@ -295,6 +297,40 @@ impl MdPreviewApp {
                     self.set_toast(format!("⚡ 已開啟: {} ({} {})", fname, emoji, name));
                     return;
                 }
+            } else if is_pdf_extension(&ext) {
+                if let Ok(bytes) = fs::read(path) {
+                    if let Ok((pdf_md, page_count)) = crate::markdown::extract_text_from_pdf_bytes(&bytes) {
+                        self.image_uri = None;
+                        self.image_bytes = None;
+                        self.view_mode = ViewMode::Markdown;
+                        self.line_count = pdf_md.lines().count();
+                        self.content = pdf_md;
+                        self.current_file = Some(path.to_path_buf());
+
+                        if let Ok(metadata) = fs::metadata(path) {
+                            let len = metadata.len();
+                            self.file_size_str = if len < 1024 {
+                                format!("{} B", len)
+                            } else if len < 1024 * 1024 {
+                                format!("{:.1} KB", len as f64 / 1024.0)
+                            } else {
+                                format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
+                            };
+
+                            if let Ok(mod_time) = metadata.modified() {
+                                let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
+                                self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
+                            }
+                        }
+
+                        self.file_watcher.watch_file(path);
+                        self.visible = true;
+                        show_and_focus_app_window();
+                        let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                        self.set_toast(format!("⚡ 已開啟 PDF 快速文字預覽: {} (共 {} 頁)", fname, page_count));
+                        return;
+                    }
+                }
             } else if let Ok(text) = fs::read_to_string(path) {
                 self.image_uri = None;
                 self.image_bytes = None;
@@ -411,6 +447,32 @@ impl MdPreviewApp {
                             let (name, emoji) = get_image_badge(&ext);
                             self.set_toast(format!("⚡ 已自 ZIP 即時預覽: {} ({} {}) 📦", fname, emoji, name));
                             return;
+                        }
+                    } else if is_pdf_extension(&ext) {
+                        if let Ok(bytes) = read_bytes_from_zip(&zip_path, inner_entry_str) {
+                            if let Ok((pdf_md, page_count)) = crate::markdown::extract_text_from_pdf_bytes(&bytes) {
+                                self.image_uri = None;
+                                self.image_bytes = None;
+                                self.view_mode = ViewMode::Markdown;
+                                self.line_count = pdf_md.lines().count();
+                                self.content = pdf_md;
+                                let len = bytes.len();
+                                self.file_size_str = if len < 1024 {
+                                    format!("{} B", len)
+                                } else if len < 1024 * 1024 {
+                                    format!("{:.1} KB", len as f64 / 1024.0)
+                                } else {
+                                    format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
+                                };
+                                self.last_modified_str = "ZIP 壓縮檔".to_string();
+                                self.current_file = Some(path.to_path_buf());
+                                self.visible = true;
+                                show_and_focus_app_window();
+
+                                let fname = Path::new(inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(inner_entry_str);
+                                self.set_toast(format!("⚡ 已自 ZIP 即時預覽 PDF: {} (共 {} 頁) 📦", fname, page_count));
+                                return;
+                            }
                         }
                     } else if let Ok(text) = read_text_from_zip(&zip_path, inner_entry_str) {
                         self.image_uri = None;
@@ -1466,16 +1528,36 @@ impl eframe::App for MdPreviewApp {
                                         .map(|(cur, total)| format!("[{}/{}]  •  ", cur, total))
                                         .unwrap_or_default();
 
-                                    let info_text = if let ViewMode::Image { ref format } = self.view_mode {
-                                        format!("{}{format_upper}  •  {}  •  {}", sibling_str, self.file_size_str, self.last_modified_str, format_upper = format.to_uppercase())
+                                    let (info_text, tooltip_text) = if let ViewMode::Image { ref format } = self.view_mode {
+                                        (
+                                            format!("{}{format_upper}  •  {}  •  {}", sibling_str, self.file_size_str, self.last_modified_str, format_upper = format.to_uppercase()),
+                                            format!("🖼️ 圖片資訊\n• 格式: {}\n• 檔案大小: {}\n• 修改時間: {}", format.to_uppercase(), self.file_size_str, self.last_modified_str),
+                                        )
+                                    } else if matches!(self.view_mode, ViewMode::Markdown) {
+                                        let stats = calculate_text_stats(&self.content);
+                                        let words_str = if stats.cjk_chars > 0 && stats.words > 0 {
+                                            format!("{} 中文 / {} 字", stats.cjk_chars, stats.words)
+                                        } else if stats.cjk_chars > 0 {
+                                            format!("{} 字", stats.cjk_chars)
+                                        } else {
+                                            format!("{} 詞", stats.words)
+                                        };
+                                        (
+                                            format!("{}{} 行  •  {}  •  ⏱️ {} 分鐘  •  {}  •  {}", sibling_str, self.line_count, words_str, stats.reading_time_mins, self.file_size_str, self.last_modified_str),
+                                            format!("📊 文本統計資訊\n• 總行數: {} 行\n• 中文字數 (CJK): {} 字\n• 英文字數 (Words): {} 詞\n• 總字元數 (不含空白): {} 字元\n• 預估閱讀時間: 約 {} 分鐘 (中速 350 字/分)\n• 檔案大小: {}\n• 修改時間: {}", self.line_count, stats.cjk_chars, stats.words, stats.total_chars, stats.reading_time_mins, self.file_size_str, self.last_modified_str),
+                                        )
                                     } else {
-                                        format!("{}{} 行  •  {}  •  {}", sibling_str, self.line_count, self.file_size_str, self.last_modified_str)
+                                        (
+                                            format!("{}{} 行  •  {}  •  {}", sibling_str, self.line_count, self.file_size_str, self.last_modified_str),
+                                            format!("📄 檔案資訊\n• 總行數: {} 行\n• 檔案大小: {}\n• 修改時間: {}", self.line_count, self.file_size_str, self.last_modified_str),
+                                        )
                                     };
+
                                     ui.label(
                                         RichText::new(info_text)
                                             .size(10.5)
                                             .color(self.theme.text_secondary()),
-                                    );
+                                    ).on_hover_text(tooltip_text);
                                 });
                         });
                     }
@@ -1804,20 +1886,34 @@ impl eframe::App for MdPreviewApp {
 
                     match self.view_mode {
                         ViewMode::Markdown => {
-                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部與鍵盤方向鍵上下捲動)
+                            // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部、鍵盤方向鍵上下捲動與動態閱讀進度條)
                             let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
                             if self.reset_scroll_to_top {
                                 scroll = scroll.vertical_scroll_offset(0.0);
                             } else if let Some(offset) = self.target_scroll_offset {
                                 scroll = scroll.vertical_scroll_offset(offset);
                             }
-                            scroll.show(ui, |ui| {
+                            let scroll_out = scroll.show(ui, |ui| {
                                 if self.keyboard_scroll_delta != 0.0 {
                                     ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
                                 }
                                 let renderer = MarkdownRenderer::new(self.theme, self.font_scale, &self.search_query, active_match_idx);
                                 renderer.render(ui, &self.content);
                             });
+
+                            let max_scroll = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(1.0);
+                            self.reading_progress = (scroll_out.state.offset.y / max_scroll).clamp(0.0, 1.0);
+
+                            // 繪製頂部閱讀進度條 (位於內文區最上方)
+                            if self.reading_progress > 0.002 {
+                                let rect = ui.clip_rect();
+                                let bar_width = rect.width() * self.reading_progress;
+                                ui.painter().hline(
+                                    rect.min.x..=rect.min.x + bar_width,
+                                    rect.min.y,
+                                    Stroke::new(2.5_f32, self.theme.accent_color()),
+                                );
+                            }
                         }
                         ViewMode::Table { separator } => {
                             // 現代斑馬紋資料表格模式 (支援 CSV 與 TSV 欄位解析、搜尋高亮與滾動)

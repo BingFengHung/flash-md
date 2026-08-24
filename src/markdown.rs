@@ -1601,4 +1601,108 @@ pub fn minify_json(input: &str) -> String {
     result
 }
 
+/// 判斷特定副檔名是否為 PDF 文件
+pub fn is_pdf_extension(ext: &str) -> bool {
+    ext.eq_ignore_ascii_case("pdf")
+}
+
+/// 自 PDF 二進制資料中即時擷取純文字與分頁結構，轉換為 Markdown 格式
+pub fn extract_text_from_pdf_bytes(bytes: &[u8]) -> Result<(String, usize), String> {
+    let doc = lopdf::Document::load_mem(bytes).map_err(|e| format!("PDF 解析失敗: {}", e))?;
+    let page_numbers: Vec<u32> = doc.get_pages().keys().cloned().collect();
+    let mut sorted_pages = page_numbers;
+    sorted_pages.sort();
+
+    let total_pages = sorted_pages.len();
+    if total_pages == 0 {
+        return Ok(("（此 PDF 文件為空或無頁面）".to_string(), 0));
+    }
+
+    let mut pages_text = Vec::new();
+    for &page_num in &sorted_pages {
+        let text = doc.extract_text(&[page_num]).unwrap_or_default();
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            pages_text.push(format!("### 📄 第 {} / {} 頁\n\n{}\n", page_num, total_pages, trimmed));
+        }
+    }
+
+    if pages_text.is_empty() {
+        Ok((
+            format!("### 📄 PDF 快速預覽 (共 {} 頁)\n\n> ⚠️ 此 PDF 文件的頁面可能為純掃描圖檔或加密內容，未包含可提取的內嵌文字字串。", total_pages),
+            total_pages,
+        ))
+    } else {
+        Ok((pages_text.join("\n---\n\n"), total_pages))
+    }
+}
+
+/// Markdown / 文本統計數據
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TextStats {
+    pub cjk_chars: usize,
+    pub words: usize,
+    pub total_chars: usize,
+    pub lines: usize,
+    pub reading_time_mins: usize,
+}
+
+/// 快速計算中英文統計字數與預估閱讀時間
+pub fn calculate_text_stats(text: &str) -> TextStats {
+    let mut cjk_chars = 0;
+    let mut words = 0;
+    let mut total_chars = 0;
+    let mut in_word = false;
+
+    for ch in text.chars() {
+        if !ch.is_whitespace() {
+            total_chars += 1;
+        }
+
+        // CJK 統一表意文字、注音、假名、諺文與常用 CJK 標點
+        let is_cjk = matches!(ch as u32,
+            0x4E00..=0x9FFF | // CJK 統一表意符號
+            0x3400..=0x4DBF | // CJK 擴展 A
+            0x20000..=0x2A6DF | // CJK 擴展 B
+            0x3040..=0x309F | // 日文平假名
+            0x30A0..=0x30FF | // 日文片假名
+            0xAC00..=0xD7AF | // 韓文音節
+            0x3100..=0x312F | // 注音符號
+            0x3000..=0x303F   // CJK 符號與標點
+        );
+
+        if is_cjk {
+            cjk_chars += 1;
+            if in_word {
+                words += 1;
+                in_word = false;
+            }
+        } else if ch.is_alphanumeric() {
+            in_word = true;
+        } else if in_word {
+            words += 1;
+            in_word = false;
+        }
+    }
+
+    if in_word {
+        words += 1;
+    }
+
+    let lines = text.lines().count();
+
+    // 閱讀時間計算：中文字約每分鐘 350 字，英文字約每分鐘 220 字
+    let total_reading_units = (cjk_chars as f32) + (words as f32) * 1.5;
+    let reading_time_mins = (total_reading_units / 350.0).ceil() as usize;
+
+    TextStats {
+        cjk_chars,
+        words,
+        total_chars,
+        lines,
+        reading_time_mins: reading_time_mins.max(1),
+    }
+}
+
+
 
