@@ -250,12 +250,13 @@ struct RenderContext<'a> {
     ordered_list_index: Option<u64>,
 }
 
-/// 快取 Mermaid 圖表渲染結果（避免每次捲動 frame 重複編譯 SVG，大幅提升效能）
-pub fn get_or_render_mermaid(code: &str) -> Option<String> {
+/// 快取 Mermaid 圖表渲染結果（透過 resvg + fontdb 將向量文字轉為路徑，並光柵化為高解析度 PNG）
+pub fn get_or_render_mermaid(code: &str) -> Option<Vec<u8>> {
     use std::sync::Mutex;
     use std::collections::HashMap;
     use std::hash::{Hash, Hasher};
-    static CACHE: Mutex<Option<HashMap<u64, Option<String>>>> = Mutex::new(None);
+    static CACHE: Mutex<Option<HashMap<u64, Option<Vec<u8>>>>> = Mutex::new(None);
+    static FONT_DB: std::sync::OnceLock<resvg::usvg::fontdb::Database> = std::sync::OnceLock::new();
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     code.hash(&mut hasher);
@@ -268,14 +269,40 @@ pub fn get_or_render_mermaid(code: &str) -> Option<String> {
         return cached.clone();
     }
 
-    let rendered = mermaid_rs_renderer::render(code).ok().map(|mut svg| {
-        svg = svg.replace("&quot;Inter&quot;, &quot;system-ui&quot;, &quot;Segoe UI&quot;", "sans-serif, Arial, 'Microsoft JhengHei'");
-        svg = svg.replace("\"Inter\", \"system-ui\"", "sans-serif, Arial, 'Microsoft JhengHei'");
-        svg = svg.replace("font-family=\"Inter\"", "font-family=\"sans-serif, Arial, 'Microsoft JhengHei'\"");
-        svg
-    });
-    map.insert(key, rendered.clone());
-    rendered
+    let rendered_png = (|| -> Option<Vec<u8>> {
+        let svg_str = mermaid_rs_renderer::render(code).ok()?;
+
+        let fontdb = FONT_DB.get_or_init(|| {
+            let mut db = resvg::usvg::fontdb::Database::new();
+            db.load_system_fonts();
+            db
+        });
+
+        let opt = resvg::usvg::Options::default();
+        let mut tree = resvg::usvg::Tree::from_str(&svg_str, &opt).ok()?;
+
+        let steps = resvg::usvg::PostProcessingSteps {
+            convert_text_into_paths: true,
+        };
+        tree.postprocess(steps, fontdb);
+
+        let size = tree.size.to_int_size();
+        let scale = 2.0_f32;
+        let width = ((size.width() as f32) * scale).round() as u32;
+        let height = ((size.height() as f32) * scale).round() as u32;
+
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(width.max(1), height.max(1))?;
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(scale, scale),
+            &mut pixmap.as_mut(),
+        );
+
+        pixmap.encode_png().ok()
+    })();
+
+    map.insert(key, rendered_png.clone());
+    rendered_png
 }
 
 impl<'a> RenderContext<'a> {
@@ -791,7 +818,7 @@ impl<'a> RenderContext<'a> {
 
         // 1. Mermaid 向量流程圖即時渲染 (具備記憶體快取與 60fps 滑順捲動)
         if lang.eq_ignore_ascii_case("mermaid") && !code.trim().is_empty() {
-            if let Some(svg_str) = get_or_render_mermaid(code) {
+            if let Some(png_bytes) = get_or_render_mermaid(code) {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 use std::hash::{Hash, Hasher};
                 code.hash(&mut hasher);
@@ -844,10 +871,10 @@ impl<'a> RenderContext<'a> {
                         ui.separator();
                         ui.add_space(8.0_f32);
 
-                        let uri = format!("bytes://mermaid_{:x}.svg", code_hash);
-                        let img = egui::Image::from_bytes(uri, svg_str.into_bytes())
+                        let uri = format!("bytes://mermaid_{:x}.png", code_hash);
+                        let img = egui::Image::from_bytes(uri, png_bytes)
                             .rounding(Rounding::same(4.0_f32))
-                            .fit_to_original_size(self.font_scale);
+                            .fit_to_original_size(0.5_f32 * self.font_scale);
 
                         ui.centered_and_justified(|ui| {
                             ui.add(img);
