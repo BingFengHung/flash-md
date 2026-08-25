@@ -14,6 +14,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
 - ✏️ **In-Place Full-Screen Editor**: Press **`E`** or **`Ctrl + E`** during preview to seamlessly switch to an in-place markdown/text editor—modify files without launching heavy external editors!
+- 🔤 **Smart IME Enter Filter**: Flawless compatibility with Chinese (Zhuyin/Bopomofo, Pinyin) and Japanese IMEs—Enter key confirms composition without inserting unwanted newlines!
 - 💾 **Manual & Auto-Debounce Save**: Save manually with `Ctrl + S` or enable "Auto-debounce save (800ms)" in settings, with real-time status bar indication of unsaved changes!
 - ⚙️ **Persistent User Preferences**: Click "⚙️ Settings" to customize and permanently persist your preferred **Dark/Light theme**, save mode, and font scale across reboots and updates!
 - 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs to automatically detect the selected file when `Alt + Space` is pressed.

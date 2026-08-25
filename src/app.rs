@@ -83,6 +83,9 @@ pub struct MdPreviewApp {
     pub reset_scroll_to_top: bool,
     pub keyboard_scroll_delta: f32,
     pub reading_progress: f32,
+
+    pub last_ime_commit: Option<std::time::Instant>,
+    pub ime_is_preediting: bool,
 }
 
 impl MdPreviewApp {
@@ -159,6 +162,8 @@ impl MdPreviewApp {
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
             reading_progress: 0.0,
+            last_ime_commit: None,
+            ime_is_preediting: false,
         };
 
         if !is_visible {
@@ -1348,6 +1353,53 @@ impl eframe::App for MdPreviewApp {
                     self.last_edit_instant = None;
                 }
             }
+        }
+
+        // IME (注音/拼音) 選字確認 Enter 防誤換行過濾：
+        // 當使用者在 Windows 輸入法 (如微軟注音、拼音) 中選字按下 Enter 確認時，
+        // 系統會同時送出 Ime::Commit 與 Key::Enter/Text("\n")，導致字元輸入後被額外插入換行。
+        // 此處偵測如果本幀有 Ime::Commit 事件，或剛結束預選字詞，或前一瞬剛發生 IME Commit，
+        // 則主動過濾掉伴隨的 Enter 按鍵事件與換行字元。
+        let now = std::time::Instant::now();
+        let mut has_ime_commit = false;
+        let mut preedit_active = self.ime_is_preediting;
+
+        ctx.input_mut(|i| {
+            for ev in &i.events {
+                match ev {
+                    egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                        preedit_active = !text.is_empty();
+                    }
+                    egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                        has_ime_commit = true;
+                        preedit_active = false;
+                    }
+                    _ => {}
+                }
+            }
+
+            let was_recent_commit = if let Some(instant) = self.last_ime_commit {
+                instant.elapsed() < Duration::from_millis(80)
+            } else {
+                false
+            };
+
+            // 若目前正處於注音組字階段、本幀剛 Commit 字詞、或 80ms 內剛 Commit，
+            // 則確認動作的 Enter 按鍵不應視為文字編輯換行。
+            if has_ime_commit || was_recent_commit || (self.ime_is_preediting && !preedit_active) {
+                i.events.retain(|ev| {
+                    match ev {
+                        egui::Event::Key { key: egui::Key::Enter, .. } => false,
+                        egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => false,
+                        _ => true,
+                    }
+                });
+            }
+        });
+
+        self.ime_is_preediting = preedit_active;
+        if has_ime_commit {
+            self.last_ime_commit = Some(now);
         }
 
         // 快捷鍵監聽
