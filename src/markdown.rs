@@ -164,6 +164,7 @@ pub struct MarkdownRenderer<'a> {
     pub search_query: &'a str,
     pub active_match_index: Option<usize>,
     pub target_anchor: Option<&'a str>,
+    pub base_dir: Option<&'a std::path::Path>,
     pub _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -174,6 +175,7 @@ impl<'a> MarkdownRenderer<'a> {
         search_query: &'a str,
         active_match_index: Option<usize>,
         target_anchor: Option<&'a str>,
+        base_dir: Option<&'a std::path::Path>,
     ) -> Self {
         Self {
             theme,
@@ -181,6 +183,7 @@ impl<'a> MarkdownRenderer<'a> {
             search_query,
             active_match_index,
             target_anchor,
+            base_dir,
             _marker: std::marker::PhantomData,
         }
     }
@@ -200,6 +203,7 @@ impl<'a> MarkdownRenderer<'a> {
             self.search_query,
             self.active_match_index,
             self.target_anchor,
+            self.base_dir,
         );
 
         for event in parser {
@@ -228,6 +232,7 @@ struct RenderContext<'a> {
     search_query: &'a str,
     active_match_index: Option<usize>,
     target_anchor: Option<&'a str>,
+    base_dir: Option<&'a std::path::Path>,
     clicked_anchor: Option<String>,
     match_counter: usize,
     inlines: Vec<InlineSpan>,
@@ -235,6 +240,8 @@ struct RenderContext<'a> {
     current_italic: bool,
     current_strikethrough: bool,
     current_link: Option<String>,
+    current_image_url: Option<String>,
+    current_image_alt: String,
     in_code_block: bool,
     code_block_lang: String,
     code_block_content: String,
@@ -433,6 +440,24 @@ pub fn get_or_render_mermaid_diagram(code: &str) -> Option<MermaidDiagramData> {
     parsed
 }
 
+fn decode_uri_component(s: &str) -> String {
+    let mut result = String::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte_val) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                result.push(byte_val as char);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
 impl<'a> RenderContext<'a> {
     fn new(
         theme: AppTheme,
@@ -440,6 +465,7 @@ impl<'a> RenderContext<'a> {
         search_query: &'a str,
         active_match_index: Option<usize>,
         target_anchor: Option<&'a str>,
+        base_dir: Option<&'a std::path::Path>,
     ) -> Self {
         Self {
             theme,
@@ -447,6 +473,7 @@ impl<'a> RenderContext<'a> {
             search_query,
             active_match_index,
             target_anchor,
+            base_dir,
             clicked_anchor: None,
             match_counter: 0,
             inlines: Vec::new(),
@@ -454,6 +481,8 @@ impl<'a> RenderContext<'a> {
             current_italic: false,
             current_strikethrough: false,
             current_link: None,
+            current_image_url: None,
+            current_image_alt: String::new(),
             in_code_block: false,
             code_block_lang: String::new(),
             code_block_content: String::new(),
@@ -488,7 +517,9 @@ impl<'a> RenderContext<'a> {
     }
 
     fn push_text(&mut self, text: &str) {
-        if self.in_code_block {
+        if self.current_image_url.is_some() {
+            self.current_image_alt.push_str(text);
+        } else if self.in_code_block {
             self.code_block_content.push_str(text);
         } else {
             self.inlines.push(InlineSpan {
@@ -500,6 +531,114 @@ impl<'a> RenderContext<'a> {
                 link_url: self.current_link.clone(),
             });
         }
+    }
+
+    fn render_image(&mut self, ui: &mut Ui, dest_url: &str, alt_text: &str) {
+        self.flush_inline(ui);
+        ui.add_space(6.0_f32);
+
+        let clean_url = dest_url.trim().trim_matches('\0');
+        let is_web_url = clean_url.starts_with("http://") || clean_url.starts_with("https://");
+
+        // 判斷是否為本地檔案路徑並解析
+        let local_path: Option<std::path::PathBuf> = if !is_web_url {
+            let decoded = decode_uri_component(clean_url);
+            let raw_path = decoded
+                .trim_start_matches("file:///")
+                .trim_start_matches("file://")
+                .trim_start_matches("file:")
+                .replace('/', "\\");
+
+            let path = std::path::PathBuf::from(&raw_path);
+            if path.is_absolute() && path.exists() {
+                Some(path)
+            } else if let Some(base) = self.base_dir {
+                let joined = base.join(&raw_path);
+                if joined.exists() {
+                    Some(joined)
+                } else {
+                    Some(path)
+                }
+            } else {
+                Some(path)
+            }
+        } else {
+            None
+        };
+
+        // 嘗試讀取本地檔案二進制數據
+        let image_bytes: Option<Vec<u8>> = if let Some(ref p) = local_path {
+            if p.exists() {
+                std::fs::read(p).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let available_w = (ui.available_width() - 16.0_f32).max(100.0_f32);
+
+        Frame::none()
+            .fill(self.theme.card_bg_color())
+            .rounding(Rounding::same(8.0_f32))
+            .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
+            .inner_margin(Margin::same(10.0_f32))
+            .show(ui, |ui| {
+                if let Some(bytes) = image_bytes {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    use std::hash::{Hash, Hasher};
+                    clean_url.hash(&mut hasher);
+                    let ext = local_path
+                        .as_ref()
+                        .and_then(|p| p.extension())
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("png");
+                    let uri = format!("bytes://md_img_{:x}.{}", hasher.finish(), ext);
+
+                    let img = egui::Image::from_bytes(uri, bytes)
+                        .rounding(Rounding::same(6.0_f32))
+                        .max_width(available_w);
+
+                    ui.centered_and_justified(|ui| {
+                        ui.add(img);
+                    });
+                } else if is_web_url {
+                    let img = egui::Image::from_uri(clean_url.to_string())
+                        .rounding(Rounding::same(6.0_f32))
+                        .max_width(available_w);
+
+                    ui.centered_and_justified(|ui| {
+                        ui.add(img);
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("🖼️ [圖片找不到]")
+                                .color(self.theme.text_secondary())
+                                .italics(),
+                        );
+                        ui.label(
+                            RichText::new(if !alt_text.is_empty() { alt_text } else { clean_url })
+                                .color(self.theme.text_primary()),
+                        );
+                    });
+                }
+
+                if !alt_text.is_empty() {
+                    ui.add_space(4.0_f32);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            RichText::new(alt_text)
+                                .size(11.5_f32 * self.font_scale)
+                                .color(self.theme.text_secondary())
+                                .italics(),
+                        );
+                    });
+                }
+            });
+
+        ui.add_space(6.0_f32);
     }
 
     fn process_event(&mut self, ui: &mut Ui, event: Event) {
@@ -601,22 +740,8 @@ impl<'a> RenderContext<'a> {
             }
             Tag::Image { dest_url, .. } => {
                 self.flush_inline(ui);
-                ui.add_space(4.0_f32);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("🖼️ [圖片連結]")
-                            .color(self.theme.accent_color())
-                            .italics(),
-                    );
-                    let resp = ui.add(egui::Hyperlink::from_label_and_url(
-                        RichText::new(&dest_url.to_string()).underline(),
-                        &dest_url.to_string(),
-                    ));
-                    if resp.hovered() {
-                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                    }
-                });
-                ui.add_space(4.0_f32);
+                self.current_image_url = Some(dest_url.to_string());
+                self.current_image_alt.clear();
             }
             _ => {}
         }
@@ -624,6 +749,12 @@ impl<'a> RenderContext<'a> {
 
     fn handle_end_tag(&mut self, ui: &mut Ui, tag: TagEnd) {
         match tag {
+            TagEnd::Image => {
+                if let Some(dest_url) = self.current_image_url.take() {
+                    let alt = std::mem::take(&mut self.current_image_alt);
+                    self.render_image(ui, &dest_url, &alt);
+                }
+            }
             TagEnd::Paragraph => {
                 self.flush_inline(ui);
                 ui.add_space(6.0_f32);

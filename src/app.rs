@@ -1902,12 +1902,14 @@ impl eframe::App for MdPreviewApp {
                                     ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
                                 }
                                 let anchor_to_jump = self.target_anchor.clone();
+                                let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
                                 let renderer = MarkdownRenderer::new(
                                     self.theme,
                                     self.font_scale,
                                     &self.search_query,
                                     active_match_idx,
                                     anchor_to_jump.as_deref(),
+                                    base_dir,
                                 );
                                 if let Some(clicked_anchor) = renderer.render(ui, &self.content) {
                                     self.target_anchor = Some(clicked_anchor);
@@ -2268,16 +2270,16 @@ fn read_text_from_zip(zip_path: &Path, entry_name: &str) -> Result<String, Strin
 impl MdPreviewApp {
     /// 繪製圖片與 SVG 向量圖檢視畫布 (支援滾輪縮放、平移與自適應視窗)
     fn render_image_viewer(&mut self, ui: &mut egui::Ui) {
-        if let Some(ref uri) = self.image_uri {
+        if let Some(ref bytes) = self.image_bytes {
             let available = ui.available_size();
 
             // 監聽滾輪縮放
             let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
             if scroll_delta != 0.0 {
                 if scroll_delta > 0.0 {
-                    self.image_zoom = (self.image_zoom * 1.15).min(10.0);
+                    self.image_zoom = (self.image_zoom * 1.15_f32).min(10.0_f32);
                 } else {
-                    self.image_zoom = (self.image_zoom / 1.15).max(0.1);
+                    self.image_zoom = (self.image_zoom / 1.15_f32).max(0.1_f32);
                 }
                 self.image_fit_mode = false;
             }
@@ -2287,24 +2289,41 @@ impl MdPreviewApp {
                 scroll = scroll.scroll_offset(Vec2::ZERO);
             }
             scroll.show(ui, |ui| {
-                if self.keyboard_scroll_delta != 0.0 {
-                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
+                if self.keyboard_scroll_delta != 0.0_f32 {
+                    ui.scroll_with_delta(Vec2::new(0.0_f32, self.keyboard_scroll_delta));
                 }
                 ui.centered_and_justified(|ui| {
-                        let mut img = egui::Image::from_uri(uri.clone())
-                            .rounding(Rounding::same(6.0));
+                    let ext = if let ViewMode::Image { ref format } = self.view_mode {
+                        format.as_str()
+                    } else {
+                        "png"
+                    };
+                    let uri = format!("bytes://viewer_image_preview.{}", ext);
+                    let mut img = egui::Image::from_bytes(uri, bytes.clone())
+                        .rounding(Rounding::same(6.0_f32));
 
-                        if self.image_fit_mode {
-                            let max_w = (available.x - 24.0).max(100.0);
-                            let max_h = (available.y - 24.0).max(100.0);
-                            img = img.max_size(Vec2::new(max_w, max_h));
-                        } else {
-                            img = img.fit_to_original_size(self.image_zoom);
-                        }
+                    if self.image_fit_mode {
+                        let max_w = (available.x - 24.0_f32).max(100.0_f32);
+                        let max_h = (available.y - 24.0_f32).max(100.0_f32);
+                        img = img.max_size(Vec2::new(max_w, max_h));
+                    } else {
+                        img = img.fit_to_original_size(self.image_zoom);
+                    }
 
-                        ui.add(img);
-                    });
+                    ui.add(img);
                 });
+            });
+        } else if let Some(ref uri) = self.image_uri {
+            let available = ui.available_size();
+            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+            scroll.show(ui, |ui| {
+                ui.centered_and_justified(|ui| {
+                    let img = egui::Image::from_uri(uri.clone())
+                        .rounding(Rounding::same(6.0_f32))
+                        .max_size(Vec2::new((available.x - 24.0_f32).max(100.0_f32), (available.y - 24.0_f32).max(100.0_f32)));
+                    ui.add(img);
+                });
+            });
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new("無法載入圖片或向量圖").color(self.theme.text_secondary()));
