@@ -37,7 +37,7 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
-        let mut config = Self::default();
+        let config = Self::default();
         if let Some(path) = Self::config_path() {
             if path.exists() {
                 if let Ok(content) = fs::read_to_string(&path) {

@@ -591,7 +591,10 @@ impl MdPreviewApp {
 
     fn render_editor(&mut self, ui: &mut egui::Ui) {
         let font_scale = self.font_scale;
+        let text_color = self.theme.text_primary();
         let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+        let mut changed = false;
+
         scroll.show(ui, |ui| {
             ui.add_space(4.0_f32);
             let available_w = ui.available_width();
@@ -602,18 +605,22 @@ impl MdPreviewApp {
                 Vec2::new(available_w, available_h),
                 egui::TextEdit::multiline(&mut self.content)
                     .font(font_id)
-                    .text_color(self.theme.text_primary())
+                    .text_color(text_color)
                     .frame(false)
                     .desired_width(f32::INFINITY)
                     .lock_focus(true),
             );
 
             if edit_resp.changed() {
-                self.line_count = self.content.lines().count();
-                self.is_modified = self.content != self.original_content;
-                self.last_edit_instant = Some(std::time::Instant::now());
+                changed = true;
             }
         });
+
+        if changed {
+            self.line_count = self.content.lines().count();
+            self.is_modified = self.content != self.original_content;
+            self.last_edit_instant = Some(std::time::Instant::now());
+        }
     }
 
     pub fn reload_current_file(&mut self) {
@@ -1927,10 +1934,21 @@ impl eframe::App for MdPreviewApp {
                 }
             });
 
-        // 偏好設定彈出對話框
-        if self.settings_open {
+        // 偏好設定彈出對話框 (以局部變數解耦，徹底避免 closure 內部借用衝突)
+        let mut settings_open = self.settings_open;
+        let mut new_theme = None;
+        let mut new_save_mode = None;
+        let mut new_font_scale = None;
+        let mut close_settings = false;
+
+        if settings_open {
+            let current_theme = self.theme;
+            let mut save_mode = self.config.save_mode;
+            let mut scale = self.font_scale;
+            let accent_color = self.theme.accent_color();
+
             egui::Window::new("⚙️ flash-md 偏好設定")
-                .open(&mut self.settings_open)
+                .open(&mut settings_open)
                 .resizable(false)
                 .collapsible(false)
                 .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
@@ -1939,21 +1957,15 @@ impl eframe::App for MdPreviewApp {
                     ui.add_space(4.0_f32);
 
                     // 1. 主題設定
-                    ui.label(RichText::new("🎨 外觀色彩主題").strong().color(self.theme.accent_color()));
+                    ui.label(RichText::new("🎨 外觀色彩主題").strong().color(accent_color));
                     ui.horizontal(|ui| {
-                        let light_selected = self.theme == AppTheme::Light;
-                        let dark_selected = self.theme == AppTheme::Dark;
+                        let light_selected = current_theme == AppTheme::Light;
+                        let dark_selected = current_theme == AppTheme::Dark;
                         if ui.selectable_label(light_selected, "☀️ 亮色主題 (Light)").clicked() {
-                            self.theme = AppTheme::Light;
-                            self.theme.apply_to_ctx(ctx);
-                            self.config.theme = AppTheme::Light;
-                            self.config.save();
+                            new_theme = Some(AppTheme::Light);
                         }
                         if ui.selectable_label(dark_selected, "🌙 深色主題 (Dark)").clicked() {
-                            self.theme = AppTheme::Dark;
-                            self.theme.apply_to_ctx(ctx);
-                            self.config.theme = AppTheme::Dark;
-                            self.config.save();
+                            new_theme = Some(AppTheme::Dark);
                         }
                     });
 
@@ -1962,13 +1974,13 @@ impl eframe::App for MdPreviewApp {
                     ui.add_space(8.0_f32);
 
                     // 2. 檔案保存模式
-                    ui.label(RichText::new("💾 編輯保存模式").strong().color(self.theme.accent_color()));
+                    ui.label(RichText::new("💾 編輯保存模式").strong().color(accent_color));
                     ui.vertical(|ui| {
-                        if ui.radio_value(&mut self.config.save_mode, SaveMode::Manual, "🔘 按下 Ctrl + S 手動保存").clicked() {
-                            self.config.save();
+                        if ui.radio_value(&mut save_mode, SaveMode::Manual, "🔘 按下 Ctrl + S 手動保存").clicked() {
+                            new_save_mode = Some(SaveMode::Manual);
                         }
-                        if ui.radio_value(&mut self.config.save_mode, SaveMode::AutoDebounce, "⚡ 打字停止時自動防抖保存 (Auto-save 800ms)").clicked() {
-                            self.config.save();
+                        if ui.radio_value(&mut save_mode, SaveMode::AutoDebounce, "⚡ 打字停止時自動防抖保存 (Auto-save 800ms)").clicked() {
+                            new_save_mode = Some(SaveMode::AutoDebounce);
                         }
                     });
 
@@ -1977,21 +1989,35 @@ impl eframe::App for MdPreviewApp {
                     ui.add_space(8.0_f32);
 
                     // 3. 字型縮放
-                    ui.label(RichText::new("🔍 字型顯示縮放").strong().color(self.theme.accent_color()));
-                    let mut scale = self.font_scale;
-                    if ui.add(egui::Slider::new(&mut scale, 0.8_f32..=1.6_f32).text("比例").step_by(0.05)).changed() {
-                        self.font_scale = scale;
-                        self.config.font_scale = scale;
-                        self.config.save();
+                    ui.label(RichText::new("🔍 字型顯示縮放").strong().color(accent_color));
+                    if ui.add(egui::Slider::new(&mut scale, 0.8_f32..=1.6_f32).text("比例")).changed() {
+                        new_font_scale = Some(scale);
                     }
 
                     ui.add_space(10.0_f32);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("完成").clicked() {
-                            self.settings_open = false;
+                            close_settings = true;
                         }
                     });
                 });
+        }
+
+        self.settings_open = settings_open && !close_settings;
+        if let Some(t) = new_theme {
+            self.theme = t;
+            self.theme.apply_to_ctx(ctx);
+            self.config.theme = t;
+            self.config.save();
+        }
+        if let Some(sm) = new_save_mode {
+            self.config.save_mode = sm;
+            self.config.save();
+        }
+        if let Some(fs) = new_font_scale {
+            self.font_scale = fs;
+            self.config.font_scale = fs;
+            self.config.save();
         }
 
         // 底部狀態列 / Toast 提示
