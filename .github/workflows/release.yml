@@ -41,7 +41,24 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build Release Binary
-        run: cargo build --release --target ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $proc = Start-Process cargo -ArgumentList "build", "--release", "--target", "${{ matrix.target }}" -NoNewWindow -PassThru -RedirectStandardOutput "build_stdout.log" -RedirectStandardError "build_stderr.log"
+          $proc.WaitForExit()
+          Get-Content "build_stderr.log" -Tail 60
+          Get-Content "build_stdout.log" -Tail 40
+          if ($proc.ExitCode -ne 0) {
+            exit $proc.ExitCode
+          }
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-log-${{ matrix.target }}
+          path: |
+            build_stderr.log
+            build_stdout.log
 
       - name: Package Binary (Windows)
         shell: pwsh
