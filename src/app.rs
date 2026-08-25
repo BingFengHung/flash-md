@@ -1365,7 +1365,7 @@ impl eframe::App for MdPreviewApp {
         let mut composition_active = self.ime_is_preediting;
 
         ctx.input_mut(|i| {
-            for ev in &i.events {
+            for ev in &i.raw.events {
                 match ev {
                     egui::Event::CompositionStart => {
                         composition_active = true;
@@ -1390,7 +1390,7 @@ impl eframe::App for MdPreviewApp {
             // 若目前正處於注音組字階段、本幀剛結束 Composition、或 80ms 內剛結束 Composition，
             // 則確認動作的 Enter 按鍵不應視為文字編輯換行。
             if has_ime_end || was_recent_end || (self.ime_is_preediting && !composition_active) {
-                i.events.retain(|ev| {
+                i.raw.events.retain(|ev| {
                     match ev {
                         egui::Event::Key { key: egui::Key::Enter, .. } => false,
                         egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => false,
