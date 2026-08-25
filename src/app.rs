@@ -84,7 +84,8 @@ pub struct MdPreviewApp {
     pub keyboard_scroll_delta: f32,
     pub reading_progress: f32,
 
-    pub last_text_input: Option<std::time::Instant>,
+    pub last_ime_commit: Option<std::time::Instant>,
+    pub ime_is_preediting: bool,
 }
 
 impl MdPreviewApp {
@@ -161,7 +162,8 @@ impl MdPreviewApp {
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
             reading_progress: 0.0,
-            last_text_input: None,
+            last_ime_commit: None,
+            ime_is_preediting: false,
         };
 
         if !is_visible {
@@ -1355,27 +1357,35 @@ impl eframe::App for MdPreviewApp {
 
         // IME (注音/拼音/日文輸入法) 選字確認 Enter 防誤換行過濾：
         // 當使用者在 Windows 輸入法中選字按下 Enter 確認時，
-        // 系統會同時送出文字輸入 (Event::Text) 與 Enter 按鍵 (Event::Key / Text("\n"))。
-        // 此處偵測如果本幀有文字輸入，或 70ms 內剛發生文字輸入 (同一擊鍵的 IME Commit)，
-        // 則過濾掉伴隨的 Enter 按鍵事件與換行字元，防止組字確認時產生誤換行。
+        // 系統會送出 ImeEvent::Commit / Preedit 結束與 Key::Enter/Text("\n")，導致字元輸入後被額外插入換行。
+        // 此處偵測如果本幀有 Ime::Commit 事件、或剛結束組字 Preedit、或 150ms 內剛發生 IME Commit，
+        // 則主動過濾掉伴隨的 Enter 按鍵事件與換行字元。
         let now = std::time::Instant::now();
-        let mut has_text_input = false;
-        let was_recent_text = if let Some(instant) = self.last_text_input {
-            instant.elapsed() < Duration::from_millis(70)
+        let was_preediting = self.ime_is_preediting;
+        let was_recent_commit = if let Some(instant) = self.last_ime_commit {
+            instant.elapsed() < Duration::from_millis(150)
         } else {
             false
         };
 
+        let mut has_ime_commit = false;
+        let mut preedit_active = was_preediting;
+
         ctx.input_mut(|i| {
             for ev in &i.events {
-                if let egui::Event::Text(ref s) = ev {
-                    if !s.is_empty() && s != "\n" && s != "\r" && s != "\r\n" {
-                        has_text_input = true;
+                match ev {
+                    egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                        preedit_active = !text.is_empty();
                     }
+                    egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                        has_ime_commit = true;
+                        preedit_active = false;
+                    }
+                    _ => {}
                 }
             }
 
-            if has_text_input || was_recent_text {
+            if has_ime_commit || was_recent_commit || (was_preediting && !preedit_active) {
                 i.events.retain(|ev| {
                     match ev {
                         egui::Event::Key { key: egui::Key::Enter, .. } => false,
@@ -1386,8 +1396,9 @@ impl eframe::App for MdPreviewApp {
             }
         });
 
-        if has_text_input {
-            self.last_text_input = Some(now);
+        self.ime_is_preediting = preedit_active;
+        if has_ime_commit || (was_preediting && !preedit_active) {
+            self.last_ime_commit = Some(now);
         }
 
         // 快捷鍵監聽
