@@ -1,3 +1,4 @@
+use crate::config::{AppConfig, SaveMode};
 use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
 use crate::markdown::{
@@ -13,7 +14,7 @@ use crate::updater::{
 use crate::watcher::{FileWatcher, WatcherEvent};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{
-    Align, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
+    Align, Align2, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
     TextEdit, Vec2,
 };
 use log::{error, info};
@@ -35,6 +36,13 @@ pub enum ViewMode {
 pub struct MdPreviewApp {
     pub current_file: Option<PathBuf>,
     pub content: String,
+    pub original_content: String,
+    pub is_modified: bool,
+    pub is_editing: bool,
+    pub last_edit_instant: Option<std::time::Instant>,
+    pub settings_open: bool,
+    pub config: AppConfig,
+
     pub file_size_str: String,
     pub line_count: usize,
     pub last_modified_str: String,
@@ -99,8 +107,11 @@ impl MdPreviewApp {
         // 載入 Windows 繁體中文與 Emoji 系統字型 (徹底解決方塊字問題)
         setup_system_cjk_fonts(&cc.egui_ctx);
 
-        let theme = AppTheme::Dark;
+        let config = AppConfig::load();
+        let theme = config.theme;
         theme.apply_to_ctx(&cc.egui_ctx);
+        let font_scale = config.font_scale;
+        let always_on_top = config.always_on_top;
 
         let (update_tx, update_rx) = unbounded();
 
@@ -109,6 +120,12 @@ impl MdPreviewApp {
         let mut app = Self {
             current_file: None,
             content: String::new(),
+            original_content: String::new(),
+            is_modified: false,
+            is_editing: false,
+            last_edit_instant: None,
+            settings_open: false,
+            config,
             file_size_str: String::new(),
             line_count: 0,
             last_modified_str: String::new(),
@@ -118,8 +135,8 @@ impl MdPreviewApp {
             image_zoom: 1.0,
             image_fit_mode: true,
             theme,
-            font_scale: 1.0,
-            always_on_top: false,
+            font_scale,
+            always_on_top,
             visible: is_visible,
             is_standalone,
             search_open: false,
@@ -234,11 +251,13 @@ impl MdPreviewApp {
 
     pub fn load_file(&mut self, path: &Path) {
         info!("嘗試載入檔案: {:?}", path);
-        // 切換或載入檔案時自動將滾輪捲動至最頂部與重置搜尋索引
         self.reset_scroll_to_top = true;
         self.search_match_index = 0;
         self.target_scroll_offset = None;
         self.target_anchor = None;
+        self.is_editing = false;
+        self.is_modified = false;
+        self.last_edit_instant = None;
 
         if path.is_dir() {
             self.set_toast(format!("已選取資料夾: {:?}", path.file_name().unwrap_or_default()));
@@ -253,24 +272,24 @@ impl MdPreviewApp {
             .unwrap_or("")
             .to_lowercase();
 
-        // 1. 第一優先：直接嘗試以實體檔案讀取 (即使路徑中含有 .zip 資料夾名稱也能正常秒開)
         if path.exists() {
             if is_image_extension(&ext) {
                 if let Ok(bytes) = fs::read(path) {
                     let path_str = path.to_string_lossy().to_string();
-                    let uri = format!("file://{}", path_str.replace('\\', "/"));
+                    let uri = format!("file:///{}", path_str.replace('\\', "/"));
                     self.image_uri = Some(uri);
                     self.image_bytes = Some(bytes.clone());
                     self.image_zoom = 1.0;
                     self.image_fit_mode = true;
                     self.view_mode = ViewMode::Image { format: ext.clone() };
 
-                    // 若為 SVG，同時保留源碼供切換至 Code 檢視
                     if ext == "svg" {
                         self.content = String::from_utf8_lossy(&bytes).to_string();
+                        self.original_content = self.content.clone();
                         self.line_count = self.content.lines().count();
                     } else {
                         self.content.clear();
+                        self.original_content.clear();
                         self.line_count = 0;
                     }
 
@@ -307,7 +326,8 @@ impl MdPreviewApp {
                         self.image_bytes = None;
                         self.view_mode = ViewMode::Markdown;
                         self.line_count = pdf_md.lines().count();
-                        self.content = pdf_md;
+                        self.content = pdf_md.clone();
+                        self.original_content = pdf_md;
                         self.current_file = Some(path.to_path_buf());
 
                         if let Ok(metadata) = fs::metadata(path) {
@@ -350,10 +370,10 @@ impl MdPreviewApp {
                 }
 
                 self.line_count = text.lines().count();
-                self.content = text;
+                self.content = text.clone();
+                self.original_content = text;
                 self.current_file = Some(path.to_path_buf());
 
-                // 檔案元資訊計算
                 if let Ok(metadata) = fs::metadata(path) {
                     let len = metadata.len();
                     self.file_size_str = if len < 1024 {
@@ -370,7 +390,6 @@ impl MdPreviewApp {
                     }
                 }
 
-                // 啟動變更監視
                 self.file_watcher.watch_file(path);
                 self.visible = true;
                 show_and_focus_app_window();
@@ -396,43 +415,66 @@ impl MdPreviewApp {
             }
         }
 
-        // 2. 若直接讀取失敗，檢查是否位於未解壓縮之 .zip 虛擬目錄內
         let path_str = path.to_string_lossy().to_string();
-        let lower_path = path_str.to_lowercase();
+        if let Some(zip_idx) = path_str.to_lowercase().find(".zip\\") {
+            let zip_file_part = &path_str[..zip_idx + 4];
+            let inner_entry = &path_str[zip_idx + 5..];
+            let zip_path = PathBuf::from(zip_file_part);
 
-        if lower_path.contains(".zip\\") || lower_path.contains(".zip/") {
-            if let Some(zip_idx) = lower_path.find(".zip\\").or_else(|| lower_path.find(".zip/")) {
-                let zip_file_path_str = &path_str[..zip_idx + 4];
-                let inner_entry_str = &path_str[zip_idx + 5..];
-                let zip_path = PathBuf::from(zip_file_path_str);
+            if zip_path.is_file() {
+                let inner_entry_str = inner_entry.replace('\\', "/");
+                let inner_ext = Path::new(&inner_entry_str)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
 
-                if zip_path.exists() {
-                    info!("偵測到 ZIP 壓縮檔內虛擬路徑，嘗試即時解壓預覽: {:?} -> {}", zip_path, inner_entry_str);
-                    self.set_toast(format!("📦 正在自 ZIP 壓縮檔即時讀取 {}...", inner_entry_str));
+                if is_image_extension(&inner_ext) {
+                    if let Ok(bytes) = read_bytes_from_zip(&zip_path, &inner_entry_str) {
+                        let uri = format!("bytes://{}", inner_entry_str);
+                        self.image_uri = Some(uri);
+                        self.image_bytes = Some(bytes.clone());
+                        self.image_zoom = 1.0;
+                        self.image_fit_mode = true;
+                        self.view_mode = ViewMode::Image { format: inner_ext.clone() };
 
-                    let ext = Path::new(inner_entry_str)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
+                        if inner_ext == "svg" {
+                            self.content = String::from_utf8_lossy(&bytes).to_string();
+                            self.original_content = self.content.clone();
+                            self.line_count = self.content.lines().count();
+                        } else {
+                            self.content.clear();
+                            self.original_content.clear();
+                            self.line_count = 0;
+                        }
 
-                    if is_image_extension(&ext) {
-                        if let Ok(bytes) = read_bytes_from_zip(&zip_path, inner_entry_str) {
-                            let uri = format!("bytes://{}", inner_entry_str);
-                            self.image_uri = Some(uri);
-                            self.image_bytes = Some(bytes.clone());
-                            self.image_zoom = 1.0;
-                            self.image_fit_mode = true;
-                            self.view_mode = ViewMode::Image { format: ext.clone() };
+                        let len = bytes.len();
+                        self.file_size_str = if len < 1024 {
+                            format!("{} B", len)
+                        } else if len < 1024 * 1024 {
+                            format!("{:.1} KB", len as f64 / 1024.0)
+                        } else {
+                            format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
+                        };
+                        self.last_modified_str = "ZIP 壓縮檔".to_string();
+                        self.current_file = Some(path.to_path_buf());
+                        self.visible = true;
+                        show_and_focus_app_window();
 
-                            if ext == "svg" {
-                                self.content = String::from_utf8_lossy(&bytes).to_string();
-                                self.line_count = self.content.lines().count();
-                            } else {
-                                self.content.clear();
-                                self.line_count = 0;
-                            }
-
+                        let fname = Path::new(&inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(&inner_entry_str);
+                        let (name, emoji) = get_image_badge(&inner_ext);
+                        self.set_toast(format!("⚡ 已自 ZIP 即時預覽: {} ({} {}) 📦", fname, emoji, name));
+                        return;
+                    }
+                } else if is_pdf_extension(&inner_ext) {
+                    if let Ok(bytes) = read_bytes_from_zip(&zip_path, &inner_entry_str) {
+                        if let Ok((pdf_md, page_count)) = crate::markdown::extract_text_from_pdf_bytes(&bytes) {
+                            self.image_uri = None;
+                            self.image_bytes = None;
+                            self.view_mode = ViewMode::Markdown;
+                            self.line_count = pdf_md.lines().count();
+                            self.content = pdf_md.clone();
+                            self.original_content = pdf_md;
                             let len = bytes.len();
                             self.file_size_str = if len < 1024 {
                                 format!("{} B", len)
@@ -446,48 +488,24 @@ impl MdPreviewApp {
                             self.visible = true;
                             show_and_focus_app_window();
 
-                            let fname = Path::new(inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(inner_entry_str);
-                            let (name, emoji) = get_image_badge(&ext);
-                            self.set_toast(format!("⚡ 已自 ZIP 即時預覽: {} ({} {}) 📦", fname, emoji, name));
+                            let fname = Path::new(&inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(&inner_entry_str);
+                            self.set_toast(format!("⚡ 已自 ZIP 預覽 PDF: {} (共 {} 頁) 📦", fname, page_count));
                             return;
                         }
-                    } else if is_pdf_extension(&ext) {
-                        if let Ok(bytes) = read_bytes_from_zip(&zip_path, inner_entry_str) {
-                            if let Ok((pdf_md, page_count)) = crate::markdown::extract_text_from_pdf_bytes(&bytes) {
-                                self.image_uri = None;
-                                self.image_bytes = None;
-                                self.view_mode = ViewMode::Markdown;
-                                self.line_count = pdf_md.lines().count();
-                                self.content = pdf_md;
-                                let len = bytes.len();
-                                self.file_size_str = if len < 1024 {
-                                    format!("{} B", len)
-                                } else if len < 1024 * 1024 {
-                                    format!("{:.1} KB", len as f64 / 1024.0)
-                                } else {
-                                    format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                                };
-                                self.last_modified_str = "ZIP 壓縮檔".to_string();
-                                self.current_file = Some(path.to_path_buf());
-                                self.visible = true;
-                                show_and_focus_app_window();
-
-                                let fname = Path::new(inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(inner_entry_str);
-                                self.set_toast(format!("⚡ 已自 ZIP 即時預覽 PDF: {} (共 {} 頁) 📦", fname, page_count));
-                                return;
-                            }
-                        }
-                    } else if let Ok(text) = read_text_from_zip(&zip_path, inner_entry_str) {
+                    }
+                } else {
+                    if let Ok(bytes) = read_bytes_from_zip(&zip_path, &inner_entry_str) {
                         self.image_uri = None;
                         self.image_bytes = None;
-                        if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
+                        let text = String::from_utf8_lossy(&bytes).to_string();
+                        if matches!(inner_ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
                             self.view_mode = ViewMode::Markdown;
-                        } else if ext == "csv" {
+                        } else if inner_ext == "csv" {
                             self.view_mode = ViewMode::Table { separator: ',' };
-                        } else if ext == "tsv" {
+                        } else if inner_ext == "tsv" {
                             self.view_mode = ViewMode::Table { separator: '\t' };
-                        } else if is_code_extension(&ext) {
-                            self.view_mode = ViewMode::Code { lang: ext.clone() };
+                        } else if is_code_extension(&inner_ext) {
+                            self.view_mode = ViewMode::Code { lang: inner_ext.clone() };
                         } else {
                             self.view_mode = ViewMode::PlainText;
                         }
@@ -502,12 +520,13 @@ impl MdPreviewApp {
                             format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
                         };
                         self.last_modified_str = "ZIP 壓縮檔".to_string();
-                        self.content = text;
+                        self.content = text.clone();
+                        self.original_content = text;
                         self.current_file = Some(path.to_path_buf());
                         self.visible = true;
                         show_and_focus_app_window();
 
-                        let fname = Path::new(inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(inner_entry_str);
+                        let fname = Path::new(&inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(&inner_entry_str);
                         self.set_toast(format!("⚡ 已自 ZIP 即時預覽: {} 📦", fname));
                         return;
                     }
@@ -515,18 +534,98 @@ impl MdPreviewApp {
             }
         }
 
-        // 3. 檔案真正無法開啟
         error!("無法開啟檔案 {:?}", path);
         self.set_toast(format!("無法開啟檔案: {:?}", path.file_name().unwrap_or_default()));
         self.visible = true;
         show_and_focus_app_window();
     }
 
+    pub fn save_current_file(&mut self, is_auto: bool) {
+        if let Some(ref path) = self.current_file {
+            if path.exists() {
+                match fs::write(path, &self.content) {
+                    Ok(_) => {
+                        self.original_content = self.content.clone();
+                        self.is_modified = false;
+                        self.line_count = self.content.lines().count();
+                        if let Ok(metadata) = fs::metadata(path) {
+                            let len = metadata.len();
+                            self.file_size_str = if len < 1024 {
+                                format!("{} B", len)
+                            } else if len < 1024 * 1024 {
+                                format!("{:.1} KB", len as f64 / 1024.0)
+                            } else {
+                                format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
+                            };
+                            if let Ok(mod_time) = metadata.modified() {
+                                let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
+                                self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
+                            }
+                        }
+                        if is_auto {
+                            self.set_toast("💾 已自動防抖保存".to_string());
+                        } else {
+                            self.set_toast("💾 檔案已成功保存！".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        self.set_toast(format!("❌ 保存檔案失敗: {}", e));
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn toggle_edit_mode(&mut self) {
+        if matches!(self.view_mode, ViewMode::Image { .. }) && self.content.is_empty() {
+            self.set_toast("ℹ️ 二進制圖片不支援文字編輯".to_string());
+            return;
+        }
+        self.is_editing = !self.is_editing;
+        if self.is_editing {
+            self.set_toast("✏️ 已進入全螢幕就地編輯模式 (Ctrl+S 保存，E 退出)".to_string());
+        } else {
+            self.set_toast("👁️ 已切換至美化預覽模式".to_string());
+        }
+    }
+
+    fn render_editor(&mut self, ui: &mut egui::Ui) {
+        let font_scale = self.font_scale;
+        let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+        scroll.show(ui, |ui| {
+            ui.add_space(4.0_f32);
+            let available_w = ui.available_width();
+            let available_h = (ui.available_height() - 10.0_f32).max(200.0_f32);
+
+            let font_id = FontId::monospace(14.0_f32 * font_scale);
+            let edit_resp = ui.add_sized(
+                Vec2::new(available_w, available_h),
+                egui::TextEdit::multiline(&mut self.content)
+                    .font(font_id)
+                    .text_color(self.theme.text_primary())
+                    .frame(false)
+                    .desired_width(f32::INFINITY)
+                    .lock_focus(true),
+            );
+
+            if edit_resp.changed() {
+                self.line_count = self.content.lines().count();
+                self.is_modified = self.content != self.original_content;
+                self.last_edit_instant = Some(std::time::Instant::now());
+            }
+        });
+    }
+
     pub fn reload_current_file(&mut self) {
+        if self.is_modified {
+            return;
+        }
         if let Some(path) = self.current_file.clone() {
             if let Ok(text) = fs::read_to_string(&path) {
                 self.line_count = text.lines().count();
-                self.content = text;
+                self.content = text.clone();
+                self.original_content = text;
+                self.is_modified = false;
                 self.set_toast("檔案已自動即時同步更新 ⚡".to_string());
             }
         }
@@ -749,9 +848,14 @@ impl MdPreviewApp {
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let input = ctx.input(|i| i.clone());
 
-        // ESC: 隱藏或關閉視窗 (若搜尋列開啟則優先關閉搜尋列)
+        // ESC: 隱藏或關閉視窗 (若設定/搜尋列/編輯模式開啟則優先關閉或退出)
         if input.key_pressed(egui::Key::Escape) {
-            if self.search_open {
+            if self.settings_open {
+                self.settings_open = false;
+            } else if self.is_editing {
+                self.is_editing = false;
+                self.set_toast("👁️ 已退出編輯模式，回到預覽".to_string());
+            } else if self.search_open {
                 self.search_open = false;
                 self.search_query.clear();
                 self.search_match_index = 0;
@@ -762,6 +866,16 @@ impl MdPreviewApp {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
+        }
+
+        // Ctrl + S: 手動保存檔案
+        if input.modifiers.command && input.key_pressed(egui::Key::S) {
+            self.save_current_file(false);
+        }
+
+        // Ctrl + E: 切換就地編輯模式與預覽模式
+        if input.modifiers.command && input.key_pressed(egui::Key::E) {
+            self.toggle_edit_mode();
         }
 
         // F3 / Shift + F3: 搜尋結果上一筆 / 下一筆跳轉
@@ -778,6 +892,10 @@ impl MdPreviewApp {
 
         // 鍵盤導航與瀏覽操作 (非文字編輯/搜尋輸入狀態下觸發)
         if !ctx.wants_keyboard_input() {
+            // E: 就地編輯模式切換快速鍵
+            if input.key_pressed(egui::Key::E) && !input.modifiers.command && !input.modifiers.alt {
+                self.toggle_edit_mode();
+            }
             // / : Vim 搜尋快捷鍵 (開啟搜尋並聚焦輸入框)
             if input.key_pressed(egui::Key::Slash) {
                 self.search_open = true;
@@ -1215,6 +1333,16 @@ impl eframe::App for MdPreviewApp {
             }
         }
 
+        // 自動防抖保存檢查 (打字停止 800ms 後自動寫回檔案)
+        if self.config.save_mode == SaveMode::AutoDebounce && self.is_modified {
+            if let Some(instant) = self.last_edit_instant {
+                if instant.elapsed() >= Duration::from_millis(800) {
+                    self.save_current_file(true);
+                    self.last_edit_instant = None;
+                }
+            }
+        }
+
         // 快捷鍵監聽
         self.handle_shortcuts(ctx);
 
@@ -1531,7 +1659,17 @@ impl eframe::App for MdPreviewApp {
                                         .map(|(cur, total)| format!("[{}/{}]  •  ", cur, total))
                                         .unwrap_or_default();
 
-                                    let (info_text, tooltip_text) = if let ViewMode::Image { ref format } = self.view_mode {
+                                    let (info_text, tooltip_text) = if self.is_editing {
+                                        let save_status = if self.is_modified {
+                                            "● 未保存 (Ctrl+S)"
+                                        } else {
+                                            "✓ 已保存"
+                                        };
+                                        (
+                                            format!("{}{}  •  {} 行  •  {}", sibling_str, save_status, self.line_count, self.file_size_str),
+                                            format!("✏️ 就地編輯模式\n• 儲存狀態: {}\n• 總行數: {} 行\n• 保存模式: {}", if self.is_modified { "已修改未保存" } else { "已保存" }, self.line_count, match self.config.save_mode { SaveMode::Manual => "按 Ctrl+S 手動保存", SaveMode::AutoDebounce => "打字停止自動防抖保存" }),
+                                        )
+                                    } else if let ViewMode::Image { ref format } = self.view_mode {
                                         (
                                             format!("{}{format_upper}  •  {}  •  {}", sibling_str, self.file_size_str, self.last_modified_str, format_upper = format.to_uppercase()),
                                             format!("🖼️ 圖片資訊\n• 格式: {}\n• 檔案大小: {}\n• 修改時間: {}", format.to_uppercase(), self.file_size_str, self.last_modified_str),
@@ -1571,6 +1709,26 @@ impl eframe::App for MdPreviewApp {
                 // 第二階：現代精緻功能工具按鈕列
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
+
+                    // 就地編輯模式切換按鈕
+                    let edit_btn_label = if self.is_editing { "👁️ 預覽" } else { "✏️ 編輯" };
+                    let edit_btn_tip = if self.is_editing {
+                        "切換回美化預覽模式 (E 或 Esc)"
+                    } else {
+                        "切換為全螢幕就地編輯模式 (E 或 Ctrl+E)"
+                    };
+                    if render_nav_button(ui, self.theme, edit_btn_label, self.is_editing, edit_btn_tip).clicked() {
+                        self.toggle_edit_mode();
+                    }
+
+                    // 保存按鈕 (編輯中或有修改時可用)
+                    if self.is_editing || self.is_modified {
+                        let save_label = if self.is_modified { "💾 保存 *" } else { "💾 保存" };
+                        let save_tip = if self.is_modified { "檔案已修改，點擊或按 Ctrl + S 保存" } else { "檔案已保存 (Ctrl + S)" };
+                        if render_nav_button(ui, self.theme, save_label, self.is_modified, save_tip).clicked() {
+                            self.save_current_file(false);
+                        }
+                    }
 
                     // 開啟檔案按鈕
                     if render_nav_button(ui, self.theme, "📂 開啟", false, "開啟本機 Markdown、程式碼或圖片檔案").clicked() {
@@ -1642,7 +1800,7 @@ impl eframe::App for MdPreviewApp {
                         self.check_update_manually();
                     }
 
-                    // 第二階右側：視窗控制與主題切換
+                    // 第二階右側：視窗控制、設定與主題切換
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 5.0;
 
@@ -1653,6 +1811,11 @@ impl eframe::App for MdPreviewApp {
                             if self.is_standalone {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
+                        }
+
+                        // 偏好設定按鈕
+                        if render_nav_button(ui, self.theme, "⚙️ 設定", self.settings_open, "偏好設定 (亮/暗色主題、自動防抖保存、字型縮放)").clicked() {
+                            self.settings_open = !self.settings_open;
                         }
 
                         // 置頂狀態按鈕
@@ -1672,16 +1835,20 @@ impl eframe::App for MdPreviewApp {
                                     egui::WindowLevel::Normal
                                 },
                             ));
+                            self.config.always_on_top = self.always_on_top;
+                            self.config.save();
                         }
 
                         // 主題切換按鈕 (使用同字元家族的 🔆 與 🌙 保持一致的字圖間距)
                         let (theme_icon, theme_tip) = match self.theme {
-                            AppTheme::Dark => ("🔆 淺色", "切換為淺色主題"),
-                            AppTheme::Light => ("🌙 深色", "切換為深色主題"),
+                            AppTheme::Dark => ("🔆 淺色", "切換為淺色主題並保存偏好"),
+                            AppTheme::Light => ("🌙 深色", "切換為深色主題並保存偏好"),
                         };
                         if render_nav_button(ui, self.theme, theme_icon, false, theme_tip).clicked() {
                             self.theme.toggle();
                             self.theme.apply_to_ctx(ctx);
+                            self.config.theme = self.theme;
+                            self.config.save();
                         }
                     });
                 });
@@ -1759,6 +1926,73 @@ impl eframe::App for MdPreviewApp {
                     });
                 }
             });
+
+        // 偏好設定彈出對話框
+        if self.settings_open {
+            egui::Window::new("⚙️ flash-md 偏好設定")
+                .open(&mut self.settings_open)
+                .resizable(false)
+                .collapsible(false)
+                .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_min_width(340.0_f32);
+                    ui.add_space(4.0_f32);
+
+                    // 1. 主題設定
+                    ui.label(RichText::new("🎨 外觀色彩主題").strong().color(self.theme.accent_color()));
+                    ui.horizontal(|ui| {
+                        let light_selected = self.theme == AppTheme::Light;
+                        let dark_selected = self.theme == AppTheme::Dark;
+                        if ui.selectable_label(light_selected, "☀️ 亮色主題 (Light)").clicked() {
+                            self.theme = AppTheme::Light;
+                            self.theme.apply_to_ctx(ctx);
+                            self.config.theme = AppTheme::Light;
+                            self.config.save();
+                        }
+                        if ui.selectable_label(dark_selected, "🌙 深色主題 (Dark)").clicked() {
+                            self.theme = AppTheme::Dark;
+                            self.theme.apply_to_ctx(ctx);
+                            self.config.theme = AppTheme::Dark;
+                            self.config.save();
+                        }
+                    });
+
+                    ui.add_space(8.0_f32);
+                    ui.separator();
+                    ui.add_space(8.0_f32);
+
+                    // 2. 檔案保存模式
+                    ui.label(RichText::new("💾 編輯保存模式").strong().color(self.theme.accent_color()));
+                    ui.vertical(|ui| {
+                        if ui.radio_value(&mut self.config.save_mode, SaveMode::Manual, "🔘 按下 Ctrl + S 手動保存").clicked() {
+                            self.config.save();
+                        }
+                        if ui.radio_value(&mut self.config.save_mode, SaveMode::AutoDebounce, "⚡ 打字停止時自動防抖保存 (Auto-save 800ms)").clicked() {
+                            self.config.save();
+                        }
+                    });
+
+                    ui.add_space(8.0_f32);
+                    ui.separator();
+                    ui.add_space(8.0_f32);
+
+                    // 3. 字型縮放
+                    ui.label(RichText::new("🔍 字型顯示縮放").strong().color(self.theme.accent_color()));
+                    let mut scale = self.font_scale;
+                    if ui.add(egui::Slider::new(&mut scale, 0.8_f32..=1.6_f32).text("比例").step_by(0.05)).changed() {
+                        self.font_scale = scale;
+                        self.config.font_scale = scale;
+                        self.config.save();
+                    }
+
+                    ui.add_space(10.0_f32);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("完成").clicked() {
+                            self.settings_open = false;
+                        }
+                    });
+                });
+        }
 
         // 底部狀態列 / Toast 提示
         egui::TopBottomPanel::bottom("bottom_status")
@@ -1870,7 +2104,7 @@ impl eframe::App for MdPreviewApp {
             ctx.request_repaint();
         }
 
-        // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖)
+        // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖 / 全螢幕就地編輯)
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
@@ -1878,7 +2112,10 @@ impl eframe::App for MdPreviewApp {
                     .inner_margin(Margin::symmetric(24.0, 16.0)),
             )
             .show(ctx, |ui| {
-                if self.content.is_empty() && self.image_uri.is_none() {
+                if self.is_editing {
+                    // 全螢幕就地編輯模式 (支援即時打字、行數統計與自動防抖/Ctrl+S保存)
+                    self.render_editor(ui);
+                } else if self.content.is_empty() && self.image_uri.is_none() {
                     // 極具現代質感的空狀態卡片介面 (Raycast / Linear Style)
                     self.render_empty_state(ui);
                 } else {
@@ -2063,13 +2300,22 @@ impl eframe::App for MdPreviewApp {
 
 impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
-        ui.label(
-            RichText::new(format!(
-                "flash-md v{}  •  Alt+Space (預覽)  •  ←/→/h/l (切換)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  Ctrl+T (大綱)  •  Ctrl+Shift+O (定位)  •  Ctrl+M (模式)  •  Esc (隱藏)",
+        let is_edit = self.is_editing;
+        let tips = if is_edit {
+            format!(
+                "flash-md v{}  •  [就地編輯中]  •  Ctrl+S (保存)  •  E / Esc (退出編輯)  •  / (搜尋)",
                 CURRENT_VERSION
-            ))
-            .color(self.theme.text_secondary())
-            .size(11.5),
+            )
+        } else {
+            format!(
+                "flash-md v{}  •  Alt+Space (預覽)  •  E (就地編輯)  •  ←/→/h/l (切換)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  Ctrl+T (大綱)  •  Ctrl+Shift+O (定位)  •  Ctrl+M (模式)  •  Esc (隱藏)",
+                CURRENT_VERSION
+            )
+        };
+        ui.label(
+            RichText::new(tips)
+                .color(self.theme.text_secondary())
+                .size(11.5),
         );
     }
 

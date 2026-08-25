@@ -13,6 +13,9 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ## ✨ Features
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
+- ✏️ **In-Place Full-Screen Editor**: Press **`E`** or **`Ctrl + E`** during preview to seamlessly switch to an in-place markdown/text editor—modify files without launching heavy external editors!
+- 💾 **Manual & Auto-Debounce Save**: Save manually with `Ctrl + S` or enable "Auto-debounce save (800ms)" in settings, with real-time status bar indication of unsaved changes!
+- ⚙️ **Persistent User Preferences**: Click "⚙️ Settings" to customize and permanently persist your preferred **Dark/Light theme**, save mode, and font scale across reboots and updates!
 - 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs to automatically detect the selected file when `Alt + Space` is pressed.
 - 📊 **Instant Mermaid Diagrams**: Pure Rust, zero-browser in-memory rendering of ````mermaid ```` code blocks into crisp vector SVGs (flowcharts, sequence diagrams, mindmaps, state diagrams, etc.)!
 - 📑 **Instant PDF Text Preview**: Instant in-memory text extraction for `.pdf` files, formatted into structured Markdown pages with TOC and search!
@@ -42,11 +45,13 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | Shortcut | Description |
 | :--- | :--- |
 | **`Alt + Space`** | **Global Hotkey**: Preview selected file in File Explorer / Desktop (press again to close) |
+| **`E`** or **`Ctrl + E`** | **In-place Editor**: Seamlessly toggle between rendered preview and full-screen editor |
+| **`Ctrl + S`** | **Save File**: Manually save in-place modifications to disk (or enable auto-debounce save) |
 | **`←` / `→`** or **`h` / `l`** | **Browse Files**: Navigate to previous / next file in the same directory (with `[3/18]` index) |
 | **`↑` / `↓`** or **`j` / `k`** | **Scroll Document**: Scroll up / down inside current document (supports continuous smooth scrolling) |
 | **`PageUp` / `PageDown`** | **Page Scroll**: Fast page up / page down scrolling |
 | **`Home` / `End`** or **`g` / `G`** | **Jump to Top / Bottom**: Jump directly to the top or bottom of the document |
-| **`Esc`** | Instantly hide preview window / close search bar |
+| **`Esc`** | Exit in-place editor / close search bar / instantly hide preview window |
 | **`Ctrl + F`** or **`/`** | Open search bar and auto-focus search input (Vim style) |
 | **`Enter`** / **`n`** / **`F3`** | **Next Match**: Automatically scroll and jump to next search match (vivid orange focus highlight) |
 | **`Shift + Enter`** / **`N`** / **`Shift + F3`** | **Previous Match**: Automatically scroll and jump to previous search match |
