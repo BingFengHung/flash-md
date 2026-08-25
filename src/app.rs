@@ -1363,9 +1363,15 @@ impl eframe::App for MdPreviewApp {
         let now = std::time::Instant::now();
         let mut has_ime_end = false;
         let mut composition_active = self.ime_is_preediting;
+        let was_recent_end = if let Some(instant) = self.last_ime_commit {
+            instant.elapsed() < Duration::from_millis(80)
+        } else {
+            false
+        };
+        let was_preediting = self.ime_is_preediting;
 
         ctx.input_mut(|i| {
-            for ev in &i.raw.events {
+            for ev in &i.events {
                 match ev {
                     egui::Event::CompositionStart => {
                         composition_active = true;
@@ -1381,16 +1387,10 @@ impl eframe::App for MdPreviewApp {
                 }
             }
 
-            let was_recent_end = if let Some(instant) = self.last_ime_commit {
-                instant.elapsed() < Duration::from_millis(80)
-            } else {
-                false
-            };
-
             // 若目前正處於注音組字階段、本幀剛結束 Composition、或 80ms 內剛結束 Composition，
             // 則確認動作的 Enter 按鍵不應視為文字編輯換行。
-            if has_ime_end || was_recent_end || (self.ime_is_preediting && !composition_active) {
-                i.raw.events.retain(|ev| {
+            if has_ime_end || was_recent_end || (was_preediting && !composition_active) {
+                i.events.retain(|ev| {
                     match ev {
                         egui::Event::Key { key: egui::Key::Enter, .. } => false,
                         egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => false,
