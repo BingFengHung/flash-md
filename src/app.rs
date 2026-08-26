@@ -1259,20 +1259,20 @@ fn is_ime_composing() -> bool {
 
     unsafe {
         let mut hwnd = GetFocus();
-        if hwnd.0 == 0 as _ {
+        if hwnd.0.is_null() {
             hwnd = GetForegroundWindow();
         }
-        if hwnd.0 == 0 as _ {
+        if hwnd.0.is_null() {
             let app_hwnd_val = crate::explorer::get_app_hwnd();
             if app_hwnd_val.0 != 0 {
                 hwnd = HWND(app_hwnd_val.0 as _);
             }
         }
-        if hwnd.0 == 0 as _ {
+        if hwnd.0.is_null() {
             return false;
         }
         let himc = ImmGetContext(hwnd);
-        if himc.0 == 0 as _ {
+        if himc.0.is_null() {
             return false;
         }
         let len = ImmGetCompositionStringW(himc, GCS_COMPSTR, None, 0);
