@@ -867,7 +867,7 @@ impl<'a> RenderContext<'a> {
                     italics: span.italic,
                     strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
                     line_height: Some(22.0_f32 * self.font_scale),
-                    valign: egui::Align::BOTTOM,
+                    valign: egui::Align::Center,
                     background: if span.code {
                         self.theme.code_bg_color()
                     } else {
@@ -896,36 +896,29 @@ impl<'a> RenderContext<'a> {
 
                 for span in spans {
                     if span.code {
-                        // Inline Code Pill
-                        let bg = self.theme.code_bg_color();
-                        let border = self.theme.border_color();
-                        Frame::none()
-                            .fill(bg)
-                            .rounding(Rounding::same(4.0_f32))
-                            .stroke(Stroke::new(1.0_f32, border))
-                            .inner_margin(Margin::symmetric(4.0_f32, 1.0_f32))
-                            .show(ui, |ui| {
-                                let mut code_job = LayoutJob::default();
-                                let base_fmt = egui::TextFormat {
-                                    font_id: FontId::monospace(14.0_f32 * self.font_scale),
-                                    color: self.theme.accent_color(),
-                                    valign: egui::Align::BOTTOM,
-                                    ..Default::default()
-                                };
-                                append_highlighted_text(
-                                    &mut code_job,
-                                    &span.text,
-                                    self.search_query,
-                                    base_fmt,
-                                    hl_bg,
-                                    hl_fg,
-                                    act_bg,
-                                    act_fg,
-                                    self.active_match_index,
-                                    &mut self.match_counter,
-                                );
-                                ui.label(code_job);
-                            });
+                        // Inline Code (使用 LayoutJob + TextFormat background 確保與普通文字完全等高並水平對齊，不使用外部 Frame)
+                        let mut code_job = LayoutJob::default();
+                        let base_fmt = egui::TextFormat {
+                            font_id: FontId::monospace(14.0_f32 * self.font_scale),
+                            color: self.theme.accent_color(),
+                            background: self.theme.code_bg_color(),
+                            line_height: Some(22.0_f32 * self.font_scale),
+                            valign: egui::Align::Center,
+                            ..Default::default()
+                        };
+                        append_highlighted_text(
+                            &mut code_job,
+                            &span.text,
+                            self.search_query,
+                            base_fmt,
+                            hl_bg,
+                            hl_fg,
+                            act_bg,
+                            act_fg,
+                            self.active_match_index,
+                            &mut self.match_counter,
+                        );
+                        ui.label(code_job);
                     } else if let Some(url) = span.link_url {
                         // Hyperlink or Internal Document Anchor Link (使用 LayoutJob + Label 確保與普通文字完全等高並水平對齊)
                         let mut link_job = LayoutJob::default();
@@ -936,7 +929,7 @@ impl<'a> RenderContext<'a> {
                             italics: span.italic,
                             strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, self.theme.accent_color()),
                             line_height: Some(22.0_f32 * self.font_scale),
-                            valign: egui::Align::BOTTOM,
+                            valign: egui::Align::Center,
                             ..Default::default()
                         };
                         append_highlighted_text(
@@ -972,7 +965,7 @@ impl<'a> RenderContext<'a> {
                             italics: span.italic,
                             strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, self.theme.text_primary()),
                             line_height: Some(22.0_f32 * self.font_scale),
-                            valign: egui::Align::BOTTOM,
+                            valign: egui::Align::Center,
                             ..Default::default()
                         };
                         append_highlighted_text(

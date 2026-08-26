@@ -1356,13 +1356,13 @@ impl eframe::App for MdPreviewApp {
 
         // IME (注音/拼音/日文輸入法) 選字確認 Enter 防誤換行過濾：
         // 當使用者在 Windows 輸入法中鍵入 CJK 漢字或候選詞時，
-        // 系統會送入 Event::Text("文字")，並在同幀或 150ms 內伴隨發送 Key::Enter 與 Text("\n")。
-        // 此處偵測本幀是否有 CJK 文字輸入、前幀是否有待確認狀態、或 150ms 內剛發生 CJK 文字輸入，
-        // 自動過濾清除伴隨的 Key::Enter 與 Text("\n") 事件，徹底杜絕組字確認時產生誤換行；
+        // 系統會送入 Event::Text("文字")，並在同幀或 300ms 內伴隨發送 Key::Enter 與 Text("\n")。
+        // 此處偵測本幀是否有 CJK 文字輸入、前幀是否有待確認狀態、或 300ms 內剛發生 CJK 文字輸入，
+        // 自動過濾清除伴隨的 Key::Enter 與 Text("\n") 事件，並清除 keys_down 中的 Enter 鍵，徹底杜絕組字確認時產生誤換行；
         // 待組字完成後，使用者再次按下 Enter 即可正常段落換行，且純英數輸入完全不受任何影響。
         let now = std::time::Instant::now();
         let was_recent_cjk = if let Some(instant) = self.last_cjk_input {
-            instant.elapsed() < Duration::from_millis(150)
+            instant.elapsed() < Duration::from_millis(300)
         } else {
             false
         };
@@ -1384,27 +1384,38 @@ impl eframe::App for MdPreviewApp {
             let should_filter_enter = has_cjk_this_frame || was_pending || was_recent_cjk;
 
             if should_filter_enter {
+                let mut found_enter = false;
                 i.events.retain(|ev| {
                     match ev {
                         egui::Event::Key { key: egui::Key::Enter, .. } => {
-                            enter_was_swallowed = true;
+                            found_enter = true;
                             false
                         }
                         egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => {
-                            enter_was_swallowed = true;
+                            found_enter = true;
                             false
                         }
                         _ => true,
                     }
                 });
+                if found_enter || i.keys_down.contains(&egui::Key::Enter) {
+                    enter_was_swallowed = true;
+                    i.keys_down.remove(&egui::Key::Enter);
+                }
             }
         });
 
         if has_cjk_this_frame {
-            self.last_cjk_input = Some(now);
-            self.pending_cjk_ime_confirm = !enter_was_swallowed;
-        } else if was_pending {
             if enter_was_swallowed {
+                self.last_cjk_input = None;
+                self.pending_cjk_ime_confirm = false;
+            } else {
+                self.last_cjk_input = Some(now);
+                self.pending_cjk_ime_confirm = true;
+            }
+        } else if was_pending || was_recent_cjk {
+            if enter_was_swallowed {
+                self.last_cjk_input = None;
                 self.pending_cjk_ime_confirm = false;
             } else {
                 ctx.input(|i| {
@@ -1412,6 +1423,7 @@ impl eframe::App for MdPreviewApp {
                         || i.key_pressed(egui::Key::Backspace)
                         || i.pointer.any_click()
                     {
+                        self.last_cjk_input = None;
                         self.pending_cjk_ime_confirm = false;
                     }
                 });
