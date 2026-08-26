@@ -1253,46 +1253,45 @@ impl MdPreviewApp {
     }
 #[cfg(windows)]
 fn is_ime_composing() -> bool {
-    use std::ffi::c_void;
+    use windows::core::s;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    use windows::Win32::UI::WindowsAndMessaging::{GetFocus, GetForegroundWindow};
 
-    type FnImmGetContext = unsafe extern "system" fn(isize) -> isize;
-    type FnImmReleaseContext = unsafe extern "system" fn(isize, isize) -> i32;
-    type FnImmGetCompositionStringW = unsafe extern "system" fn(isize, u32, *mut c_void, u32) -> i32;
-
-    extern "system" {
-        fn LoadLibraryA(lp_lib_file_name: *const u8) -> isize;
-        fn GetProcAddress(h_module: isize, lp_proc_name: *const u8) -> *const c_void;
-        fn GetFocus() -> isize;
-        fn GetForegroundWindow() -> isize;
-    }
+    type FnImmGetContext = unsafe extern "system" fn(HWND) -> isize;
+    type FnImmReleaseContext = unsafe extern "system" fn(HWND, isize) -> i32;
+    type FnImmGetCompositionStringW = unsafe extern "system" fn(isize, u32, *mut std::ffi::c_void, u32) -> i32;
 
     unsafe {
-        let imm32 = LoadLibraryA(b"imm32.dll\0".as_ptr());
-        if imm32 == 0 {
+        let Ok(imm32) = LoadLibraryA(s!("imm32.dll")) else {
             return false;
-        }
+        };
 
-        let p_get_ctx = GetProcAddress(imm32, b"ImmGetContext\0".as_ptr());
-        let p_rel_ctx = GetProcAddress(imm32, b"ImmReleaseContext\0".as_ptr());
-        let p_get_comp = GetProcAddress(imm32, b"ImmGetCompositionStringW\0".as_ptr());
-
-        if p_get_ctx.is_null() || p_rel_ctx.is_null() || p_get_comp.is_null() {
+        let Some(p_get_ctx) = GetProcAddress(imm32, s!("ImmGetContext")) else {
             return false;
-        }
+        };
+        let Some(p_rel_ctx) = GetProcAddress(imm32, s!("ImmReleaseContext")) else {
+            return false;
+        };
+        let Some(p_get_comp) = GetProcAddress(imm32, s!("ImmGetCompositionStringW")) else {
+            return false;
+        };
 
         let imm_get_context: FnImmGetContext = std::mem::transmute(p_get_ctx);
         let imm_release_context: FnImmReleaseContext = std::mem::transmute(p_rel_ctx);
         let imm_get_composition_string_w: FnImmGetCompositionStringW = std::mem::transmute(p_get_comp);
 
         let mut hwnd = GetFocus();
-        if hwnd == 0 {
+        if hwnd.0 == 0 as _ {
             hwnd = GetForegroundWindow();
         }
-        if hwnd == 0 {
+        if hwnd.0 == 0 as _ {
             let app_hwnd_val = crate::explorer::get_app_hwnd();
-            hwnd = app_hwnd_val.0;
+            if app_hwnd_val.0 != 0 {
+                hwnd = HWND(app_hwnd_val.0 as _);
+            }
         }
-        if hwnd == 0 {
+        if hwnd.0 == 0 as _ {
             return false;
         }
 
