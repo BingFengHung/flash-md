@@ -1253,25 +1253,37 @@ impl MdPreviewApp {
     }
 #[cfg(windows)]
 fn is_ime_composing() -> bool {
-    #[link(name = "imm32")]
-    extern "system" {
-        fn ImmGetContext(hwnd: isize) -> isize;
-        fn ImmReleaseContext(hwnd: isize, himc: isize) -> i32;
-        fn ImmGetCompositionStringW(
-            himc: isize,
-            dw_index: u32,
-            lp_buf: *mut std::ffi::c_void,
-            dw_buf_len: u32,
-        ) -> i32;
-    }
+    use std::ffi::c_void;
 
-    #[link(name = "user32")]
+    type FnImmGetContext = unsafe extern "system" fn(isize) -> isize;
+    type FnImmReleaseContext = unsafe extern "system" fn(isize, isize) -> i32;
+    type FnImmGetCompositionStringW = unsafe extern "system" fn(isize, u32, *mut c_void, u32) -> i32;
+
     extern "system" {
+        fn LoadLibraryA(lp_lib_file_name: *const u8) -> isize;
+        fn GetProcAddress(h_module: isize, lp_proc_name: *const u8) -> *const c_void;
         fn GetFocus() -> isize;
         fn GetForegroundWindow() -> isize;
     }
 
     unsafe {
+        let imm32 = LoadLibraryA(b"imm32.dll\0".as_ptr());
+        if imm32 == 0 {
+            return false;
+        }
+
+        let p_get_ctx = GetProcAddress(imm32, b"ImmGetContext\0".as_ptr());
+        let p_rel_ctx = GetProcAddress(imm32, b"ImmReleaseContext\0".as_ptr());
+        let p_get_comp = GetProcAddress(imm32, b"ImmGetCompositionStringW\0".as_ptr());
+
+        if p_get_ctx.is_null() || p_rel_ctx.is_null() || p_get_comp.is_null() {
+            return false;
+        }
+
+        let imm_get_context: FnImmGetContext = std::mem::transmute(p_get_ctx);
+        let imm_release_context: FnImmReleaseContext = std::mem::transmute(p_rel_ctx);
+        let imm_get_composition_string_w: FnImmGetCompositionStringW = std::mem::transmute(p_get_comp);
+
         let mut hwnd = GetFocus();
         if hwnd == 0 {
             hwnd = GetForegroundWindow();
@@ -1283,12 +1295,14 @@ fn is_ime_composing() -> bool {
         if hwnd == 0 {
             return false;
         }
-        let himc = ImmGetContext(hwnd);
+
+        let himc = imm_get_context(hwnd);
         if himc == 0 {
             return false;
         }
-        let len = ImmGetCompositionStringW(himc, 0x0008, std::ptr::null_mut(), 0);
-        let _ = ImmReleaseContext(hwnd, himc);
+
+        let len = imm_get_composition_string_w(himc, 0x0008, std::ptr::null_mut(), 0);
+        let _ = imm_release_context(hwnd, himc);
         len > 0
     }
 }
