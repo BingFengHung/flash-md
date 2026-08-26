@@ -1251,6 +1251,55 @@ impl MdPreviewApp {
 
         (should_close, target_anchor)
     }
+#[cfg(windows)]
+fn is_ime_composing() -> bool {
+    use std::ffi::c_void;
+    type HIMC = *mut c_void;
+    type HWND = *mut c_void;
+    const GCS_COMPSTR: u32 = 0x0008;
+
+    #[link(name = "imm32")]
+    #[link(name = "user32")]
+    extern "system" {
+        fn ImmGetContext(hwnd: HWND) -> HIMC;
+        fn ImmReleaseContext(hwnd: HWND, himc: HIMC) -> i32;
+        fn ImmGetCompositionStringW(
+            himc: HIMC,
+            dw_index: u32,
+            lp_buf: *mut c_void,
+            dw_buf_len: u32,
+        ) -> i32;
+        fn GetFocus() -> HWND;
+        fn GetForegroundWindow() -> HWND;
+    }
+
+    unsafe {
+        let mut hwnd = GetFocus();
+        if hwnd.is_null() {
+            hwnd = GetForegroundWindow();
+        }
+        if hwnd.is_null() {
+            let app_hwnd_val = crate::explorer::get_app_hwnd();
+            if app_hwnd_val.0 != 0 {
+                hwnd = app_hwnd_val.0 as HWND;
+            }
+        }
+        if hwnd.is_null() {
+            return false;
+        }
+        let himc = ImmGetContext(hwnd);
+        if himc.is_null() {
+            return false;
+        }
+        let len = ImmGetCompositionStringW(himc, GCS_COMPSTR, std::ptr::null_mut(), 0);
+        let _ = ImmReleaseContext(hwnd, himc);
+        len > 0
+    }
+}
+
+#[cfg(not(windows))]
+fn is_ime_composing() -> bool {
+    false
 }
 
 impl eframe::App for MdPreviewApp {
@@ -1356,36 +1405,23 @@ impl eframe::App for MdPreviewApp {
         }
 
         // IME (注音/拼音/日文輸入法) 選字確認 Enter 防誤換行過濾：
-        // 當使用者在 Windows 輸入法中選字按下 Enter 確認時，
-        // 系統會送出 ImeEvent::Commit / Preedit 結束與 Key::Enter/Text("\n")，導致字元輸入後被額外插入換行。
-        // 此處偵測如果本幀有 Ime::Commit 事件、或剛結束組字 Preedit、或 150ms 內剛發生 IME Commit，
-        // 則主動過濾掉伴隨的 Enter 按鍵事件與換行字元。
+        // 透過 Windows 原生 IMM32 API (ImmGetCompositionStringW) 偵測使用者是否處於組字狀態 (如選字中)。
+        // 當使用者在組字中按下 Enter 確認時，系統會送出 Key::Enter/Text("\n")，
+        // 此處偵測到組字狀態或剛結束組字 (120ms 內)，自動過濾掉伴隨的 Enter 按鍵事件與換行字元。
         let now = std::time::Instant::now();
-        let was_preediting = self.ime_is_preediting;
+        let was_composing = self.ime_is_preediting;
+        let is_now_composing = is_ime_composing();
         let was_recent_commit = if let Some(instant) = self.last_ime_commit {
-            instant.elapsed() < Duration::from_millis(150)
+            instant.elapsed() < Duration::from_millis(120)
         } else {
             false
         };
 
-        let mut has_ime_commit = false;
-        let mut preedit_active = was_preediting;
+        // 如果本幀正在組字、上一幀正在組字而本幀結束 (即按下 Enter 選字確認的瞬間)、或 120ms 內剛結束組字
+        let should_filter_enter = is_now_composing || was_composing || was_recent_commit;
 
-        ctx.input_mut(|i| {
-            for ev in &i.events {
-                match ev {
-                    egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
-                        preedit_active = !text.is_empty();
-                    }
-                    egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
-                        has_ime_commit = true;
-                        preedit_active = false;
-                    }
-                    _ => {}
-                }
-            }
-
-            if has_ime_commit || was_recent_commit || (was_preediting && !preedit_active) {
+        if should_filter_enter {
+            ctx.input_mut(|i| {
                 i.events.retain(|ev| {
                     match ev {
                         egui::Event::Key { key: egui::Key::Enter, .. } => false,
@@ -1393,11 +1429,11 @@ impl eframe::App for MdPreviewApp {
                         _ => true,
                     }
                 });
-            }
-        });
+            });
+        }
 
-        self.ime_is_preediting = preedit_active;
-        if has_ime_commit || (was_preediting && !preedit_active) {
+        self.ime_is_preediting = is_now_composing;
+        if was_composing && !is_now_composing {
             self.last_ime_commit = Some(now);
         }
 
