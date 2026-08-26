@@ -1253,29 +1253,41 @@ impl MdPreviewApp {
     }
 #[cfg(windows)]
 fn is_ime_composing() -> bool {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Input::Ime::{ImmGetCompositionStringW, ImmGetContext, ImmReleaseContext, GCS_COMPSTR};
-    use windows::Win32::UI::WindowsAndMessaging::{GetFocus, GetForegroundWindow};
+    #[link(name = "imm32")]
+    extern "system" {
+        fn ImmGetContext(hwnd: isize) -> isize;
+        fn ImmReleaseContext(hwnd: isize, himc: isize) -> i32;
+        fn ImmGetCompositionStringW(
+            himc: isize,
+            dw_index: u32,
+            lp_buf: *mut std::ffi::c_void,
+            dw_buf_len: u32,
+        ) -> i32;
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetFocus() -> isize;
+        fn GetForegroundWindow() -> isize;
+    }
 
     unsafe {
         let mut hwnd = GetFocus();
-        if hwnd.is_invalid() {
+        if hwnd == 0 {
             hwnd = GetForegroundWindow();
         }
-        if hwnd.is_invalid() {
+        if hwnd == 0 {
             let app_hwnd_val = crate::explorer::get_app_hwnd();
-            if app_hwnd_val.0 != 0 {
-                hwnd = HWND(app_hwnd_val.0 as _);
-            }
+            hwnd = app_hwnd_val.0;
         }
-        if hwnd.is_invalid() {
+        if hwnd == 0 {
             return false;
         }
         let himc = ImmGetContext(hwnd);
-        if himc.is_invalid() {
+        if himc == 0 {
             return false;
         }
-        let len = ImmGetCompositionStringW(himc, GCS_COMPSTR, None, 0);
+        let len = ImmGetCompositionStringW(himc, 0x0008, std::ptr::null_mut(), 0);
         let _ = ImmReleaseContext(hwnd, himc);
         len > 0
     }
