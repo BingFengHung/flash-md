@@ -3,7 +3,7 @@ use crossbeam_channel::Sender;
 use egui::Context;
 use log::{debug, error, info};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -21,7 +21,7 @@ pub enum HotkeyEvent {
 
 static GLOBAL_HOTKEY_SENDER: Mutex<Option<Sender<HotkeyEvent>>> = Mutex::new(None);
 static GLOBAL_CTX_HOLDER: Mutex<Option<Arc<Mutex<Option<Context>>>>> = Mutex::new(None);
-static GLOBAL_HOOK: Mutex<HHOOK> = Mutex::new(HHOOK(0 as _));
+static GLOBAL_HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
 /// 全域低階鍵盤掛鉤 (WH_KEYBOARD_LL) 回呼函式
 /// 攔截 Alt + Space 並直接吞噬該按鍵事件 (Swallow Key Event)，防止 Windows 彈出系統視窗選單！
@@ -89,8 +89,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
         }
     }
 
-    let hook = GLOBAL_HOOK.lock().ok().map(|g| *g).unwrap_or(HHOOK(0 as _));
-    CallNextHookEx(hook, n_code, w_param, l_param)
+    let hook_val = GLOBAL_HOOK_HANDLE.load(Ordering::Relaxed);
+    CallNextHookEx(HHOOK(hook_val as _), n_code, w_param, l_param)
 }
 
 /// 啟動全域鍵盤掛鉤監聽執行緒
@@ -126,9 +126,7 @@ pub fn start_hotkey_listener(
                     }
                 };
 
-                if let Ok(mut g) = GLOBAL_HOOK.lock() {
-                    *g = hook;
-                }
+                GLOBAL_HOOK_HANDLE.store(hook.0 as isize, Ordering::Relaxed);
                 info!("✅ 成功啟用 WH_KEYBOARD_LL 全域鍵盤攔截器 (已攔截並吞噬 Alt+Space 系統選單)");
 
                 let mut msg = MSG::default();
@@ -145,9 +143,7 @@ pub fn start_hotkey_listener(
 
                 // 移除掛鉤
                 let _ = UnhookWindowsHookEx(hook);
-                if let Ok(mut g) = GLOBAL_HOOK.lock() {
-                    *g = HHOOK(0 as _);
-                }
+                GLOBAL_HOOK_HANDLE.store(0, Ordering::Relaxed);
                 info!("WH_KEYBOARD_LL 鍵盤掛鉤已安全解除");
             }
         })
