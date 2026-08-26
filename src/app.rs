@@ -83,8 +83,8 @@ pub struct MdPreviewApp {
     pub reset_scroll_to_top: bool,
     pub keyboard_scroll_delta: f32,
     pub reading_progress: f32,
-    pub last_cjk_input: Option<std::time::Instant>,
-    pub pending_cjk_ime_confirm: bool,
+    pub is_ime_composing: bool,
+    pub last_ime_activity: Option<std::time::Instant>,
 }
 
 impl MdPreviewApp {
@@ -161,8 +161,8 @@ impl MdPreviewApp {
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
             reading_progress: 0.0,
-            last_cjk_input: None,
-            pending_cjk_ime_confirm: false,
+            is_ime_composing: false,
+            last_ime_activity: None,
         };
 
         if !is_visible {
@@ -1354,34 +1354,51 @@ impl eframe::App for MdPreviewApp {
             }
         }
 
-        // IME (注音/拼音/日文輸入法) 選字確認 Enter 防誤換行過濾：
-        // 當使用者在 Windows 輸入法中鍵入 CJK 漢字或候選詞時，
-        // 系統會送入 Event::Text("文字")，並在同幀或 300ms 內伴隨發送 Key::Enter 與 Text("\n")。
-        // 此處偵測本幀是否有 CJK 文字輸入、前幀是否有待確認狀態、或 300ms 內剛發生 CJK 文字輸入，
-        // 自動過濾清除伴隨的 Key::Enter 與 Text("\n") 事件，並清除 keys_down 中的 Enter 鍵，徹底杜絕組字確認時產生誤換行；
-        // 待組字完成後，使用者再次按下 Enter 即可正常段落換行，且純英數輸入完全不受任何影響。
+        // IME (注音/拼音/日文輸入法) 組字與選字確認 Enter 防誤換行過濾：
+        // 1. 偵測 egui::Event::Ime(Preedit / Commit) 與 Event::Text (含 CJK 漢字或注音符號)
+        // 2. 當處於 IME 組字中 (Preedit) 或剛進行組字/選字 (400ms 內) 時，
+        //    Windows 會發送 Key::Enter 與 Text("\n") 來結束組字或確認候選字。
+        // 3. 自動自 i.events 與 i.keys_down 中徹底吞噬該次 Enter，防止編輯器直接換行！
+        // 4. 組字確認後，使用者再次按下 Enter 即可正常進行段落換行，英數模式輸入亦完全不受影響。
         let now = std::time::Instant::now();
-        let was_recent_cjk = if let Some(instant) = self.last_cjk_input {
-            instant.elapsed() < Duration::from_millis(300)
+        let was_recent_ime = if let Some(instant) = self.last_ime_activity {
+            instant.elapsed() < Duration::from_millis(400)
         } else {
             false
         };
-        let was_pending = self.pending_cjk_ime_confirm;
 
-        let mut has_cjk_this_frame = false;
+        let mut ime_event_this_frame = false;
         let mut enter_was_swallowed = false;
 
         ctx.input_mut(|i| {
             for ev in &i.events {
-                if let egui::Event::Text(ref s) = ev {
-                    // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
-                    if s.chars().any(|c| c >= '\u{2E80}') {
-                        has_cjk_this_frame = true;
+                match ev {
+                    egui::Event::Ime(egui::Ime::Preedit(s)) => {
+                        ime_event_this_frame = true;
+                        self.is_ime_composing = !s.is_empty();
                     }
+                    egui::Event::Ime(egui::Ime::Commit(_)) => {
+                        ime_event_this_frame = true;
+                        self.is_ime_composing = false;
+                    }
+                    egui::Event::Ime(egui::Ime::Disabled) => {
+                        self.is_ime_composing = false;
+                    }
+                    egui::Event::Text(ref s) => {
+                        // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
+                        if s.chars().any(|c| c >= '\u{2E80}') {
+                            ime_event_this_frame = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
 
-            let should_filter_enter = has_cjk_this_frame || was_pending || was_recent_cjk;
+            if ime_event_this_frame {
+                self.last_ime_activity = Some(now);
+            }
+
+            let should_filter_enter = self.is_ime_composing || was_recent_ime || ime_event_this_frame;
 
             if should_filter_enter {
                 let mut found_enter = false;
@@ -1405,29 +1422,17 @@ impl eframe::App for MdPreviewApp {
             }
         });
 
-        if has_cjk_this_frame {
-            if enter_was_swallowed {
-                self.last_cjk_input = None;
-                self.pending_cjk_ime_confirm = false;
-            } else {
-                self.last_cjk_input = Some(now);
-                self.pending_cjk_ime_confirm = true;
-            }
-        } else if was_pending || was_recent_cjk {
-            if enter_was_swallowed {
-                self.last_cjk_input = None;
-                self.pending_cjk_ime_confirm = false;
-            } else {
-                ctx.input(|i| {
-                    if i.key_pressed(egui::Key::Enter)
-                        || i.key_pressed(egui::Key::Backspace)
-                        || i.pointer.any_click()
-                    {
-                        self.last_cjk_input = None;
-                        self.pending_cjk_ime_confirm = false;
-                    }
-                });
-            }
+        if enter_was_swallowed {
+            // 已成功吞噬組字確認 Enter，重置計時器，使下一次 Enter 能正常進行段落換行
+            self.last_ime_activity = None;
+            self.is_ime_composing = false;
+        } else {
+            ctx.input(|i| {
+                if i.key_pressed(egui::Key::Backspace) || i.pointer.any_click() {
+                    self.last_ime_activity = None;
+                    self.is_ime_composing = false;
+                }
+            });
         }
 
         // 快捷鍵監聽
