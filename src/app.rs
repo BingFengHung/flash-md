@@ -596,7 +596,7 @@ impl MdPreviewApp {
     fn render_editor(&mut self, ui: &mut egui::Ui) {
         let font_scale = self.font_scale;
         let text_color = self.theme.text_primary();
-        let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+        let scroll = ScrollArea::vertical().auto_shrink([false, false]);
         let mut changed = false;
 
         scroll.show(ui, |ui| {
@@ -2576,6 +2576,7 @@ fn rfd_open_file() -> Option<PathBuf> {
 }
 
 /// 自 ZIP 壓縮檔內直接即時讀取文字檔案內容 (無需使用者手動解壓縮)
+#[allow(dead_code)]
 fn read_text_from_zip(zip_path: &Path, entry_name: &str) -> Result<String, String> {
     let zip_str = zip_path.to_string_lossy().replace('\'', "''");
     let entry_clean = entry_name.replace('/', "\\").replace('\'', "''");
@@ -2655,7 +2656,7 @@ impl MdPreviewApp {
             });
         } else if let Some(ref uri) = self.image_uri {
             let available = ui.available_size();
-            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+            let scroll = ScrollArea::both().auto_shrink([false, false]);
             scroll.show(ui, |ui| {
                 ui.centered_and_justified(|ui| {
                     let img = egui::Image::from_uri(uri.clone())

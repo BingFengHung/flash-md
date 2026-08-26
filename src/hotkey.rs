@@ -19,9 +19,9 @@ pub enum HotkeyEvent {
     TriggerPreviewWithFile(Option<PathBuf>),
 }
 
-static mut GLOBAL_HOTKEY_SENDER: Option<Sender<HotkeyEvent>> = None;
-static mut GLOBAL_CTX_HOLDER: Option<Arc<Mutex<Option<Context>>>> = None;
-static mut GLOBAL_HOOK: HHOOK = HHOOK(0 as _);
+static GLOBAL_HOTKEY_SENDER: Mutex<Option<Sender<HotkeyEvent>>> = Mutex::new(None);
+static GLOBAL_CTX_HOLDER: Mutex<Option<Arc<Mutex<Option<Context>>>>> = Mutex::new(None);
+static GLOBAL_HOOK: Mutex<HHOOK> = Mutex::new(HHOOK(0 as _));
 
 /// 全域低階鍵盤掛鉤 (WH_KEYBOARD_LL) 回呼函式
 /// 攔截 Alt + Space 並直接吞噬該按鍵事件 (Swallow Key Event)，防止 Windows 彈出系統視窗選單！
@@ -56,8 +56,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
                         // 會導致 COM 呼叫互鎖逾時或靜默失敗回傳 None！
                         //
                         // 因此必須將所有 COM 操作搬至獨立執行緒，讓掛鉤回呼立即返回！
-                        let sender_clone = GLOBAL_HOTKEY_SENDER.as_ref().cloned();
-                        let ctx_clone = GLOBAL_CTX_HOLDER.as_ref().cloned();
+                        let sender_clone = GLOBAL_HOTKEY_SENDER.lock().ok().and_then(|g| g.clone());
+                        let ctx_clone = GLOBAL_CTX_HOLDER.lock().ok().and_then(|g| g.clone());
 
                         std::thread::spawn(move || {
                             // 1. 在獨立執行緒中執行 COM 操作（擁有獨立的 COM 初始化，不受掛鉤訊息幫浦限制）
@@ -89,7 +89,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
         }
     }
 
-    CallNextHookEx(GLOBAL_HOOK, n_code, w_param, l_param)
+    let hook = GLOBAL_HOOK.lock().ok().map(|g| *g).unwrap_or(HHOOK(0 as _));
+    CallNextHookEx(hook, n_code, w_param, l_param)
 }
 
 /// 啟動全域鍵盤掛鉤監聽執行緒
@@ -103,10 +104,14 @@ pub fn start_hotkey_listener(
         .spawn(move || {
             info!("啟動 Windows Low-Level Keyboard Hook (WH_KEYBOARD_LL) 監聽執行緒...");
 
-            unsafe {
-                GLOBAL_HOTKEY_SENDER = Some(sender);
-                GLOBAL_CTX_HOLDER = Some(ctx_holder);
+            if let Ok(mut g) = GLOBAL_HOTKEY_SENDER.lock() {
+                *g = Some(sender);
+            }
+            if let Ok(mut g) = GLOBAL_CTX_HOLDER.lock() {
+                *g = Some(ctx_holder);
+            }
 
+            unsafe {
                 // 設定低階鍵盤掛鉤 (WH_KEYBOARD_LL)
                 let hook = match SetWindowsHookExW(
                     WH_KEYBOARD_LL,
@@ -121,7 +126,9 @@ pub fn start_hotkey_listener(
                     }
                 };
 
-                GLOBAL_HOOK = hook;
+                if let Ok(mut g) = GLOBAL_HOOK.lock() {
+                    *g = hook;
+                }
                 info!("✅ 成功啟用 WH_KEYBOARD_LL 全域鍵盤攔截器 (已攔截並吞噬 Alt+Space 系統選單)");
 
                 let mut msg = MSG::default();
@@ -138,7 +145,9 @@ pub fn start_hotkey_listener(
 
                 // 移除掛鉤
                 let _ = UnhookWindowsHookEx(hook);
-                GLOBAL_HOOK = HHOOK(0 as _);
+                if let Ok(mut g) = GLOBAL_HOOK.lock() {
+                    *g = HHOOK(0 as _);
+                }
                 info!("WH_KEYBOARD_LL 鍵盤掛鉤已安全解除");
             }
         })

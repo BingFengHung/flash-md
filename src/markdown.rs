@@ -219,6 +219,7 @@ impl<'a> MarkdownRenderer<'a> {
 
 struct InlineSpan {
     text: String,
+    #[allow(dead_code)]
     bold: bool,
     italic: bool,
     strikethrough: bool,
@@ -1838,6 +1839,7 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
 pub struct TocItem {
     pub level: u8,
     pub title: String,
+    #[allow(dead_code)]
     pub line_idx: usize,
 }
 
@@ -2206,6 +2208,7 @@ pub struct TextStats {
     pub cjk_chars: usize,
     pub words: usize,
     pub total_chars: usize,
+    #[allow(dead_code)]
     pub lines: usize,
     pub reading_time_mins: usize,
 }
