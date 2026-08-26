@@ -849,7 +849,7 @@ impl<'a> RenderContext<'a> {
         if !has_hyperlinks {
             for span in spans {
                 let font_id = if span.code {
-                    FontId::monospace(13.5_f32 * self.font_scale)
+                    FontId::monospace(14.0_f32 * self.font_scale)
                 } else {
                     FontId::proportional(14.5_f32 * self.font_scale)
                 };
@@ -866,7 +866,7 @@ impl<'a> RenderContext<'a> {
                     italics: span.italic,
                     strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
                     line_height: Some(22.0_f32 * self.font_scale),
-                    valign: egui::Align::Center,
+                    valign: egui::Align::BOTTOM,
                     background: if span.code {
                         self.theme.code_bg_color()
                     } else {
@@ -906,9 +906,9 @@ impl<'a> RenderContext<'a> {
                             .show(ui, |ui| {
                                 let mut code_job = LayoutJob::default();
                                 let base_fmt = egui::TextFormat {
-                                    font_id: FontId::monospace(13.5_f32 * self.font_scale),
+                                    font_id: FontId::monospace(14.0_f32 * self.font_scale),
                                     color: self.theme.accent_color(),
-                                    valign: egui::Align::Center,
+                                    valign: egui::Align::BOTTOM,
                                     ..Default::default()
                                 };
                                 append_highlighted_text(
@@ -935,7 +935,7 @@ impl<'a> RenderContext<'a> {
                             italics: span.italic,
                             strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, self.theme.accent_color()),
                             line_height: Some(22.0_f32 * self.font_scale),
-                            valign: egui::Align::Center,
+                            valign: egui::Align::BOTTOM,
                             ..Default::default()
                         };
                         append_highlighted_text(
@@ -971,7 +971,7 @@ impl<'a> RenderContext<'a> {
                             italics: span.italic,
                             strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, self.theme.text_primary()),
                             line_height: Some(22.0_f32 * self.font_scale),
-                            valign: egui::Align::Center,
+                            valign: egui::Align::BOTTOM,
                             ..Default::default()
                         };
                         append_highlighted_text(

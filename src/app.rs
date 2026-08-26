@@ -83,6 +83,7 @@ pub struct MdPreviewApp {
     pub reset_scroll_to_top: bool,
     pub keyboard_scroll_delta: f32,
     pub reading_progress: f32,
+    pub last_cjk_input: Option<std::time::Instant>,
     pub pending_cjk_ime_confirm: bool,
 }
 
@@ -160,6 +161,7 @@ impl MdPreviewApp {
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
             reading_progress: 0.0,
+            last_cjk_input: None,
             pending_cjk_ime_confirm: false,
         };
 
@@ -1353,58 +1355,67 @@ impl eframe::App for MdPreviewApp {
         }
 
         // IME (注音/拼音/日文輸入法) 選字確認 Enter 防誤換行過濾：
-        // 當使用者在微軟注音/拼音等輸入法中鍵入 CJK 漢字或候選詞時，系統會送入文字字元。
-        // 使用者隨後按下 Enter 作為組字確認 (Commit)。此時 Windows 會發送 Key::Enter / Text("\n")。
-        // 若在前次鍵入 CJK 文字後尚未按下確認鍵 (pending_cjk_ime_confirm = true)，
-        // 則精確過濾掉這一次伴隨的 Enter 按鍵事件與換行字元，防止編輯時產生誤換行；
-        // 待確認完成後，使用者再次按下 Enter 即可正常進行段落換行，且純英數輸入不會受任何影響。
-        let mut had_cjk_input = false;
-        let pending_confirm = self.pending_cjk_ime_confirm;
+        // 當使用者在 Windows 輸入法中鍵入 CJK 漢字或候選詞時，
+        // 系統會送入 Event::Text("文字")，並在同幀或 150ms 內伴隨發送 Key::Enter 與 Text("\n")。
+        // 此處偵測本幀是否有 CJK 文字輸入、前幀是否有待確認狀態、或 150ms 內剛發生 CJK 文字輸入，
+        // 自動過濾清除伴隨的 Key::Enter 與 Text("\n") 事件，徹底杜絕組字確認時產生誤換行；
+        // 待組字完成後，使用者再次按下 Enter 即可正常段落換行，且純英數輸入完全不受任何影響。
+        let now = std::time::Instant::now();
+        let was_recent_cjk = if let Some(instant) = self.last_cjk_input {
+            instant.elapsed() < Duration::from_millis(150)
+        } else {
+            false
+        };
+        let was_pending = self.pending_cjk_ime_confirm;
+
+        let mut has_cjk_this_frame = false;
+        let mut enter_was_swallowed = false;
 
         ctx.input_mut(|i| {
             for ev in &i.events {
                 if let egui::Event::Text(ref s) = ev {
-                    // 偵測是否輸入 CJK 漢字、注音符號或非 ASCII 字元 (表示處於輸入法輸入)
+                    // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
                     if s.chars().any(|c| c >= '\u{2E80}') {
-                        had_cjk_input = true;
+                        has_cjk_this_frame = true;
                     }
                 }
             }
 
-            if pending_confirm {
-                let mut swallowed_enter = false;
+            let should_filter_enter = has_cjk_this_frame || was_pending || was_recent_cjk;
+
+            if should_filter_enter {
                 i.events.retain(|ev| {
                     match ev {
                         egui::Event::Key { key: egui::Key::Enter, .. } => {
-                            swallowed_enter = true;
+                            enter_was_swallowed = true;
                             false
                         }
                         egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => {
-                            swallowed_enter = true;
+                            enter_was_swallowed = true;
                             false
                         }
                         _ => true,
                     }
                 });
-                if swallowed_enter {
-                    // 已吞噬 IME 確認 Enter
-                }
             }
         });
 
-        if had_cjk_input {
-            self.pending_cjk_ime_confirm = true;
-        } else if pending_confirm {
-            // 檢查本幀是否按下了 Enter 或 Backspace 或滑鼠點擊，若有則重置 pending_cjk_ime_confirm
-            ctx.input(|i| {
-                if i.key_pressed(egui::Key::Enter)
-                    || i.key_pressed(egui::Key::Backspace)
-                    || i.pointer.any_click()
-                    || i.events.iter().any(|ev| matches!(ev, egui::Event::Key { key: egui::Key::Enter, .. }))
-                {
-                    self.pending_cjk_ime_confirm = false;
-                }
-            });
+        if has_cjk_this_frame {
+            self.last_cjk_input = Some(now);
+            self.pending_cjk_ime_confirm = !enter_was_swallowed;
+        } else if was_pending {
+            if enter_was_swallowed {
+                self.pending_cjk_ime_confirm = false;
+            } else {
+                ctx.input(|i| {
+                    if i.key_pressed(egui::Key::Enter)
+                        || i.key_pressed(egui::Key::Backspace)
+                        || i.pointer.any_click()
+                    {
+                        self.pending_cjk_ime_confirm = false;
+                    }
+                });
+            }
         }
 
         // 快捷鍵監聽
