@@ -83,9 +83,7 @@ pub struct MdPreviewApp {
     pub reset_scroll_to_top: bool,
     pub keyboard_scroll_delta: f32,
     pub reading_progress: f32,
-
-    pub last_ime_commit: Option<std::time::Instant>,
-    pub ime_is_preediting: bool,
+    pub pending_cjk_ime_confirm: bool,
 }
 
 impl MdPreviewApp {
@@ -162,8 +160,7 @@ impl MdPreviewApp {
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
             reading_progress: 0.0,
-            last_ime_commit: None,
-            ime_is_preediting: false,
+            pending_cjk_ime_confirm: false,
         };
 
         if !is_visible {
@@ -1251,64 +1248,6 @@ impl MdPreviewApp {
 
         (should_close, target_anchor)
     }
-#[cfg(windows)]
-fn is_ime_composing() -> bool {
-    use windows::core::s;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
-    use windows::Win32::UI::WindowsAndMessaging::{GetFocus, GetForegroundWindow};
-
-    type FnImmGetContext = unsafe extern "system" fn(HWND) -> isize;
-    type FnImmReleaseContext = unsafe extern "system" fn(HWND, isize) -> i32;
-    type FnImmGetCompositionStringW = unsafe extern "system" fn(isize, u32, *mut std::ffi::c_void, u32) -> i32;
-
-    unsafe {
-        let Ok(imm32) = LoadLibraryA(s!("imm32.dll")) else {
-            return false;
-        };
-
-        let Some(p_get_ctx) = GetProcAddress(imm32, s!("ImmGetContext")) else {
-            return false;
-        };
-        let Some(p_rel_ctx) = GetProcAddress(imm32, s!("ImmReleaseContext")) else {
-            return false;
-        };
-        let Some(p_get_comp) = GetProcAddress(imm32, s!("ImmGetCompositionStringW")) else {
-            return false;
-        };
-
-        let imm_get_context: FnImmGetContext = std::mem::transmute(p_get_ctx);
-        let imm_release_context: FnImmReleaseContext = std::mem::transmute(p_rel_ctx);
-        let imm_get_composition_string_w: FnImmGetCompositionStringW = std::mem::transmute(p_get_comp);
-
-        let mut hwnd = GetFocus();
-        if hwnd.0 == 0 as _ {
-            hwnd = GetForegroundWindow();
-        }
-        if hwnd.0 == 0 as _ {
-            let app_hwnd_val = crate::explorer::get_app_hwnd();
-            if app_hwnd_val.0 != 0 {
-                hwnd = HWND(app_hwnd_val.0 as _);
-            }
-        }
-        if hwnd.0 == 0 as _ {
-            return false;
-        }
-
-        let himc = imm_get_context(hwnd);
-        if himc == 0 {
-            return false;
-        }
-
-        let len = imm_get_composition_string_w(himc, 0x0008, std::ptr::null_mut(), 0);
-        let _ = imm_release_context(hwnd, himc);
-        len > 0
-    }
-}
-
-#[cfg(not(windows))]
-fn is_ime_composing() -> bool {
-    false
 }
 
 impl eframe::App for MdPreviewApp {
@@ -1414,36 +1353,58 @@ impl eframe::App for MdPreviewApp {
         }
 
         // IME (注音/拼音/日文輸入法) 選字確認 Enter 防誤換行過濾：
-        // 透過 Windows 原生 IMM32 API (ImmGetCompositionStringW) 偵測使用者是否處於組字狀態 (如選字中)。
-        // 當使用者在組字中按下 Enter 確認時，系統會送出 Key::Enter/Text("\n")，
-        // 此處偵測到組字狀態或剛結束組字 (120ms 內)，自動過濾掉伴隨的 Enter 按鍵事件與換行字元。
-        let now = std::time::Instant::now();
-        let was_composing = self.ime_is_preediting;
-        let is_now_composing = is_ime_composing();
-        let was_recent_commit = if let Some(instant) = self.last_ime_commit {
-            instant.elapsed() < Duration::from_millis(120)
-        } else {
-            false
-        };
+        // 當使用者在微軟注音/拼音等輸入法中鍵入 CJK 漢字或候選詞時，系統會送入文字字元。
+        // 使用者隨後按下 Enter 作為組字確認 (Commit)。此時 Windows 會發送 Key::Enter / Text("\n")。
+        // 若在前次鍵入 CJK 文字後尚未按下確認鍵 (pending_cjk_ime_confirm = true)，
+        // 則精確過濾掉這一次伴隨的 Enter 按鍵事件與換行字元，防止編輯時產生誤換行；
+        // 待確認完成後，使用者再次按下 Enter 即可正常進行段落換行，且純英數輸入不會受任何影響。
+        let mut had_cjk_input = false;
+        let pending_confirm = self.pending_cjk_ime_confirm;
 
-        // 如果本幀正在組字、上一幀正在組字而本幀結束 (即按下 Enter 選字確認的瞬間)、或 120ms 內剛結束組字
-        let should_filter_enter = is_now_composing || was_composing || was_recent_commit;
+        ctx.input_mut(|i| {
+            for ev in &i.events {
+                if let egui::Event::Text(ref s) = ev {
+                    // 偵測是否輸入 CJK 漢字、注音符號或非 ASCII 字元 (表示處於輸入法輸入)
+                    if s.chars().any(|c| c >= '\u{2E80}') {
+                        had_cjk_input = true;
+                    }
+                }
+            }
 
-        if should_filter_enter {
-            ctx.input_mut(|i| {
+            if pending_confirm {
+                let mut swallowed_enter = false;
                 i.events.retain(|ev| {
                     match ev {
-                        egui::Event::Key { key: egui::Key::Enter, .. } => false,
-                        egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => false,
+                        egui::Event::Key { key: egui::Key::Enter, .. } => {
+                            swallowed_enter = true;
+                            false
+                        }
+                        egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => {
+                            swallowed_enter = true;
+                            false
+                        }
                         _ => true,
                     }
                 });
-            });
-        }
+                if swallowed_enter {
+                    // 已吞噬 IME 確認 Enter
+                }
+            }
+        });
 
-        self.ime_is_preediting = is_now_composing;
-        if was_composing && !is_now_composing {
-            self.last_ime_commit = Some(now);
+        if had_cjk_input {
+            self.pending_cjk_ime_confirm = true;
+        } else if pending_confirm {
+            // 檢查本幀是否按下了 Enter 或 Backspace 或滑鼠點擊，若有則重置 pending_cjk_ime_confirm
+            ctx.input(|i| {
+                if i.key_pressed(egui::Key::Enter)
+                    || i.key_pressed(egui::Key::Backspace)
+                    || i.pointer.any_click()
+                    || i.events.iter().any(|ev| matches!(ev, egui::Event::Key { key: egui::Key::Enter, .. }))
+                {
+                    self.pending_cjk_ime_confirm = false;
+                }
+            });
         }
 
         // 快捷鍵監聽

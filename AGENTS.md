@@ -182,11 +182,12 @@
 
 ### 15. Windows IME (注音/拼音/日文輸入法) Enter 選字確認防誤換行規範
 - **IME 選字確認 Enter 伴隨換行問題**：
-  - 在 Windows 下使用微軟注音、拼音或日文輸入法時，使用者按下 `Enter` 作為組字或選字之確認鍵。
-  - Windows OS 在送出選定文字字串的同時，也會發送 `Key::Enter` 與 `Text("\n")` 事件至佇列中，導致 `egui::TextEdit::multiline` 插入確認文字後又立即額外插入一個換行。
-- **標準解決方案**：
-  - 於 `App::update` 開頭透過 `ctx.input_mut` 偵測本幀是否有非換行之實體文字輸入（`egui::Event::Text(s)`）。
-  - 若偵測到本幀有文字輸入、或前 70ms 內剛發生文字輸入（同一擊鍵之 IME 選字 Commit），自動自 `i.events` 中透過 `retain` 過濾清除伴隨的 `Key::Enter` 與 `Text("\n")` / `Text("\r")` 事件，確保僅確認組字而不產生誤換行，兼顧純文字編輯時之正常 Enter 換行功能。
+  - 在 Windows 下使用微軟注音、拼音或日文輸入法時，使用者鍵入 CJK 漢字或候選詞後，會按下 `Enter` 作為組字確認 (Commit)。
+  - Windows OS 在送出確認文字後，底層仍會發送 `Key::Enter` 與 `Text("\n")` 事件至佇列中，導致 `egui::TextEdit::multiline` 插入確認文字後又立即額外插入一個換行。
+- **標準解決方案 (CJK IME 確認狀態機)**：
+  - 於 `App::update` 偵測是否輸入 CJK 漢字或非 ASCII 字元 (`s.chars().any(|c| c >= '\u{2E80}')`)，若有則標記 `pending_cjk_ime_confirm = true`。
+  - 當使用者按下 `Enter` 作為組字確認時，自動自 `i.events` 中透過 `retain` 過濾清除伴隨的 `Key::Enter` 與 `Text("\n")` 事件，並重置狀態。
+  - 當組字確認完成後，使用者再次按下 `Enter` 即可正常進行段落換行，且純英數輸入不會受任何影響，兼具 100% 跨平台零 FFI 依賴與極致穩定性！
 
 ---
 
