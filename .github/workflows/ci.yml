@@ -45,7 +45,21 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build Release Binary
-        run: cargo build --release --target ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $build_output = cargo build --release --target ${{ matrix.target }} 2>&1
+          $build_output | Out-File -FilePath "build.log" -Encoding utf8
+          $build_output | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload Build Log on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.target }}
+          path: build.log
 
       - name: Package Binary (Windows)
         shell: pwsh
