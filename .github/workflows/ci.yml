@@ -41,4 +41,6 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Run Fast Cargo Check
-        run: cargo check --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          cargo check --target ${{ matrix.target }} --color always
