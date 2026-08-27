@@ -602,239 +602,37 @@ impl MdPreviewApp {
     }
 
     fn render_editor(&mut self, ui: &mut egui::Ui) {
-        let font_scale = self.font_scale;
-        let text_color = self.theme.text_primary();
-        let scroll = ScrollArea::vertical().auto_shrink([false, false]);
-        let mut changed = false;
-
-        scroll.show(ui, |ui| {
-            ui.add_space(4.0_f32);
-            let available_w = ui.available_width();
-            let available_h = (ui.available_height() - 10.0_f32).max(200.0_f32);
-
-            let font_id = FontId::monospace(14.0_f32 * font_scale);
-            let edit_resp = ui.add_sized(
-                Vec2::new(available_w, available_h),
-                egui::TextEdit::multiline(&mut self.content)
-                    .font(font_id)
-                    .text_color(text_color)
-                    .frame(false)
-                    .desired_width(f32::INFINITY)
-                    .lock_focus(true),
-            );
-
-            if edit_resp.changed() {
-                changed = true;
-            }
-        });
-
-        if changed {
-            self.line_count = self.content.lines().count();
+        let out = crate::views::editor::render_editor(ui, self.theme, self.font_scale, &mut self.content);
+        if out.changed {
+            self.line_count = out.new_line_count;
             self.is_modified = self.content != self.original_content;
             self.last_edit_instant = Some(std::time::Instant::now());
         }
     }
 
     fn render_slides_mode(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let slides = crate::markdown::extract_slides(&self.content);
-        let total = slides.len();
-        if self.current_slide_index >= total {
-            self.current_slide_index = total.saturating_sub(1);
-        }
-
-        let slide_text = if total > 0 {
-            slides[self.current_slide_index].clone()
-        } else {
-            String::new()
-        };
-
-        let available_rect = ui.available_rect_before_wrap();
-        let center_pos = available_rect.center();
-
-        // 幻燈片主卡片：若全螢幕則填滿整個螢幕，若視窗模式則自適應填滿視窗
-        let margin_x = if self.is_slides_fullscreen { 28.0_f32 } else { 20.0_f32 };
-        let margin_top = if self.is_slides_fullscreen { 24.0_f32 } else { 16.0_f32 };
-        let margin_bottom = if self.is_slides_fullscreen { 76.0_f32 } else { 62.0_f32 };
-
-        let card_w = (available_rect.width() - margin_x * 2.0_f32).max(200.0_f32);
-        let card_h = (available_rect.height() - margin_top - margin_bottom).max(150.0_f32);
-        let card_rect = egui::Rect::from_min_size(
-            egui::pos2(available_rect.min.x + margin_x, available_rect.min.y + margin_top),
-            egui::vec2(card_w, card_h),
+        let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
+        let out = crate::views::presentation::render_slides_mode(
+            ui,
+            self.theme,
+            self.font_scale,
+            &self.content,
+            base_dir,
+            &mut self.current_slide_index,
+            self.is_slides_fullscreen,
         );
 
-        let card_bg = match self.theme {
-            AppTheme::Dark => Color32::from_rgb(20, 22, 28),
-            AppTheme::Light => Color32::from_rgb(255, 255, 255),
-        };
-        let card_stroke = Stroke::new(1.0_f32, self.theme.border_color());
-
-        ui.painter().rect(
-            card_rect,
-            Rounding::same(12.0_f32),
-            card_bg,
-            card_stroke,
-        );
-
-        // 卡片內部渲染 Markdown 投影片
-        ui.allocate_ui_at_rect(card_rect, |ui| {
-            let pad_h = if self.is_slides_fullscreen { 44.0 } else { 28.0 };
-            let pad_v = if self.is_slides_fullscreen { 32.0 } else { 20.0 };
-            Frame::none()
-                .inner_margin(Margin::symmetric(pad_h, pad_v))
-                .show(ui, |ui| {
-                    // 幻燈片頂部微型資訊
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("📽️ 簡報投影模式")
-                                .size(11.5)
-                                .color(self.theme.accent_color())
-                                .strong(),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(format!("第 {} / {} 頁", self.current_slide_index + 1, total))
-                                    .size(12.0)
-                                    .color(self.theme.text_secondary()),
-                            );
-                        });
-                    });
-
-                    ui.add_space(8.0_f32);
-                    ui.separator();
-                    ui.add_space(10.0_f32);
-
-                    // 簡報內容 Markdown 渲染 (全螢幕使用 1.5x 字級，視窗模式使用 1.35x 字級)
-                    let scale_mult = if self.is_slides_fullscreen { 1.5_f32 } else { 1.35_f32 };
-                    ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
-                            let renderer = crate::markdown::MarkdownRenderer::new(
-                                self.theme,
-                                self.font_scale * scale_mult,
-                                "",
-                                None,
-                                None,
-                                base_dir,
-                            );
-                            let _ = renderer.render(ui, &slide_text);
-                        });
-                });
-        });
-
-        // 底部懸浮控制條 (Floating Pill Controller)
-        let pill_height = 42.0_f32;
-        let pill_width = 350.0_f32;
-        let pill_rect = egui::Rect::from_min_size(
-            egui::pos2(center_pos.x - pill_width / 2.0_f32, available_rect.max.y - pill_height - 14.0_f32),
-            egui::vec2(pill_width, pill_height),
-        );
-
-        let pill_bg = match self.theme {
-            AppTheme::Dark => Color32::from_rgba_premultiplied(15, 17, 23, 240),
-            AppTheme::Light => Color32::from_rgba_premultiplied(240, 244, 250, 240),
-        };
-
-        ui.painter().rect(
-            pill_rect,
-            Rounding::same(21.0_f32),
-            pill_bg,
-            Stroke::new(1.0_f32, self.theme.accent_color()),
-        );
-
-        let mut next_slide = false;
-        let mut prev_slide = false;
-        let mut toggle_fullscreen = false;
-        let mut exit_slides = false;
-
-        ui.allocate_ui_at_rect(pill_rect, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0_f32;
-                Frame::none()
-                    .inner_margin(Margin::symmetric(14.0, 4.0))
-                    .show(ui, |ui| {
-                        let can_prev = self.current_slide_index > 0;
-                        let prev_btn = ui.add_enabled(
-                            can_prev,
-                            egui::Button::new(RichText::new("◀").size(13.0).color(if can_prev { self.theme.text_primary() } else { self.theme.text_secondary() }))
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE),
-                        );
-                        if prev_btn.on_hover_text("上一頁 (← / PageUp / Backspace)").clicked() {
-                            prev_slide = true;
-                        }
-
-                        ui.label(
-                            RichText::new(format!("{}/{}", self.current_slide_index + 1, total))
-                                .size(13.0)
-                                .strong()
-                                .color(self.theme.accent_color()),
-                        );
-
-                        let can_next = self.current_slide_index + 1 < total;
-                        let next_btn = ui.add_enabled(
-                            can_next,
-                            egui::Button::new(RichText::new("▶").size(13.0).color(if can_next { self.theme.text_primary() } else { self.theme.text_secondary() }))
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE),
-                        );
-                        if next_btn.on_hover_text("下一頁 (→ / Space / PageDown)").clicked() {
-                            next_slide = true;
-                        }
-
-                        ui.separator();
-
-                        let fs_icon = if self.is_slides_fullscreen { "🗗 視窗" } else { "⛶ 全螢幕" };
-                        let fs_btn = ui.add(
-                            egui::Button::new(RichText::new(fs_icon).size(12.0).color(self.theme.text_primary()))
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE),
-                        );
-                        if fs_btn.on_hover_text("切換全螢幕 (F / F11)").clicked() {
-                            toggle_fullscreen = true;
-                        }
-
-                        let exit_btn = ui.add(
-                            egui::Button::new(RichText::new("✕ 退出").size(12.0).color(self.theme.text_primary()))
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE),
-                        );
-                        if exit_btn.on_hover_text("退出簡報模式 (Esc / F5)").clicked() {
-                            exit_slides = true;
-                        }
-                    });
-            });
-        });
-
-        if prev_slide && self.current_slide_index > 0 {
-            self.current_slide_index -= 1;
-        }
-        if next_slide && self.current_slide_index + 1 < total {
-            self.current_slide_index += 1;
-        }
-        if toggle_fullscreen {
+        if out.toggle_fullscreen {
             self.is_slides_fullscreen = !self.is_slides_fullscreen;
             self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
         }
-        if exit_slides {
+        if out.exit_slides {
             self.is_slides_mode = false;
             if self.is_slides_fullscreen {
                 self.is_slides_fullscreen = false;
                 self.set_fullscreen_state(ctx, false);
             }
             self.set_toast("👁️ 已退出簡報投影模式".to_string());
-        }
-
-        // 螢幕最底部簡報進度條
-        if total > 0 {
-            let progress = (self.current_slide_index + 1) as f32 / total as f32;
-            let bar_width = available_rect.width() * progress;
-            ui.painter().hline(
-                available_rect.min.x..=available_rect.min.x + bar_width,
-                available_rect.max.y - 2.0_f32,
-                Stroke::new(3.0_f32, self.theme.accent_color()),
-            );
         }
     }
 
@@ -1465,107 +1263,7 @@ impl MdPreviewApp {
 
     /// 渲染 Markdown TOC 目錄大綱側邊欄，回傳 (是否收起大綱, 選取的目標標題錨點)
     pub fn render_toc_sidebar(&self, ui: &mut egui::Ui) -> (bool, Option<String>) {
-        let mut should_close = false;
-        let mut target_anchor = None;
-
-        let toc = crate::markdown::extract_markdown_toc(&self.content);
-
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("📑 目錄大綱")
-                    .strong()
-                    .size(13.0 * self.font_scale)
-                    .color(self.theme.accent_color()),
-            );
-            if !toc.is_empty() {
-                Frame::none()
-                    .fill(self.theme.code_bg_color())
-                    .rounding(Rounding::same(4.0))
-                    .inner_margin(Margin::symmetric(5.0, 1.0))
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(format!("{} 節", toc.len()))
-                                .size(10.5 * self.font_scale)
-                                .color(self.theme.text_secondary()),
-                        );
-                    });
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button("✕").on_hover_text("收起大綱 (Ctrl+T)").clicked() {
-                    should_close = true;
-                }
-            });
-        });
-        ui.add_space(4.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        if toc.is_empty() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(20.0);
-                ui.label(
-                    RichText::new("此文件無章節標題")
-                        .italics()
-                        .color(self.theme.text_secondary())
-                        .size(12.0 * self.font_scale),
-                );
-            });
-            return (should_close, None);
-        }
-
-        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            for item in toc {
-                let indent = ((item.level.saturating_sub(1)) as f32) * 10.0 * self.font_scale;
-                let (font_size, is_h1) = match item.level {
-                    1 => (12.5 * self.font_scale, true),
-                    2 => (12.0 * self.font_scale, false),
-                    3 => (11.5 * self.font_scale, false),
-                    _ => (11.0 * self.font_scale, false),
-                };
-
-                let item_resp = ui.horizontal(|ui| {
-                    if indent > 0.0 {
-                        ui.add_space(indent);
-                    }
-                    Frame::none()
-                        .fill(self.theme.code_bg_color())
-                        .rounding(Rounding::same(3.0))
-                        .stroke(Stroke::new(0.5_f32, if is_h1 { self.theme.accent_color() } else { self.theme.border_color() }))
-                        .inner_margin(Margin::symmetric(4.0, 1.0))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(format!("H{}", item.level))
-                                    .size(9.0 * self.font_scale)
-                                    .color(if is_h1 { self.theme.accent_color() } else { self.theme.text_secondary() })
-                                    .monospace(),
-                            );
-                        });
-
-                    let title_text = if is_h1 {
-                        RichText::new(&item.title).strong().size(font_size).color(self.theme.text_primary())
-                    } else {
-                        RichText::new(&item.title).size(font_size).color(self.theme.text_secondary())
-                    };
-
-                    let btn = ui.add(
-                        egui::Button::new(title_text)
-                            .wrap()
-                            .frame(false),
-                    );
-                    if btn.hovered() {
-                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                    }
-                    btn.on_hover_text(format!("點擊跳轉至: {}", item.title))
-                });
-
-                if item_resp.inner.clicked() {
-                    target_anchor = Some(item.title.clone());
-                }
-            }
-        });
-
-        (should_close, target_anchor)
+        crate::views::toc_sidebar::render_toc_sidebar(ui, self.theme, self.font_scale, &self.content)
     }
 }
 
@@ -2366,87 +2064,27 @@ impl eframe::App for MdPreviewApp {
             });
         }
 
-        // 偏好設定彈出對話框 (以局部變數解耦，徹底避免 closure 內部借用衝突)
-        let mut settings_open = self.settings_open;
-        let mut new_theme = None;
-        let mut new_save_mode = None;
-        let mut new_font_scale = None;
-        let mut close_settings = false;
+        // 偏好設定彈出對話框 (委派至 views::settings_modal 模組)
+        let modal_out = crate::views::settings_modal::render_settings_modal(
+            ctx,
+            self.settings_open,
+            self.theme,
+            self.config.save_mode,
+            self.font_scale,
+        );
 
-        if settings_open {
-            let current_theme = self.theme;
-            let mut save_mode = self.config.save_mode;
-            let mut scale = self.font_scale;
-            let accent_color = self.theme.accent_color();
-
-            egui::Window::new("⚙️ flash-md 偏好設定")
-                .open(&mut settings_open)
-                .resizable(false)
-                .collapsible(false)
-                .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                    ui.set_min_width(340.0_f32);
-                    ui.add_space(4.0_f32);
-
-                    // 1. 主題設定
-                    ui.label(RichText::new("🎨 外觀色彩主題").strong().color(accent_color));
-                    ui.horizontal(|ui| {
-                        let light_selected = current_theme == AppTheme::Light;
-                        let dark_selected = current_theme == AppTheme::Dark;
-                        if ui.selectable_label(light_selected, "☀️ 亮色主題 (Light)").clicked() {
-                            new_theme = Some(AppTheme::Light);
-                        }
-                        if ui.selectable_label(dark_selected, "🌙 深色主題 (Dark)").clicked() {
-                            new_theme = Some(AppTheme::Dark);
-                        }
-                    });
-
-                    ui.add_space(8.0_f32);
-                    ui.separator();
-                    ui.add_space(8.0_f32);
-
-                    // 2. 檔案保存模式
-                    ui.label(RichText::new("💾 編輯保存模式").strong().color(accent_color));
-                    ui.vertical(|ui| {
-                        if ui.radio_value(&mut save_mode, SaveMode::Manual, "🔘 按下 Ctrl + S 手動保存").clicked() {
-                            new_save_mode = Some(SaveMode::Manual);
-                        }
-                        if ui.radio_value(&mut save_mode, SaveMode::AutoDebounce, "⚡ 打字停止時自動防抖保存 (Auto-save 800ms)").clicked() {
-                            new_save_mode = Some(SaveMode::AutoDebounce);
-                        }
-                    });
-
-                    ui.add_space(8.0_f32);
-                    ui.separator();
-                    ui.add_space(8.0_f32);
-
-                    // 3. 字型縮放
-                    ui.label(RichText::new("🔍 字型顯示縮放").strong().color(accent_color));
-                    if ui.add(egui::Slider::new(&mut scale, 0.8_f32..=1.6_f32).text("比例")).changed() {
-                        new_font_scale = Some(scale);
-                    }
-
-                    ui.add_space(10.0_f32);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("完成").clicked() {
-                            close_settings = true;
-                        }
-                    });
-                });
-        }
-
-        self.settings_open = settings_open && !close_settings;
-        if let Some(t) = new_theme {
+        self.settings_open = modal_out.is_open;
+        if let Some(t) = modal_out.new_theme {
             self.theme = t;
             self.theme.apply_to_ctx(ctx);
             self.config.theme = t;
             self.config.save();
         }
-        if let Some(sm) = new_save_mode {
+        if let Some(sm) = modal_out.new_save_mode {
             self.config.save_mode = sm;
             self.config.save();
         }
-        if let Some(fs) = new_font_scale {
+        if let Some(fs) = modal_out.new_font_scale {
             self.font_scale = fs;
             self.config.font_scale = fs;
             self.config.save();
@@ -2769,322 +2407,42 @@ impl eframe::App for MdPreviewApp {
 
 impl MdPreviewApp {
     fn render_bottom_tips(&self, ui: &mut egui::Ui) {
-        let is_edit = self.is_editing;
-        let tips = if is_edit {
-            format!(
-                "flash-md v{}  •  [就地編輯中]  •  Ctrl+S (保存)  •  E / Esc (退出編輯)  •  / (搜尋)",
-                CURRENT_VERSION
-            )
-        } else {
-            format!(
-                "flash-md v{}  •  Alt+Space (預覽)  •  E (就地編輯)  •  ←/→/h/l (切換)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  Ctrl+T (大綱)  •  Ctrl+Shift+O (定位)  •  Ctrl+M (模式)  •  Esc (隱藏)",
-                CURRENT_VERSION
-            )
-        };
-        ui.label(
-            RichText::new(tips)
-                .color(self.theme.text_secondary())
-                .size(11.5),
-        );
+        crate::views::status_bar::render_bottom_tips(ui, self.theme, self.is_editing);
     }
 
     fn render_empty_state(&mut self, ui: &mut egui::Ui) {
-        ui.centered_and_justified(|ui| {
-            Frame::none()
-                .fill(self.theme.card_bg_color())
-                .rounding(Rounding::same(12.0))
-                .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
-                .inner_margin(Margin::symmetric(36.0, 32.0))
-                .show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        // 現代極光藍發光品牌圖示
-                        Frame::none()
-                            .fill(self.theme.accent_bg())
-                            .rounding(Rounding::same(20.0))
-                            .stroke(Stroke::new(1.5_f32, self.theme.accent_color()))
-                            .inner_margin(Margin::symmetric(14.0, 10.0))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new("⚡")
-                                        .size(26.0)
-                                        .strong()
-                                        .color(self.theme.accent_color()),
-                                );
-                            });
-
-                        ui.add_space(14.0);
-
-                        ui.label(
-                            RichText::new(format!("flash-md v{}", CURRENT_VERSION))
-                                .size(19.0)
-                                .strong()
-                                .color(self.theme.text_primary()),
-                        );
-
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new("Windows 快捷鍵極速檔案預覽 • 毫秒級渲染")
-                                .size(13.0)
-                                .color(self.theme.text_secondary()),
-                        );
-
-                        ui.add_space(20.0);
-
-                        // 擬真實體鍵盤按鍵 UI
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            render_keycap(ui, self.theme, "Alt");
-                            ui.label(RichText::new("+").size(15.0).color(self.theme.text_secondary()));
-                            render_keycap(ui, self.theme, "Space");
-                        });
-
-                        ui.add_space(22.0);
-
-                        // 選擇檔案按鈕
-                        let browse_btn = ui.add_sized(
-                            Vec2::new(180.0, 34.0),
-                            egui::Button::new(
-                                RichText::new("📂 瀏覽開啟檔案")
-                                    .size(13.0)
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(self.theme.accent_color())
-                            .rounding(Rounding::same(7.0)),
-                        );
-
-                        if browse_btn.clicked() {
-                            self.open_file_dialog();
-                        }
-
-                        ui.add_space(16.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-
-                        // 特色小標
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new("⚡ 毫秒級預覽  •  📄 Markdown  •  💻 全語言程式碼高亮  •  🔄 即時同步")
-                                    .size(11.0)
-                                    .color(self.theme.text_secondary()),
-                            );
-                        });
-                    });
-                });
+        let mut do_browse = false;
+        crate::views::empty_state::render_empty_state(ui, self.theme, || {
+            do_browse = true;
         });
-    }
-}
-
-/// 繪製導覽列現代按鈕元件
-fn render_nav_button(
-    ui: &mut egui::Ui,
-    theme: AppTheme,
-    label: &str,
-    is_active: bool,
-    tooltip: &str,
-) -> egui::Response {
-    let bg = if is_active {
-        theme.accent_bg()
-    } else {
-        theme.code_bg_color()
-    };
-    let border = if is_active {
-        theme.accent_color()
-    } else {
-        theme.border_color()
-    };
-    let text_color = if is_active {
-        theme.accent_color()
-    } else {
-        theme.text_secondary()
-    };
-
-    let btn = egui::Button::new(
-        RichText::new(label)
-            .size(11.5)
-            .color(text_color),
-    )
-    .fill(bg)
-    .stroke(Stroke::new(1.0_f32, border))
-    .rounding(Rounding::same(5.0));
-
-    ui.add(btn).on_hover_text(tooltip)
-}
-
-/// 繪製擬真鍵盤按鍵 (Keycap) 元件
-fn render_keycap(ui: &mut egui::Ui, theme: AppTheme, key_text: &str) {
-    Frame::none()
-        .fill(theme.code_bg_color())
-        .rounding(Rounding::same(6.0))
-        .stroke(Stroke::new(1.0_f32, theme.border_color()))
-        .inner_margin(Margin::symmetric(12.0, 6.0))
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(key_text)
-                    .font(FontId::monospace(13.0))
-                    .strong()
-                    .color(theme.accent_color()),
-            );
-        });
-}
-
-fn rfd_open_file() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let output = Command::new("powershell")
-            .args(&[
-                "-NoProfile",
-                "-Command",
-                r#"[System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = "Markdown & Code Files (*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt)|*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt|All files (*.*)|*.*"; if($d.ShowDialog() -eq "OK"){ Write-Output $d.FileName }"#,
-            ])
-            .output();
-
-        if let Ok(out) = output {
-            let path_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path_str.is_empty() {
-                return Some(PathBuf::from(path_str));
-            }
+        if do_browse {
+            self.open_file_dialog();
         }
     }
-    None
-}
 
-/// 自 ZIP 壓縮檔內直接即時讀取文字檔案內容 (無需使用者手動解壓縮)
-#[allow(dead_code)]
-fn read_text_from_zip(zip_path: &Path, entry_name: &str) -> Result<String, String> {
-    let zip_str = zip_path.to_string_lossy().replace('\'', "''");
-    let entry_clean = entry_name.replace('/', "\\").replace('\'', "''");
-    let entry_filename = Path::new(entry_name)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| entry_name.to_string())
-        .replace('\'', "''");
-
-    let script = format!(
-        r#"[System.Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null; $z = [System.IO.Compression.ZipFile]::OpenRead('{}'); $e = $z.Entries | Where-Object {{ $_.FullName.Replace('/','\') -eq '{}' -or $_.Name -eq '{}' }} | Select-Object -First 1; if ($e) {{ $s = $e.Open(); $r = New-Object System.IO.StreamReader($s, [System.Text.Encoding]::UTF8); $t = $r.ReadToEnd(); $r.Close(); $s.Close(); Write-Output $t }}; $z.Dispose();"#,
-        zip_str, entry_clean, entry_filename
-    );
-
-    let output = std::process::Command::new("powershell")
-        .args(&["-NoProfile", "-Command", &script])
-        .output()
-        .map_err(|e| format!("執行 PowerShell 讀取 ZIP 失敗: {}", e))?;
-
-    if output.status.success() {
-        let content = String::from_utf8_lossy(&output.stdout).to_string();
-        if !content.is_empty() {
-            Ok(content)
-        } else {
-            Err("壓縮檔內找不到指定檔案或檔案內容為空".to_string())
-        }
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
-    }
-}
-
-impl MdPreviewApp {
-    /// 繪製圖片與 SVG 向量圖檢視畫布 (支援滾輪縮放、平移與自適應視窗)
+    /// 繪製圖片與 SVG 向量圖檢視畫布 (委派至 views::image_viewer 模組)
     fn render_image_viewer(&mut self, ui: &mut egui::Ui) {
-        if let Some(ref bytes) = self.image_bytes {
-            let available = ui.available_size();
-
-            // 監聽滾輪縮放
-            let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
-            if scroll_delta != 0.0 {
-                if scroll_delta > 0.0 {
-                    self.image_zoom = (self.image_zoom * 1.15_f32).min(10.0_f32);
-                } else {
-                    self.image_zoom = (self.image_zoom / 1.15_f32).max(0.1_f32);
-                }
-                self.image_fit_mode = false;
-            }
-
-            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
-            if self.reset_scroll_to_top {
-                scroll = scroll.scroll_offset(Vec2::ZERO);
-            }
-            scroll.show(ui, |ui| {
-                if self.keyboard_scroll_delta != 0.0_f32 {
-                    ui.scroll_with_delta(Vec2::new(0.0_f32, self.keyboard_scroll_delta));
-                }
-                ui.centered_and_justified(|ui| {
-                    let ext = if let ViewMode::Image { ref format } = self.view_mode {
-                        format.as_str()
-                    } else {
-                        "png"
-                    };
-
-                    if ext.eq_ignore_ascii_case("svg") {
-                        let uri = format!("bytes://viewer_image_preview.{}", ext);
-                        let mut img = egui::Image::from_bytes(uri, bytes.clone())
-                            .rounding(Rounding::same(6.0_f32));
-
-                        if self.image_fit_mode {
-                            let max_w = (available.x - 24.0_f32).max(100.0_f32);
-                            let max_h = (available.y - 24.0_f32).max(100.0_f32);
-                            img = img.max_size(Vec2::new(max_w, max_h));
-                        } else {
-                            img = img.fit_to_original_size(self.image_zoom);
-                        }
-
-                        ui.add(img);
-                    } else if let Ok(dyn_img) = image::load_from_memory(bytes) {
-                        let size = [dyn_img.width() as usize, dyn_img.height() as usize];
-                        let rgba = dyn_img.to_rgba8().into_raw();
-                        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-                        let texture = ui.ctx().load_texture(
-                            "viewer_image_texture",
-                            color_image,
-                            egui::TextureOptions::LINEAR,
-                        );
-                        let mut img = egui::Image::from_texture(&texture)
-                            .rounding(Rounding::same(6.0_f32));
-
-                        if self.image_fit_mode {
-                            let max_w = (available.x - 24.0_f32).max(100.0_f32);
-                            let max_h = (available.y - 24.0_f32).max(100.0_f32);
-                            img = img.max_size(Vec2::new(max_w, max_h));
-                        } else {
-                            img = img.fit_to_original_size(self.image_zoom);
-                        }
-
-                        ui.add(img);
-                    } else {
-                        let uri = format!("bytes://viewer_image_preview.{}", ext);
-                        let mut img = egui::Image::from_bytes(uri, bytes.clone())
-                            .rounding(Rounding::same(6.0_f32));
-
-                        if self.image_fit_mode {
-                            let max_w = (available.x - 24.0_f32).max(100.0_f32);
-                            let max_h = (available.y - 24.0_f32).max(100.0_f32);
-                            img = img.max_size(Vec2::new(max_w, max_h));
-                        } else {
-                            img = img.fit_to_original_size(self.image_zoom);
-                        }
-
-                        ui.add(img);
-                    }
-                });
-            });
-        } else if let Some(ref uri) = self.image_uri {
-            let available = ui.available_size();
-            let scroll = ScrollArea::both().auto_shrink([false, false]);
-            scroll.show(ui, |ui| {
-                ui.centered_and_justified(|ui| {
-                    let img = egui::Image::from_uri(uri.clone())
-                        .rounding(Rounding::same(6.0_f32))
-                        .max_size(Vec2::new((available.x - 24.0_f32).max(100.0_f32), (available.y - 24.0_f32).max(100.0_f32)));
-                    ui.add(img);
-                });
-            });
+        let format_ext = if let ViewMode::Image { ref format } = self.view_mode {
+            format.as_str()
         } else {
-            ui.centered_and_justified(|ui| {
-                ui.label(RichText::new("無法載入圖片或向量圖").color(self.theme.text_secondary()));
-            });
-        }
+            ""
+        };
+
+        crate::views::image_viewer::render_image_viewer(
+            ui,
+            self.image_bytes.as_deref(),
+            self.image_uri.as_deref(),
+            format_ext,
+            &mut self.image_zoom,
+            &mut self.image_fit_mode,
+            self.reset_scroll_to_top,
+            self.keyboard_scroll_delta,
+        );
     }
 }
+
+pub use crate::views::status_bar::render_nav_button;
+pub use crate::views::empty_state::render_keycap;
 
 /// 自 ZIP 壓縮檔內直接即時讀取二進制檔案數據 (圖片/SVG/圖示)
 fn read_bytes_from_zip(zip_path: &Path, entry_name: &str) -> Result<Vec<u8>, String> {

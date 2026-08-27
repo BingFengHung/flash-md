@@ -9,6 +9,7 @@ mod markdown;
 mod theme;
 mod tray;
 mod updater;
+mod views;
 mod watcher;
 
 use app::MdPreviewApp;
