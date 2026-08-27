@@ -9,12 +9,13 @@ use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
 use crate::updater::{
     check_latest_release, perform_self_update, restart_with_new_version,
-    CURRENT_VERSION,
+    CURRENT_VERSION, ReleaseInfo,
 };
+use crate::views::status_bar::render_nav_button;
 use crate::watcher::{FileWatcher, WatcherEvent};
 use crossbeam_channel::{unbounded, Receiver};
 use egui::{
-    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
+    Align, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
     TextEdit, Vec2,
 };
 use log::{error, info};
