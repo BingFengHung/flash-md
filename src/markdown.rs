@@ -541,7 +541,7 @@ impl<'a> RenderContext<'a> {
         let clean_url = dest_url.trim().trim_matches('\0');
         let is_web_url = clean_url.starts_with("http://") || clean_url.starts_with("https://");
 
-        // 判斷是否為本地檔案路徑並解析
+        // 判斷是否為本地檔案路徑並解析 (徹底相容 Windows 相對路徑、前導斜線與百分比編碼)
         let local_path: Option<std::path::PathBuf> = if !is_web_url {
             let decoded = decode_uri_component(clean_url);
             let raw_path = decoded
@@ -550,13 +550,22 @@ impl<'a> RenderContext<'a> {
                 .trim_start_matches("file:")
                 .replace('/', "\\");
 
+            let clean_relative = raw_path
+                .trim_start_matches(".\\")
+                .trim_start_matches("./")
+                .trim_start_matches('\\')
+                .trim_start_matches('/');
+
             let path = std::path::PathBuf::from(&raw_path);
             if path.is_absolute() && path.exists() {
                 Some(path)
             } else if let Some(base) = self.base_dir {
-                let joined = base.join(&raw_path);
-                if joined.exists() {
-                    Some(joined)
+                let joined_clean = base.join(clean_relative);
+                let joined_raw = base.join(&raw_path);
+                if joined_clean.exists() {
+                    Some(joined_clean)
+                } else if joined_raw.exists() {
+                    Some(joined_raw)
                 } else {
                     Some(path)
                 }
@@ -601,7 +610,7 @@ impl<'a> RenderContext<'a> {
                         .rounding(Rounding::same(6.0_f32))
                         .max_width(available_w);
 
-                    ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
                         ui.add(img);
                     });
                 } else if is_web_url {
@@ -609,7 +618,7 @@ impl<'a> RenderContext<'a> {
                         .rounding(Rounding::same(6.0_f32))
                         .max_width(available_w);
 
-                    ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
                         ui.add(img);
                     });
                 } else {
@@ -659,6 +668,15 @@ impl<'a> RenderContext<'a> {
                         code: true,
                         link_url: self.current_link.clone(),
                     });
+                }
+            }
+            Event::Html(html) | Event::InlineHtml(html) => {
+                let lower = html.to_lowercase();
+                if lower.contains("<img") {
+                    if let Some(src) = extract_attr_str(&html, "src=") {
+                        let alt = extract_attr_str(&html, "alt=").unwrap_or_default();
+                        self.render_image(ui, &src, &alt);
+                    }
                 }
             }
             Event::Rule => {
