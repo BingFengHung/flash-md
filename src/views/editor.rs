@@ -6,7 +6,7 @@ pub struct EditorOutput {
     pub new_line_count: usize,
 }
 
-/// Ã¸»s¥ş¿Ã¹õ´N¦a½s¿è¼Ò¦¡µe¥¬
+/// ç¹ªè£½å…¨è¢å¹•å°±åœ°ç·¨è¼¯æ¨¡å¼ç•«å¸ƒ
 pub fn render_editor(
     ui: &mut egui::Ui,
     theme: AppTheme,

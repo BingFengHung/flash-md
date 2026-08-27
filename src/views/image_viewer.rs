@@ -1,6 +1,6 @@
 use egui::{Rounding, ScrollArea, Vec2};
 
-/// Ã¸»s¹Ï¤ù»P SVG ¦V¶q¹ÏÀËµøµe¥¬ (¤ä´©ºu½üÁY©ñ¡B¥­²¾»P¦Û¾AÀ³µøµ¡)
+/// ç¹ªè£½åœ–ç‰‡èˆ‡ SVG å‘é‡åœ–æª¢è¦–ç•«å¸ƒ (æ”¯æ´æ»¾è¼ªç¸®æ”¾ã€å¹³ç§»èˆ‡è‡ªé©æ‡‰è¦–çª—)
 pub fn render_image_viewer(
     ui: &mut egui::Ui,
     image_bytes: Option<&[u8]>,
@@ -14,7 +14,7 @@ pub fn render_image_viewer(
     if let Some(bytes) = image_bytes {
         let available = ui.available_size();
 
-        // ºÊÅ¥ºu½üÁY©ñ
+        // ç›£è½æ»¾è¼ªç¸®æ”¾
         let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
         if scroll_delta != 0.0_f32 {
             if scroll_delta > 0.0_f32 {

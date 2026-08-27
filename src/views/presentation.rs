@@ -7,7 +7,7 @@ pub struct PresentationOutput {
     pub exit_slides: bool,
 }
 
-/// √∏ªs•˛ø√πı¬≤≥¯ßÎºvº“¶°µe•¨ (§‰¥© --- §¿≠∂°B•™•k¡‰¬Ω≠∂°B§j¶rØ≈ßÎºv•d§˘)
+/// Áπ™Ë£ΩÂÖ®Ëû¢ÂπïÁ∞°Â†±ÊäïÂΩ±Ê®°ÂºèÁï´Â∏É (ÊîØÊè¥ --- ÂàÜÈ†Å„ÄÅÂ∑¶Âè≥ÈçµÁøªÈ†Å„ÄÅÂ§ßÂ≠óÁ¥öÊäïÂΩ±Âç°Áâá)
 pub fn render_slides_mode(
     ui: &mut egui::Ui,
     theme: AppTheme,
@@ -32,7 +32,7 @@ pub fn render_slides_mode(
     let available_rect = ui.available_rect_before_wrap();
     let center_pos = available_rect.center();
 
-    // §€øO§˘•D•d§˘°G≠Y•˛ø√πı´h∂Ò∫°æ„≠”ø√πı°A≠Yµ¯µ°º“¶°´h¶€æA¿≥∂Ò∫°µ¯µ°
+    // ÂπªÁáàÁâá‰∏ªÂç°ÁâáÔºöËã•ÂÖ®Ëû¢ÂπïÂâáÂ°´ÊªøÊï¥ÂÄãËû¢ÂπïÔºåËã•Ë¶ñÁ™óÊ®°ÂºèÂâáËá™ÈÅ©ÊáâÂ°´ÊªøË¶ñÁ™ó
     let margin_x = if is_slides_fullscreen { 28.0_f32 } else { 20.0_f32 };
     let margin_top = if is_slides_fullscreen { 24.0_f32 } else { 16.0_f32 };
     let margin_bottom = if is_slides_fullscreen { 76.0_f32 } else { 62.0_f32 };
@@ -57,24 +57,24 @@ pub fn render_slides_mode(
         card_stroke,
     );
 
-    // •d§˘§∫≥°¥Ë¨V Markdown ßÎºv§˘
+    // Âç°ÁâáÂÖßÈÉ®Ê∏≤Êüì Markdown ÊäïÂΩ±Áâá
     ui.allocate_ui_at_rect(card_rect, |ui| {
         let pad_h = if is_slides_fullscreen { 44.0_f32 } else { 28.0_f32 };
         let pad_v = if is_slides_fullscreen { 32.0_f32 } else { 20.0_f32 };
         Frame::none()
             .inner_margin(Margin::symmetric(pad_h, pad_v))
             .show(ui, |ui| {
-                // §€øO§˘≥ª≥°∑L´¨∏Í∞T
+                // ÂπªÁáàÁâáÈ†ÇÈÉ®ÂæÆÂûãË≥áË®ä
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("??? ¬≤≥¯ßÎºvº“¶°")
+                        RichText::new("üìΩÔ∏è Á∞°Â†±ÊäïÂΩ±Ê®°Âºè")
                             .size(11.5_f32)
                             .color(theme.accent_color())
                             .strong(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(format!("≤ƒ {} / {} ≠∂", *current_slide_index + 1, total))
+                            RichText::new(format!("Á¨¨ {} / {} È†Å", *current_slide_index + 1, total))
                                 .size(12.0_f32)
                                 .color(theme.text_secondary()),
                         );
@@ -85,7 +85,7 @@ pub fn render_slides_mode(
                 ui.separator();
                 ui.add_space(10.0_f32);
 
-                // ¬≤≥¯§∫Æe Markdown ¥Ë¨V (•˛ø√πı®œ•Œ 1.5x ¶rØ≈°Aµ¯µ°º“¶°®œ•Œ 1.35x ¶rØ≈)
+                // Á∞°Â†±ÂÖßÂÆπ Markdown Ê∏≤Êüì (ÂÖ®Ëû¢Âπï‰ΩøÁî® 1.5x Â≠óÁ¥öÔºåË¶ñÁ™óÊ®°Âºè‰ΩøÁî® 1.35x Â≠óÁ¥ö)
                 let scale_mult = if is_slides_fullscreen { 1.5_f32 } else { 1.35_f32 };
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -103,7 +103,7 @@ pub fn render_slides_mode(
             });
     });
 
-    // ©≥≥°ƒaØB±±®Ó±¯ (Floating Pill Controller)
+    // Â∫ïÈÉ®Êá∏ÊµÆÊéßÂà∂Ê¢ù (Floating Pill Controller)
     let pill_height = 42.0_f32;
     let pill_width = 350.0_f32;
     let pill_rect = egui::Rect::from_min_size(
@@ -137,11 +137,11 @@ pub fn render_slides_mode(
                     let can_prev = *current_slide_index > 0;
                     let prev_btn = ui.add_enabled(
                         can_prev,
-                        egui::Button::new(RichText::new("?").size(13.0_f32).color(if can_prev { theme.text_primary() } else { theme.text_secondary() }))
+                        egui::Button::new(RichText::new("‚óÄ").size(13.0_f32).color(if can_prev { theme.text_primary() } else { theme.text_secondary() }))
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE),
                     );
-                    if prev_btn.on_hover_text("§W§@≠∂ (°ˆ / PageUp / Backspace)").clicked() {
+                    if prev_btn.on_hover_text("‰∏ä‰∏ÄÈ†Å (‚Üê / PageUp / Backspace)").clicked() {
                         prev_slide = true;
                     }
 
@@ -155,32 +155,32 @@ pub fn render_slides_mode(
                     let can_next = *current_slide_index + 1 < total;
                     let next_btn = ui.add_enabled(
                         can_next,
-                        egui::Button::new(RichText::new("?").size(13.0_f32).color(if can_next { theme.text_primary() } else { theme.text_secondary() }))
+                        egui::Button::new(RichText::new("‚ñ∂").size(13.0_f32).color(if can_next { theme.text_primary() } else { theme.text_secondary() }))
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE),
                     );
-                    if next_btn.on_hover_text("§U§@≠∂ (°˜ / Space / PageDown)").clicked() {
+                    if next_btn.on_hover_text("‰∏ã‰∏ÄÈ†Å (‚Üí / Space / PageDown)").clicked() {
                         next_slide = true;
                     }
 
                     ui.separator();
 
-                    let fs_icon = if is_slides_fullscreen { "?? µ¯µ°" } else { "? •˛ø√πı" };
+                    let fs_icon = if is_slides_fullscreen { "üóó Ë¶ñÁ™ó" } else { "‚õ∂ ÂÖ®Ëû¢Âπï" };
                     let fs_btn = ui.add(
                         egui::Button::new(RichText::new(fs_icon).size(12.0_f32).color(theme.text_primary()))
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE),
                     );
-                    if fs_btn.on_hover_text("§¡¥´•˛ø√πı (F / F11)").clicked() {
+                    if fs_btn.on_hover_text("ÂàáÊèõÂÖ®Ëû¢Âπï (F / F11)").clicked() {
                         toggle_fullscreen = true;
                     }
 
                     let exit_btn = ui.add(
-                        egui::Button::new(RichText::new("? ∞h•X").size(12.0_f32).color(theme.text_primary()))
+                        egui::Button::new(RichText::new("‚úï ÈÄÄÂá∫").size(12.0_f32).color(theme.text_primary()))
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE),
                     );
-                    if exit_btn.on_hover_text("∞h•X¬≤≥¯º“¶° (Esc / F5)").clicked() {
+                    if exit_btn.on_hover_text("ÈÄÄÂá∫Á∞°Â†±Ê®°Âºè (Esc / F5)").clicked() {
                         exit_slides = true;
                     }
                 });
@@ -194,7 +194,7 @@ pub fn render_slides_mode(
         *current_slide_index += 1;
     }
 
-    // ø√πı≥Ã©≥≥°¬≤≥¯∂i´◊±¯
+    // Ëû¢ÂπïÊúÄÂ∫ïÈÉ®Á∞°Â†±ÈÄ≤Â∫¶Ê¢ù
     if total > 0 {
         let progress = (*current_slide_index + 1) as f32 / total as f32;
         let bar_width = available_rect.width() * progress;

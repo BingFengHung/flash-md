@@ -9,7 +9,7 @@ pub struct SettingsModalOutput {
     pub new_font_scale: Option<f32>,
 }
 
-/// Ã¸»s°¾¦n³]©w¼u¥X¹ï¸Ü®Ø
+/// ç¹ªè£½åå¥½è¨­å®šå½ˆå‡ºå°è©±æ¡†
 pub fn render_settings_modal(
     ctx: &egui::Context,
     is_open: bool,
@@ -28,7 +28,7 @@ pub fn render_settings_modal(
         let mut scale = current_font_scale;
         let accent_color = current_theme.accent_color();
 
-        egui::Window::new("?? flash-md °¾¦n³]©w")
+        egui::Window::new("âš™ï¸ flash-md åå¥½è¨­å®š")
             .open(&mut open)
             .resizable(false)
             .collapsible(false)
@@ -37,15 +37,15 @@ pub fn render_settings_modal(
                 ui.set_min_width(340.0_f32);
                 ui.add_space(4.0_f32);
 
-                // 1. ¥DÃD³]©w
-                ui.label(RichText::new("?? ¥~Æ[¦â±m¥DÃD").strong().color(accent_color));
+                // 1. ä¸»é¡Œè¨­å®š
+                ui.label(RichText::new("ğŸ¨ å¤–è§€è‰²å½©ä¸»é¡Œ").strong().color(accent_color));
                 ui.horizontal(|ui| {
                     let light_selected = current_theme == AppTheme::Light;
                     let dark_selected = current_theme == AppTheme::Dark;
-                    if ui.selectable_label(light_selected, "?? «G¦â¥DÃD (Light)").clicked() {
+                    if ui.selectable_label(light_selected, "â˜€ï¸ äº®è‰²ä¸»é¡Œ (Light)").clicked() {
                         new_theme = Some(AppTheme::Light);
                     }
-                    if ui.selectable_label(dark_selected, "?? ²`¦â¥DÃD (Dark)").clicked() {
+                    if ui.selectable_label(dark_selected, "ğŸŒ™ æ·±è‰²ä¸»é¡Œ (Dark)").clicked() {
                         new_theme = Some(AppTheme::Dark);
                     }
                 });
@@ -54,13 +54,13 @@ pub fn render_settings_modal(
                 ui.separator();
                 ui.add_space(8.0_f32);
 
-                // 2. ÀÉ®×«O¦s¼Ò¦¡
-                ui.label(RichText::new("?? ½s¿è«O¦s¼Ò¦¡").strong().color(accent_color));
+                // 2. æª”æ¡ˆä¿å­˜æ¨¡å¼
+                ui.label(RichText::new("ğŸ’¾ ç·¨è¼¯ä¿å­˜æ¨¡å¼").strong().color(accent_color));
                 ui.vertical(|ui| {
-                    if ui.radio_value(&mut save_mode, SaveMode::Manual, "?? «ö¤U Ctrl + S ¤â°Ê«O¦s").clicked() {
+                    if ui.radio_value(&mut save_mode, SaveMode::Manual, "ğŸ”˜ æŒ‰ä¸‹ Ctrl + S æ‰‹å‹•ä¿å­˜").clicked() {
                         new_save_mode = Some(SaveMode::Manual);
                     }
-                    if ui.radio_value(&mut save_mode, SaveMode::AutoDebounce, "? ¥´¦r°±¤î®É¦Û°Ê¨¾§İ«O¦s (Auto-save 800ms)").clicked() {
+                    if ui.radio_value(&mut save_mode, SaveMode::AutoDebounce, "âš¡ æ‰“å­—åœæ­¢æ™‚è‡ªå‹•é˜²æŠ–ä¿å­˜ (Auto-save 800ms)").clicked() {
                         new_save_mode = Some(SaveMode::AutoDebounce);
                     }
                 });
@@ -69,15 +69,15 @@ pub fn render_settings_modal(
                 ui.separator();
                 ui.add_space(8.0_f32);
 
-                // 3. ¦r«¬ÁY©ñ
-                ui.label(RichText::new("?? ¦r«¬Åã¥ÜÁY©ñ").strong().color(accent_color));
-                if ui.add(egui::Slider::new(&mut scale, 0.8_f32..=1.6_f32).text("¤ñ¨Ò")).changed() {
+                // 3. å­—å‹ç¸®æ”¾
+                ui.label(RichText::new("ğŸ” å­—å‹é¡¯ç¤ºç¸®æ”¾").strong().color(accent_color));
+                if ui.add(egui::Slider::new(&mut scale, 0.8_f32..=1.6_f32).text("æ¯”ä¾‹")).changed() {
                     new_font_scale = Some(scale);
                 }
 
                 ui.add_space(10.0_f32);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("§¹¦¨").clicked() {
+                    if ui.button("å®Œæˆ").clicked() {
                         close_settings = true;
                     }
                 });

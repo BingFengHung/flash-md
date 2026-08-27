@@ -1,7 +1,7 @@
 use egui::{Align, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke};
 use crate::theme::AppTheme;
 
-/// ´è¬V Markdown TOC ¥Ø¿ı¤jºõ°¼ÃäÄæ¡A¦^¶Ç (¬O§_¦¬°_¤jºõ, ¿ï¨úªº¥Ø¼Ğ¼ĞÃDÁãÂI)
+/// æ¸²æŸ“ Markdown TOC ç›®éŒ„å¤§ç¶±å´é‚Šæ¬„ï¼Œå›å‚³ (æ˜¯å¦æ”¶èµ·å¤§ç¶±, é¸å–çš„ç›®æ¨™æ¨™é¡ŒéŒ¨é»)
 pub fn render_toc_sidebar(
     ui: &mut egui::Ui,
     theme: AppTheme,
@@ -15,7 +15,7 @@ pub fn render_toc_sidebar(
 
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new("?? ¥Ø¿ı¤jºõ")
+            RichText::new("ğŸ“‘ ç›®éŒ„å¤§ç¶±")
                 .strong()
                 .size(13.0_f32 * font_scale)
                 .color(theme.accent_color()),
@@ -27,14 +27,14 @@ pub fn render_toc_sidebar(
                 .inner_margin(Margin::symmetric(5.0_f32, 1.0_f32))
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new(format!("{} ¸`", toc.len()))
+                        RichText::new(format!("{} ç¯€", toc.len()))
                             .size(10.5_f32 * font_scale)
                             .color(theme.text_secondary()),
                     );
                 });
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("?").on_hover_text("¦¬°_¤jºõ (Ctrl+T)").clicked() {
+            if ui.small_button("âœ•").on_hover_text("æ”¶èµ·å¤§ç¶± (Ctrl+T)").clicked() {
                 should_close = true;
             }
         });
@@ -47,7 +47,7 @@ pub fn render_toc_sidebar(
         ui.vertical_centered(|ui| {
             ui.add_space(20.0_f32);
             ui.label(
-                RichText::new("¦¹¤å¥óµL³¹¸`¼ĞÃD")
+                RichText::new("æ­¤æ–‡ä»¶ç„¡ç« ç¯€æ¨™é¡Œ")
                     .italics()
                     .color(theme.text_secondary())
                     .size(12.0_f32 * font_scale),

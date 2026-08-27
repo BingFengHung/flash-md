@@ -3,7 +3,7 @@ use crate::theme::AppTheme;
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Ã¸»sÀÀ¯uÁä½L«öÁä (Keycap) ¤¸¥ó
+/// ç¹ªè£½æ“¬çœŸéµç›¤æŒ‰éµ (Keycap) å…ƒä»¶
 pub fn render_keycap(ui: &mut egui::Ui, theme: AppTheme, key_text: &str) {
     Frame::none()
         .fill(theme.code_bg_color())
@@ -20,7 +20,7 @@ pub fn render_keycap(ui: &mut egui::Ui, theme: AppTheme, key_text: &str) {
         });
 }
 
-/// Ã¸»s·¥¨ã²{¥N½è·PªºªÅª¬ºA¥d¤ù¤¶­± (Raycast / Linear Style)
+/// ç¹ªè£½æ¥µå…·ç¾ä»£è³ªæ„Ÿçš„ç©ºç‹€æ…‹å¡ç‰‡ä»‹é¢ (Raycast / Linear Style)
 pub fn render_empty_state(ui: &mut egui::Ui, theme: AppTheme, on_browse_click: impl FnOnce()) {
     ui.centered_and_justified(|ui| {
         Frame::none()
@@ -30,7 +30,7 @@ pub fn render_empty_state(ui: &mut egui::Ui, theme: AppTheme, on_browse_click: i
             .inner_margin(Margin::symmetric(36.0_f32, 32.0_f32))
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    // ²{¥N·¥¥úÂÅµo¥ú«~µP¹Ï¥Ü
+                    // ç¾ä»£æ¥µå…‰è—ç™¼å…‰å“ç‰Œåœ–ç¤º
                     Frame::none()
                         .fill(theme.accent_bg())
                         .rounding(Rounding::same(20.0_f32))
@@ -38,7 +38,7 @@ pub fn render_empty_state(ui: &mut egui::Ui, theme: AppTheme, on_browse_click: i
                         .inner_margin(Margin::symmetric(14.0_f32, 10.0_f32))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new("?")
+                                RichText::new("âš¡")
                                     .size(26.0_f32)
                                     .strong()
                                     .color(theme.accent_color()),
@@ -56,14 +56,14 @@ pub fn render_empty_state(ui: &mut egui::Ui, theme: AppTheme, on_browse_click: i
 
                     ui.add_space(6.0_f32);
                     ui.label(
-                        RichText::new("Windows §Ö±¶Áä·¥³tÀÉ®×¹wÄı ¡E ²@¬í¯Å´è¬V")
+                        RichText::new("Windows å¿«æ·éµæ¥µé€Ÿæª”æ¡ˆé è¦½ â€¢ æ¯«ç§’ç´šæ¸²æŸ“")
                             .size(13.0_f32)
                             .color(theme.text_secondary()),
                     );
 
                     ui.add_space(20.0_f32);
 
-                    // ÀÀ¯u¹êÅéÁä½L«öÁä UI
+                    // æ“¬çœŸå¯¦é«”éµç›¤æŒ‰éµ UI
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0_f32;
                         render_keycap(ui, theme, "Alt");
@@ -73,11 +73,11 @@ pub fn render_empty_state(ui: &mut egui::Ui, theme: AppTheme, on_browse_click: i
 
                     ui.add_space(22.0_f32);
 
-                    // ¿ï¾ÜÀÉ®×«ö¶s
+                    // é¸æ“‡æª”æ¡ˆæŒ‰éˆ•
                     let browse_btn = ui.add_sized(
                         Vec2::new(180.0_f32, 34.0_f32),
                         egui::Button::new(
-                            RichText::new("?? ÂsÄı¶}±ÒÀÉ®×")
+                            RichText::new("ğŸ“‚ ç€è¦½é–‹å•Ÿæª”æ¡ˆ")
                                 .size(13.0_f32)
                                 .strong()
                                 .color(Color32::WHITE),
@@ -94,10 +94,10 @@ pub fn render_empty_state(ui: &mut egui::Ui, theme: AppTheme, on_browse_click: i
                     ui.separator();
                     ui.add_space(10.0_f32);
 
-                    // ¯S¦â¤p¼Ğ
+                    // ç‰¹è‰²å°æ¨™
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("? ²@¬í¯Å¹wÄı  ¡E  ?? Markdown  ¡E  ?? ¥ş»y¨¥µ{¦¡½X°ª«G  ¡E  ?? §Y®É¦P¨B")
+                            RichText::new("âš¡ æ¯«ç§’ç´šé è¦½  â€¢  ğŸ“„ Markdown  â€¢  ğŸ’» å…¨èªè¨€ç¨‹å¼ç¢¼é«˜äº®  â€¢  ğŸ”„ å³æ™‚åŒæ­¥")
                                 .size(11.0_f32)
                                 .color(theme.text_secondary()),
                         );

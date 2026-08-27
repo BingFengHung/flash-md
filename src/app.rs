@@ -1,27 +1,21 @@
 use crate::config::{AppConfig, SaveMode};
 use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
-use crate::markdown::{
-    calculate_text_stats, get_image_badge, get_language_badge, is_code_extension,
-    is_image_extension, is_pdf_extension, render_code_viewer, MarkdownRenderer,
-};
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
 use crate::updater::{
-    check_latest_release, perform_self_update, restart_with_new_version, ReleaseInfo,
+    check_latest_release, perform_self_update, restart_with_new_version,
     CURRENT_VERSION,
 };
 use crate::watcher::{FileWatcher, WatcherEvent};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::Receiver;
 use egui::{
-    Align, Align2, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
-    TextEdit, Vec2,
+    Align, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Vec2,
 };
 use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

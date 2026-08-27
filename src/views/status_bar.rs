@@ -2,7 +2,7 @@ use egui::{RichText, Rounding, Stroke};
 use crate::theme::AppTheme;
 use crate::views::empty_state::CURRENT_VERSION;
 
-/// Ã¸»s¾ÉÄı¦C²{¥N«ö¶s¤¸¥ó
+/// ç¹ªè£½å°è¦½åˆ—ç¾ä»£æŒ‰éˆ•å…ƒä»¶
 pub fn render_nav_button(
     ui: &mut egui::Ui,
     theme: AppTheme,
@@ -38,16 +38,16 @@ pub fn render_nav_button(
     ui.add(btn).on_hover_text(tooltip)
 }
 
-/// Ã¸»s©³³¡§Ö±¶Áä¾Ş§@´£¥Ü
+/// ç¹ªè£½åº•éƒ¨å¿«æ·éµæ“ä½œæç¤º
 pub fn render_bottom_tips(ui: &mut egui::Ui, theme: AppTheme, is_editing: bool) {
     let tips = if is_editing {
         format!(
-            "flash-md v{}  ¡E  [´N¦a½s¿è¤¤]  ¡E  Ctrl+S («O¦s)  ¡E  E / Esc (°h¥X½s¿è)  ¡E  / (·j´M)",
+            "flash-md v{}  â€¢  [å°±åœ°ç·¨è¼¯ä¸­]  â€¢  Ctrl+S (ä¿å­˜)  â€¢  E / Esc (é€€å‡ºç·¨è¼¯)  â€¢  / (æœå°‹)",
             CURRENT_VERSION
         )
     } else {
         format!(
-            "flash-md v{}  ¡E  Alt+Space (¹wÄı)  ¡E  E (´N¦a½s¿è)  ¡E  ¡ö/¡÷/h/l (¤Á´«)  ¡E  ¡ô/¡õ/j/k (±²°Ê)  ¡E  / (·j´M)  ¡E  Ctrl+T (¤jºõ)  ¡E  Ctrl+Shift+O (©w¦ì)  ¡E  Ctrl+M (¼Ò¦¡)  ¡E  Esc (ÁôÂÃ)",
+            "flash-md v{}  â€¢  Alt+Space (é è¦½)  â€¢  E (å°±åœ°ç·¨è¼¯)  â€¢  â†/â†’/h/l (åˆ‡æ›)  â€¢  â†‘/â†“/j/k (æ²å‹•)  â€¢  / (æœå°‹)  â€¢  Ctrl+T (å¤§ç¶±)  â€¢  Ctrl+Shift+O (å®šä½)  â€¢  Ctrl+M (æ¨¡å¼)  â€¢  Esc (éš±è—)",
             CURRENT_VERSION
         )
     };
