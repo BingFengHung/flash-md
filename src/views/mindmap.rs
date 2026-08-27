@@ -592,3 +592,79 @@ fn get_branch_color(level: usize, idx: usize, theme: AppTheme) -> Color32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_markdown_inline() {
+        assert_eq!(clean_markdown_inline("**Bold Text**"), "Bold Text");
+        assert_eq!(clean_markdown_inline("*Italic Text*"), "Italic Text");
+        assert_eq!(clean_markdown_inline("`Code Block`"), "Code Block");
+        assert_eq!(clean_markdown_inline("[Link Title](https://example.com)"), "Link Title");
+        assert_eq!(clean_markdown_inline("Normal **Mixed** `Title`"), "Normal Mixed Title");
+    }
+
+    #[test]
+    fn test_parse_markdown_to_mindmap_hierarchy() {
+        let md = r#"
+# Root Project
+## Subsystem A
+### Component 1
+### Component 2
+## Subsystem B
+### Component 3
+"#;
+        let root = parse_markdown_to_mindmap(md, "Default Title");
+        assert_eq!(root.title, "Root Project");
+        assert_eq!(root.children.len(), 2);
+
+        // Subsystem A
+        let sub_a = &root.children[0];
+        assert_eq!(sub_a.title, "Subsystem A");
+        assert_eq!(sub_a.children.len(), 2);
+        assert_eq!(sub_a.children[0].title, "Component 1");
+        assert_eq!(sub_a.children[1].title, "Component 2");
+
+        // Subsystem B
+        let sub_b = &root.children[1];
+        assert_eq!(sub_b.title, "Subsystem B");
+        assert_eq!(sub_b.children.len(), 1);
+        assert_eq!(sub_b.children[0].title, "Component 3");
+    }
+
+    #[test]
+    fn test_parse_markdown_with_fallback_title_and_lists() {
+        let md = r#"
+## First Heading Without H1
+- List item 1
+- List item 2
+"#;
+        let root = parse_markdown_to_mindmap(md, "README.md");
+        assert_eq!(root.title, "README.md");
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].title, "First Heading Without H1");
+        assert_eq!(root.children[0].children.len(), 2);
+        assert_eq!(root.children[0].children[0].title, "List item 1");
+    }
+
+    #[test]
+    fn test_layout_mindmap_tree_subtree_height() {
+        let md = "# Title\n## Branch 1\n### Leaf 1\n### Leaf 2\n## Branch 2";
+        let mut root = parse_markdown_to_mindmap(md, "Title");
+        let collapsed_set = std::collections::HashSet::new();
+
+        layout_mindmap_tree(&mut root, 1.0_f32, &collapsed_set);
+        assert!(root.size.x > 0.0_f32);
+        assert!(root.size.y > 0.0_f32);
+        assert!(root.subtree_height >= root.size.y);
+
+        // 測試收折狀態
+        let mut collapsed_test_set = std::collections::HashSet::new();
+        collapsed_test_set.insert(root.children[0].id); // 收折 Branch 1
+        layout_mindmap_tree(&mut root, 1.0_f32, &collapsed_test_set);
+        assert!(root.children[0].collapsed);
+        assert_eq!(root.children[0].subtree_height, root.children[0].size.y);
+    }
+}

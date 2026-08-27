@@ -40,6 +40,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Run Unit Tests
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo test --verbose
+
       - name: Build Release Binary
         run: cargo build --release --target ${{ matrix.target }}
 

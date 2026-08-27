@@ -183,3 +183,23 @@ pub fn restart_with_new_version(args: &[String]) {
         let _ = cmd.spawn();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_newer_version() {
+        assert!(is_newer_version("1.0.88", "1.0.89"));
+        assert!(is_newer_version("v1.0.88", "v1.0.89"));
+        assert!(is_newer_version("1.0.88", "1.1.0"));
+        assert!(is_newer_version("1.0.88", "2.0.0"));
+        assert!(is_newer_version("1.0", "1.0.1"));
+
+        // 相同版本或較舊版本應回傳 false
+        assert!(!is_newer_version("1.0.89", "1.0.89"));
+        assert!(!is_newer_version("v1.0.89", "1.0.89"));
+        assert!(!is_newer_version("1.0.89", "1.0.88"));
+        assert!(!is_newer_version("2.0.0", "1.9.9"));
+    }
+}

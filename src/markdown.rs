@@ -2484,6 +2484,155 @@ pub fn extract_slides(content: &str) -> Vec<String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_headings_and_slugs() {
+        let md = r#"
+# Introduction
+Here is some intro text.
+
+## Features
+### Blazing Fast
+### Instant Preview
+
+## Features
+Duplicate heading test.
+"#;
+        let headings = extract_headings(md);
+        assert_eq!(headings.len(), 5);
+
+        assert_eq!(headings[0].title, "Introduction");
+        assert_eq!(headings[0].level, 1);
+        assert_eq!(headings[0].slug, "introduction");
+
+        assert_eq!(headings[1].title, "Features");
+        assert_eq!(headings[1].level, 2);
+        assert_eq!(headings[1].slug, "features");
+
+        assert_eq!(headings[2].title, "Blazing Fast");
+        assert_eq!(headings[2].level, 3);
+        assert_eq!(headings[2].slug, "blazing-fast");
+
+        assert_eq!(headings[3].title, "Instant Preview");
+        assert_eq!(headings[3].level, 3);
+
+        // 重複標題應自動去重並附加流水號
+        assert_eq!(headings[4].title, "Features");
+        assert_eq!(headings[4].level, 2);
+        assert_eq!(headings[4].slug, "features-1");
+    }
+
+    #[test]
+    fn test_extract_slides_with_frontmatter() {
+        let md = r#"---
+title: My Presentation
+author: Developer
+---
+
+# Slide 1: Welcome
+This is the first slide.
+
+---
+
+# Slide 2: Core Architecture
+- High Performance
+- Pure Rust
+
+---
+
+# Slide 3: Conclusion
+Thank you!
+"#;
+        let slides = extract_slides(md);
+        assert_eq!(slides.len(), 3);
+        assert!(slides[0].contains("Slide 1: Welcome"));
+        assert!(slides[1].contains("Slide 2: Core Architecture"));
+        assert!(slides[2].contains("Slide 3: Conclusion"));
+    }
+
+    #[test]
+    fn test_calculate_text_stats() {
+        let text = "你好，世界！ Welcome to flash-md fast preview tool.\n第二行測試文字。";
+        let stats = calculate_text_stats(text);
+
+        // 中文字數統計
+        assert!(stats.cjk_count > 0);
+        // 英文字詞統計 (Welcome, to, flash-md, fast, preview, tool)
+        assert!(stats.word_count >= 5);
+        assert_eq!(stats.line_count, 2);
+        assert!(stats.reading_time_mins >= 1);
+    }
+
+    #[test]
+    fn test_parse_csv_and_tsv() {
+        let csv_data = "Name,Role,City\nAlice,\"Software Engineer, Lead\",Taipei\nBob,Designer,Tokyo";
+        let parsed_csv = parse_csv_or_tsv(csv_data, ',');
+        assert_eq!(parsed_csv.len(), 3);
+        assert_eq!(parsed_csv[0], vec!["Name", "Role", "City"]);
+        assert_eq!(parsed_csv[1], vec!["Alice", "Software Engineer, Lead", "Taipei"]);
+        assert_eq!(parsed_csv[2], vec!["Bob", "Designer", "Tokyo"]);
+
+        let tsv_data = "ID\tScore\tGrade\n101\t95.5\tA+\n102\t88.0\tA";
+        let parsed_tsv = parse_csv_or_tsv(tsv_data, '\t');
+        assert_eq!(parsed_tsv.len(), 3);
+        assert_eq!(parsed_tsv[0], vec!["ID", "Score", "Grade"]);
+        assert_eq!(parsed_tsv[1], vec!["101", "95.5", "A+"]);
+    }
+
+    #[test]
+    fn test_json_format_and_minify() {
+        let raw_json = r#"{"name":"flash-md","version":"1.0.89","features":["preview","mindmap"]}"#;
+        let formatted = format_json_str(raw_json);
+        assert!(formatted.contains('\n'));
+        assert!(formatted.contains("  \"name\": \"flash-md\""));
+
+        let minified = minify_json_str(&formatted);
+        assert!(!minified.contains('\n'));
+        assert!(minified.contains("\"features\":[\"preview\",\"mindmap\"]"));
+
+        // 非法 JSON 應優雅回傳原字串或錯誤提示而不崩潰
+        let invalid_json = "{ name: invalid }";
+        let invalid_res = format_json_str(invalid_json);
+        assert_eq!(invalid_res, invalid_json);
+    }
+
+    #[test]
+    fn test_find_search_matches_in_text() {
+        let text = "Line 1: Rust is blazing fast.\nLine 2: egui provides native UI.\nLine 3: RUST is awesome.";
+        let matches = find_search_matches_in_text(text, "rust");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], 0); // Line 1
+        assert_eq!(matches[1], 2); // Line 3
+
+        let cjk_text = "第 1 行：微軟正黑體字型\n第 2 行：純英文字串\n第 3 行：字型測試";
+        let cjk_matches = find_search_matches_in_text(cjk_text, "字型");
+        assert_eq!(cjk_matches.len(), 2);
+        assert_eq!(cjk_matches[0], 0);
+        assert_eq!(cjk_matches[1], 2);
+    }
+
+    #[test]
+    fn test_is_code_extension_and_badges() {
+        assert!(is_code_extension("rs"));
+        assert!(is_code_extension("py"));
+        assert!(is_code_extension("ts"));
+        assert!(is_code_extension("json"));
+        assert!(!is_code_extension("png"));
+        assert!(!is_code_extension("unknown_xyz"));
+
+        let (name_rs, emoji_rs) = get_language_badge("rs");
+        assert_eq!(name_rs, "Rust");
+        assert_eq!(emoji_rs, "🦀");
+
+        let (name_py, emoji_py) = get_language_badge("py");
+        assert_eq!(name_py, "Python");
+        assert_eq!(emoji_py, "🐍");
+    }
+}
+
 
 
 

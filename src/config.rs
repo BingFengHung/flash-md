@@ -111,3 +111,43 @@ impl AppConfig {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_config_default_values() {
+        let config = AppConfig::default();
+        assert_eq!(config.theme, AppTheme::Light);
+        assert_eq!(config.font_scale, 1.0_f32);
+        assert!(!config.always_on_top);
+        assert_eq!(config.save_mode, SaveMode::Manual);
+    }
+
+    #[test]
+    fn test_app_config_json_roundtrip() {
+        let config = AppConfig {
+            theme: AppTheme::Dark,
+            font_scale: 1.25_f32,
+            always_on_top: true,
+            save_mode: SaveMode::AutoDebounce,
+        };
+
+        let json = config.to_json();
+        let loaded = AppConfig::parse_json(&json).expect("解析設定 JSON 失敗");
+
+        assert_eq!(loaded.theme, AppTheme::Dark);
+        assert!((loaded.font_scale - 1.25_f32).abs() < 0.01_f32);
+        assert!(loaded.always_on_top);
+        assert_eq!(loaded.save_mode, SaveMode::AutoDebounce);
+    }
+
+    #[test]
+    fn test_app_config_corrupt_json_fallback() {
+        let corrupt = "{ corrupted_data: null }";
+        let loaded = AppConfig::parse_json(corrupt).unwrap_or_default();
+        assert_eq!(loaded.theme, AppTheme::Light);
+        assert_eq!(loaded.font_scale, 1.0_f32);
+    }
+}
