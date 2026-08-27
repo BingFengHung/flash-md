@@ -486,6 +486,146 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+fn detect_image_format_from_bytes(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+        Some("png")
+    } else if bytes.len() >= 3 && &bytes[0..3] == b"\xFF\xD8\xFF" {
+        Some("jpeg")
+    } else if bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
+        Some("bmp")
+    } else if bytes.len() >= 4 && (&bytes[0..4] == b"MM\x00*" || &bytes[0..4] == b"II*\x00") {
+        Some("tiff")
+    } else if bytes.len() >= 4 && &bytes[0..4] == b"\x00\x00\x01\x00" {
+        Some("ico")
+    } else if bytes.iter().take(300).any(|&b| b == b'<') {
+        let text = String::from_utf8_lossy(&bytes[..bytes.len().min(500)]).to_lowercase();
+        if text.contains("<svg") {
+            Some("svg")
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn find_local_image_bytes(base_dir: Option<&std::path::Path>, clean_url: &str) -> Option<(Vec<u8>, &'static str)> {
+    let url_without_query = clean_url
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .split('?').next().unwrap_or(clean_url)
+        .split('#').next().unwrap_or(clean_url);
+
+    let decoded = decode_uri_component(url_without_query);
+    let raw_path = decoded
+        .trim_start_matches("file:///")
+        .trim_start_matches("file://")
+        .trim_start_matches("file:")
+        .replace('/', "\\");
+
+    let clean_relative = raw_path
+        .trim_start_matches(".\\")
+        .trim_start_matches("./")
+        .trim_start_matches('\\')
+        .trim_start_matches('/');
+
+    let direct_path = std::path::PathBuf::from(&raw_path);
+    if direct_path.is_absolute() && direct_path.is_file() {
+        if let Ok(bytes) = std::fs::read(&direct_path) {
+            let fmt = detect_image_format_from_bytes(&bytes).unwrap_or("png");
+            return Some((bytes, fmt));
+        }
+    }
+
+    if let Some(base) = base_dir {
+        // 1. 直接候選路徑清單
+        let candidates = [
+            base.join(clean_relative),
+            base.join(&raw_path),
+            base.join(&decoded),
+            base.join(url_without_query),
+            base.join("assets").join(clean_relative),
+            base.join(".assets").join(clean_relative),
+            base.join("images").join(clean_relative),
+            base.join("img").join(clean_relative),
+            base.join("attachments").join(clean_relative),
+            base.join(".attachments").join(clean_relative),
+            base.join("media").join(clean_relative),
+            base.join("resources").join(clean_relative),
+            base.join("static").join(clean_relative),
+            base.join("public").join(clean_relative),
+        ];
+
+        for cand in &candidates {
+            if cand.is_file() {
+                if let Ok(bytes) = std::fs::read(cand) {
+                    let fmt = detect_image_format_from_bytes(&bytes).unwrap_or("png");
+                    return Some((bytes, fmt));
+                }
+            }
+        }
+
+        // 2. 若無副檔名或含有副檔名，嘗試附加常見圖片副檔名
+        let extensions = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg"];
+        for ext in &extensions {
+            let with_ext = format!("{}.{}", clean_relative, ext);
+            let candidates_ext = [
+                base.join(&with_ext),
+                base.join("assets").join(&with_ext),
+                base.join(".assets").join(&with_ext),
+                base.join("images").join(&with_ext),
+                base.join("attachments").join(&with_ext),
+            ];
+            for cand in &candidates_ext {
+                if cand.is_file() {
+                    if let Ok(bytes) = std::fs::read(cand) {
+                        let fmt = detect_image_format_from_bytes(&bytes).unwrap_or(ext);
+                        return Some((bytes, fmt));
+                    }
+                }
+            }
+        }
+
+        // 3. 遍歷 base 目錄及其直接子目錄，尋找檔名相符的檔案 (包含 Typora/Obsidian 的 *.assets 資料夾)
+        let target_filename = std::path::Path::new(clean_relative)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(clean_relative);
+
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let sub_cand = p.join(target_filename);
+                    if sub_cand.is_file() {
+                        if let Ok(bytes) = std::fs::read(&sub_cand) {
+                            let fmt = detect_image_format_from_bytes(&bytes).unwrap_or("png");
+                            return Some((bytes, fmt));
+                        }
+                    }
+                    for ext in &extensions {
+                        let sub_cand_ext = p.join(format!("{}.{}", target_filename, ext));
+                        if sub_cand_ext.is_file() {
+                            if let Ok(bytes) = std::fs::read(&sub_cand_ext) {
+                                let fmt = detect_image_format_from_bytes(&bytes).unwrap_or(ext);
+                                return Some((bytes, fmt));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 impl<'a> RenderContext<'a> {
     fn new(
         theme: AppTheme,
@@ -569,82 +709,26 @@ impl<'a> RenderContext<'a> {
         let is_web_url = clean_url.starts_with("http://") || clean_url.starts_with("https://");
         let is_data_uri = clean_url.starts_with("data:image/");
 
-        let (data_bytes, data_ext) = if is_data_uri {
-            let ext = if let Some(slash_pos) = clean_url.find('/') {
-                let after_slash = &clean_url[slash_pos + 1..];
-                let end = after_slash.find(';').unwrap_or(after_slash.find(',').unwrap_or(3));
-                after_slash[..end].to_string()
-            } else {
-                "png".to_string()
-            };
+        let (image_bytes, resolved_ext) = if is_data_uri {
             let bytes = if let Some(comma_pos) = clean_url.find(',') {
                 decode_base64(&clean_url[comma_pos + 1..])
             } else {
                 None
             };
-            (bytes, ext)
-        } else {
-            (None, "png".to_string())
-        };
-
-        // 判斷是否為本地檔案路徑並解析 (徹底相容 Windows 相對路徑、前導斜線、URL query/anchor 與百分比編碼)
-        let (image_bytes, resolved_ext) = if is_data_uri {
-            (data_bytes, data_ext)
-        } else if !is_web_url {
-            let url_without_query = clean_url.split('?').next().unwrap_or(clean_url).split('#').next().unwrap_or(clean_url);
-            let decoded = decode_uri_component(url_without_query);
-            let raw_path = decoded
-                .trim_start_matches("file:///")
-                .trim_start_matches("file://")
-                .trim_start_matches("file:")
-                .replace('/', "\\");
-
-            let clean_relative = raw_path
-                .trim_start_matches(".\\")
-                .trim_start_matches("./")
-                .trim_start_matches('\\')
-                .trim_start_matches('/');
-
-            let mut final_path: Option<std::path::PathBuf> = None;
-            let direct_path = std::path::PathBuf::from(&raw_path);
-            if direct_path.is_absolute() && direct_path.exists() {
-                final_path = Some(direct_path);
-            } else if let Some(base) = self.base_dir {
-                let candidates = [
-                    base.join(clean_relative),
-                    base.join(&raw_path),
-                    base.join(&decoded),
-                    base.join(url_without_query),
-                ];
-                for cand in candidates {
-                    if cand.exists() {
-                        final_path = Some(cand);
-                        break;
-                    }
-                }
-                if final_path.is_none() {
-                    final_path = Some(base.join(clean_relative));
-                }
+            let ext = if let Some(ref b) = bytes {
+                detect_image_format_from_bytes(b).unwrap_or("png")
             } else {
-                final_path = Some(direct_path);
-            }
-
-            let bytes = if let Some(ref p) = final_path {
-                std::fs::read(p).ok()
-            } else {
-                None
+                "png"
             };
-
-            let ext = final_path
-                .as_ref()
-                .and_then(|p| p.extension())
-                .and_then(|e| e.to_str())
-                .unwrap_or("png")
-                .to_string();
-
             (bytes, ext)
+        } else if !is_web_url {
+            if let Some((bytes, ext)) = find_local_image_bytes(self.base_dir, clean_url) {
+                (Some(bytes), ext)
+            } else {
+                (None, "png")
+            }
         } else {
-            (None, "png".to_string())
+            (None, "png")
         };
 
         let available_w = (ui.available_width() - 16.0_f32).max(100.0_f32);
@@ -658,6 +742,7 @@ impl<'a> RenderContext<'a> {
                 if let Some(bytes) = image_bytes {
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     use std::hash::{Hash, Hasher};
+                    bytes.hash(&mut hasher);
                     clean_url.hash(&mut hasher);
                     let uri = format!("bytes://md_img_{:x}.{}", hasher.finish(), resolved_ext);
 
