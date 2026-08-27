@@ -11,9 +11,7 @@ Thumbs.db
 [Dd]esktop.ini
 .DS_Store
 
-# IDEs
-.idea/
-.vscode/
-*.swp
-*.swo
+# Test binaries
+test-run/
+*.zip
 
