@@ -841,6 +841,7 @@ impl<'a> RenderContext<'a> {
         let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
         let mut job = LayoutJob::default();
+        job.wrap.max_width = ui.available_width();
         let mut link_ranges: Vec<(std::ops::Range<usize>, String)> = Vec::new();
         let mut current_char_idx = 0;
 
@@ -911,8 +912,8 @@ impl<'a> RenderContext<'a> {
             if let Some(hover_pos) = resp.hover_pos() {
                 let local_pos = hover_pos - resp.rect.min;
                 let galley = ui.fonts(|f| f.layout_job(job));
-                let ccursor = galley.cursor_from_pos(local_pos);
-                let char_idx = ccursor.index;
+                let cursor = galley.cursor_from_pos(local_pos);
+                let char_idx = cursor.ccursor.index;
 
                 for (range, url) in &link_ranges {
                     if range.contains(&char_idx) {
