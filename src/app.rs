@@ -670,48 +670,48 @@ impl MdPreviewApp {
         );
 
         // 卡片內部渲染 Markdown 投影片
-        let mut slide_ui = ui.child_ui(card_rect, egui::Layout::top_down(egui::Align::Center));
-        
-        Frame::none()
-            .inner_margin(Margin::symmetric(36.0, 24.0))
-            .show(&mut slide_ui, |ui| {
-                // 幻燈片頂部微型資訊
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("📽️ 簡報投影模式")
-                            .size(11.0)
-                            .color(self.theme.accent_color())
-                            .strong(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.allocate_ui_at_rect(card_rect, |ui| {
+            Frame::none()
+                .inner_margin(Margin::symmetric(36.0, 24.0))
+                .show(ui, |ui| {
+                    // 幻燈片頂部微型資訊
+                    ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(format!("第 {} / {} 頁", self.current_slide_index + 1, total))
-                                .size(11.5)
-                                .color(self.theme.text_secondary()),
+                            RichText::new("📽️ 簡報投影模式")
+                                .size(11.0)
+                                .color(self.theme.accent_color())
+                                .strong(),
                         );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(format!("第 {} / {} 頁", self.current_slide_index + 1, total))
+                                    .size(11.5)
+                                    .color(self.theme.text_secondary()),
+                            );
+                        });
                     });
+
+                    ui.add_space(8.0_f32);
+                    ui.separator();
+                    ui.add_space(10.0_f32);
+
+                    // 簡報內容 Markdown 渲染 (使用放大的簡報字級 1.35x)
+                    ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
+                            let renderer = crate::markdown::MarkdownRenderer::new(
+                                self.theme,
+                                self.font_scale * 1.35_f32,
+                                "",
+                                None,
+                                None,
+                                base_dir,
+                            );
+                            let _ = renderer.render(ui, &slide_text);
+                        });
                 });
-
-                ui.add_space(8.0_f32);
-                ui.separator();
-                ui.add_space(10.0_f32);
-
-                // 簡報內容 Markdown 渲染 (使用放大的簡報字級 1.35x)
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
-                        let renderer = crate::markdown::MarkdownRenderer::new(
-                            self.theme,
-                            self.font_scale * 1.35_f32,
-                            "",
-                            None,
-                            None,
-                            base_dir,
-                        );
-                        let _ = renderer.render(ui, &slide_text);
-                    });
-            });
+        });
 
         // 底部懸浮控制條 (Floating Pill Controller)
         let pill_height = 40.0_f32;
@@ -733,67 +733,69 @@ impl MdPreviewApp {
             Stroke::new(1.0_f32, self.theme.accent_color()),
         );
 
-        let mut pill_ui = ui.child_ui(pill_rect, egui::Layout::left_to_right(egui::Align::Center));
-        pill_ui.spacing_mut().item_spacing.x = 8.0_f32;
-
         let mut next_slide = false;
         let mut prev_slide = false;
         let mut toggle_fullscreen = false;
         let mut exit_slides = false;
 
-        Frame::none()
-            .inner_margin(Margin::symmetric(14.0, 4.0))
-            .show(&mut pill_ui, |ui| {
-                let can_prev = self.current_slide_index > 0;
-                let prev_btn = ui.add_enabled(
-                    can_prev,
-                    egui::Button::new(RichText::new("◀").size(13.0).color(if can_prev { self.theme.text_primary() } else { self.theme.text_secondary() }))
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE),
-                );
-                if prev_btn.on_hover_text("上一頁 (← / PageUp / Backspace)").clicked() {
-                    prev_slide = true;
-                }
+        ui.allocate_ui_at_rect(pill_rect, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0_f32;
+                Frame::none()
+                    .inner_margin(Margin::symmetric(14.0, 4.0))
+                    .show(ui, |ui| {
+                        let can_prev = self.current_slide_index > 0;
+                        let prev_btn = ui.add_enabled(
+                            can_prev,
+                            egui::Button::new(RichText::new("◀").size(13.0).color(if can_prev { self.theme.text_primary() } else { self.theme.text_secondary() }))
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE),
+                        );
+                        if prev_btn.on_hover_text("上一頁 (← / PageUp / Backspace)").clicked() {
+                            prev_slide = true;
+                        }
 
-                ui.label(
-                    RichText::new(format!("{}/{}", self.current_slide_index + 1, total))
-                        .size(13.0)
-                        .strong()
-                        .color(self.theme.accent_color()),
-                );
+                        ui.label(
+                            RichText::new(format!("{}/{}", self.current_slide_index + 1, total))
+                                .size(13.0)
+                                .strong()
+                                .color(self.theme.accent_color()),
+                        );
 
-                let can_next = self.current_slide_index + 1 < total;
-                let next_btn = ui.add_enabled(
-                    can_next,
-                    egui::Button::new(RichText::new("▶").size(13.0).color(if can_next { self.theme.text_primary() } else { self.theme.text_secondary() }))
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE),
-                );
-                if next_btn.on_hover_text("下一頁 (→ / Space / PageDown)").clicked() {
-                    next_slide = true;
-                }
+                        let can_next = self.current_slide_index + 1 < total;
+                        let next_btn = ui.add_enabled(
+                            can_next,
+                            egui::Button::new(RichText::new("▶").size(13.0).color(if can_next { self.theme.text_primary() } else { self.theme.text_secondary() }))
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE),
+                        );
+                        if next_btn.on_hover_text("下一頁 (→ / Space / PageDown)").clicked() {
+                            next_slide = true;
+                        }
 
-                ui.separator();
+                        ui.separator();
 
-                let fs_icon = if self.is_slides_fullscreen { "🗗 視窗" } else { "⛶ 全螢幕" };
-                let fs_btn = ui.add(
-                    egui::Button::new(RichText::new(fs_icon).size(12.0).color(self.theme.text_primary()))
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE),
-                );
-                if fs_btn.on_hover_text("切換全螢幕 (F / F11)").clicked() {
-                    toggle_fullscreen = true;
-                }
+                        let fs_icon = if self.is_slides_fullscreen { "🗗 視窗" } else { "⛶ 全螢幕" };
+                        let fs_btn = ui.add(
+                            egui::Button::new(RichText::new(fs_icon).size(12.0).color(self.theme.text_primary()))
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE),
+                        );
+                        if fs_btn.on_hover_text("切換全螢幕 (F / F11)").clicked() {
+                            toggle_fullscreen = true;
+                        }
 
-                let exit_btn = ui.add(
-                    egui::Button::new(RichText::new("✕ 退出").size(12.0).color(self.theme.text_primary()))
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE),
-                );
-                if exit_btn.on_hover_text("退出簡報模式 (Esc / F5)").clicked() {
-                    exit_slides = true;
-                }
+                        let exit_btn = ui.add(
+                            egui::Button::new(RichText::new("✕ 退出").size(12.0).color(self.theme.text_primary()))
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE),
+                        );
+                        if exit_btn.on_hover_text("退出簡報模式 (Esc / F5)").clicked() {
+                            exit_slides = true;
+                        }
+                    });
             });
+        });
 
         if prev_slide && self.current_slide_index > 0 {
             self.current_slide_index -= 1;
