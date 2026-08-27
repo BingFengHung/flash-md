@@ -95,9 +95,10 @@ pub fn parse_markdown_to_mindmap(content: &str, fallback_root_title: &str) -> Mi
                 continue;
             }
 
-            // 如果是第一個 H1 且 root 還是預設名稱，則直接升級 root
+            // 如果是第一個 H1 且 root 還是預設名稱，則直接升級 root 標題，後續子標題直接作為主分支
             if node_level == 1 && root.children.is_empty() && stack.is_empty() {
-                root.title = clean_title.clone();
+                root.title = clean_title;
+                continue;
             }
 
             let new_node = MindmapNode {
