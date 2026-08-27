@@ -1122,8 +1122,8 @@ impl MdPreviewApp {
             }
         }
 
-        // 鍵盤導航與瀏覽操作 (非文字編輯/搜尋輸入狀態下觸發)
-        if !ctx.wants_keyboard_input() {
+        // 鍵盤導航與平滑捲動操作 (非文字編輯/搜尋輸入/簡報模式下觸發)
+        if !self.is_editing && !self.search_open && !self.is_slides_mode {
             // E: 就地編輯模式切換快速鍵
             if input.key_pressed(egui::Key::E) && !input.modifiers.command && !input.modifiers.alt {
                 self.toggle_edit_mode();
@@ -1161,18 +1161,25 @@ impl MdPreviewApp {
             if input.key_pressed(egui::Key::ArrowDown) || input.key_down(egui::Key::ArrowDown)
                 || input.key_pressed(egui::Key::J) || input.key_down(egui::Key::J)
             {
-                scroll_y -= 32.0 * self.font_scale;
+                scroll_y -= 36.0 * self.font_scale;
             }
             if input.key_pressed(egui::Key::ArrowUp) || input.key_down(egui::Key::ArrowUp)
                 || input.key_pressed(egui::Key::K) || input.key_down(egui::Key::K)
             {
-                scroll_y += 32.0 * self.font_scale;
+                scroll_y += 36.0 * self.font_scale;
             }
             if input.key_pressed(egui::Key::PageDown) {
                 scroll_y -= 360.0 * self.font_scale;
             }
             if input.key_pressed(egui::Key::PageUp) {
                 scroll_y += 360.0 * self.font_scale;
+            }
+            if input.key_pressed(egui::Key::Space) && !input.modifiers.alt && !input.modifiers.command {
+                if input.modifiers.shift {
+                    scroll_y += 360.0 * self.font_scale;
+                } else {
+                    scroll_y -= 360.0 * self.font_scale;
+                }
             }
             // Home 或 g (Vim): 置頂；End 或 G / Shift+g (Vim): 置底
             if input.key_pressed(egui::Key::Home)
@@ -1212,16 +1219,14 @@ impl MdPreviewApp {
             }
         }
 
-        // 簡報投影模式專屬鍵盤導航 (左右/上下/空白/Enter/翻頁/全螢幕)
+        // 簡報投影模式專屬鍵盤導航 (左右/Page/Space/Enter/翻頁/全螢幕)
         if self.is_slides_mode {
             let total_slides = crate::markdown::extract_slides(&self.content).len();
             if input.key_pressed(egui::Key::ArrowRight)
-                || input.key_pressed(egui::Key::ArrowDown)
                 || input.key_pressed(egui::Key::PageDown)
                 || input.key_pressed(egui::Key::Space)
                 || input.key_pressed(egui::Key::Enter)
                 || (input.key_pressed(egui::Key::L) && !input.modifiers.command && !input.modifiers.alt)
-                || (input.key_pressed(egui::Key::J) && !input.modifiers.command && !input.modifiers.alt)
             {
                 if self.current_slide_index + 1 < total_slides {
                     self.current_slide_index += 1;
@@ -1229,11 +1234,9 @@ impl MdPreviewApp {
                 }
             }
             if input.key_pressed(egui::Key::ArrowLeft)
-                || input.key_pressed(egui::Key::ArrowUp)
                 || input.key_pressed(egui::Key::PageUp)
                 || input.key_pressed(egui::Key::Backspace)
                 || (input.key_pressed(egui::Key::H) && !input.modifiers.command && !input.modifiers.alt)
-                || (input.key_pressed(egui::Key::K) && !input.modifiers.command && !input.modifiers.alt)
             {
                 if self.current_slide_index > 0 {
                     self.current_slide_index -= 1;
