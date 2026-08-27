@@ -3014,19 +3014,57 @@ impl MdPreviewApp {
                     } else {
                         "png"
                     };
-                    let uri = format!("bytes://viewer_image_preview.{}", ext);
-                    let mut img = egui::Image::from_bytes(uri, bytes.clone())
-                        .rounding(Rounding::same(6.0_f32));
 
-                    if self.image_fit_mode {
-                        let max_w = (available.x - 24.0_f32).max(100.0_f32);
-                        let max_h = (available.y - 24.0_f32).max(100.0_f32);
-                        img = img.max_size(Vec2::new(max_w, max_h));
+                    if ext.eq_ignore_ascii_case("svg") {
+                        let uri = format!("bytes://viewer_image_preview.{}", ext);
+                        let mut img = egui::Image::from_bytes(uri, bytes.clone())
+                            .rounding(Rounding::same(6.0_f32));
+
+                        if self.image_fit_mode {
+                            let max_w = (available.x - 24.0_f32).max(100.0_f32);
+                            let max_h = (available.y - 24.0_f32).max(100.0_f32);
+                            img = img.max_size(Vec2::new(max_w, max_h));
+                        } else {
+                            img = img.fit_to_original_size(self.image_zoom);
+                        }
+
+                        ui.add(img);
+                    } else if let Ok(dyn_img) = image::load_from_memory(bytes) {
+                        let size = [dyn_img.width() as usize, dyn_img.height() as usize];
+                        let rgba = dyn_img.to_rgba8().into_raw();
+                        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
+                        let texture = ui.ctx().load_texture(
+                            "viewer_image_texture",
+                            color_image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        let mut img = egui::Image::from_texture(&texture)
+                            .rounding(Rounding::same(6.0_f32));
+
+                        if self.image_fit_mode {
+                            let max_w = (available.x - 24.0_f32).max(100.0_f32);
+                            let max_h = (available.y - 24.0_f32).max(100.0_f32);
+                            img = img.max_size(Vec2::new(max_w, max_h));
+                        } else {
+                            img = img.fit_to_original_size(self.image_zoom);
+                        }
+
+                        ui.add(img);
                     } else {
-                        img = img.fit_to_original_size(self.image_zoom);
-                    }
+                        let uri = format!("bytes://viewer_image_preview.{}", ext);
+                        let mut img = egui::Image::from_bytes(uri, bytes.clone())
+                            .rounding(Rounding::same(6.0_f32));
 
-                    ui.add(img);
+                        if self.image_fit_mode {
+                            let max_w = (available.x - 24.0_f32).max(100.0_f32);
+                            let max_h = (available.y - 24.0_f32).max(100.0_f32);
+                            img = img.max_size(Vec2::new(max_w, max_h));
+                        } else {
+                            img = img.fit_to_original_size(self.image_zoom);
+                        }
+
+                        ui.add(img);
+                    }
                 });
             });
         } else if let Some(ref uri) = self.image_uri {

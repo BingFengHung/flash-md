@@ -746,13 +746,45 @@ impl<'a> RenderContext<'a> {
                     clean_url.hash(&mut hasher);
                     let uri = format!("bytes://md_img_{:x}.{}", hasher.finish(), resolved_ext);
 
-                    let img = egui::Image::from_bytes(uri, bytes)
-                        .rounding(Rounding::same(6.0_f32))
-                        .max_width(available_w);
-
-                    ui.vertical_centered(|ui| {
-                        ui.add(img);
-                    });
+                    // 1. 若為 SVG 向量圖，透過 egui_extras SVG 載入器渲染
+                    if resolved_ext == "svg" {
+                        let img = egui::Image::from_bytes(uri, bytes)
+                            .rounding(Rounding::same(6.0_f32))
+                            .max_width(available_w);
+                        ui.vertical_centered(|ui| {
+                            ui.add(img);
+                        });
+                    } else {
+                        // 2. 所有點陣圖 (PNG, JPEG, WEBP, GIF, BMP, ICO) 採用 image crate 同步記憶體即時解碼
+                        // 直接由主執行緒生成 GPU 紋理並渲染，徹底避開非同步載入器延遲、格式誤判與 0 尺寸空白卡片問題！
+                        match image::load_from_memory(&bytes) {
+                            Ok(dyn_img) => {
+                                let size = [dyn_img.width() as usize, dyn_img.height() as usize];
+                                let rgba = dyn_img.to_rgba8().into_raw();
+                                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
+                                let texture = ui.ctx().load_texture(
+                                    &uri,
+                                    color_image,
+                                    egui::TextureOptions::LINEAR,
+                                );
+                                let img = egui::Image::from_texture(&texture)
+                                    .rounding(Rounding::same(6.0_f32))
+                                    .max_width(available_w);
+                                ui.vertical_centered(|ui| {
+                                    ui.add(img);
+                                });
+                            }
+                            Err(_) => {
+                                // 備援：嘗試使用 egui 預設 bytes loader
+                                let img = egui::Image::from_bytes(uri, bytes)
+                                    .rounding(Rounding::same(6.0_f32))
+                                    .max_width(available_w);
+                                ui.vertical_centered(|ui| {
+                                    ui.add(img);
+                                });
+                            }
+                        }
+                    }
                 } else if is_web_url {
                     let img = egui::Image::from_uri(clean_url.to_string())
                         .rounding(Rounding::same(6.0_f32))
@@ -987,6 +1019,28 @@ impl<'a> RenderContext<'a> {
                 .show(ui, |ui| {
                     self.render_inline_spans(ui, inlines);
                 });
+        } else if self.list_level > 0 {
+            let indent = (self.list_level.saturating_sub(1) as f32) * 16.0_f32;
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(indent);
+                let bullet = if let Some(idx) = self.ordered_list_index {
+                    format!("{}. ", idx)
+                } else {
+                    "• ".to_string()
+                };
+                ui.label(
+                    RichText::new(bullet)
+                        .color(self.theme.accent_color())
+                        .strong()
+                        .size(14.0_f32 * self.font_scale),
+                );
+
+                self.render_inline_spans(ui, inlines);
+            });
+
+            if let Some(ref mut idx) = self.ordered_list_index {
+                *idx += 1;
+            }
         } else {
             self.render_inline_spans(ui, inlines);
         }
