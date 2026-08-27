@@ -2440,6 +2440,61 @@ impl MdPreviewApp {
 pub use crate::views::status_bar::render_nav_button;
 pub use crate::views::empty_state::render_keycap;
 
+fn rfd_open_file() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let output = Command::new("powershell")
+            .args(&[
+                "-NoProfile",
+                "-Command",
+                r#"[System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = "Markdown & Code Files (*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt)|*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt|All files (*.*)|*.*"; if($d.ShowDialog() -eq "OK"){ Write-Output $d.FileName }"#,
+            ])
+            .output();
+
+        if let Ok(out) = output {
+            let path_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !path_str.is_empty() {
+                return Some(PathBuf::from(path_str));
+            }
+        }
+    }
+    None
+}
+
+/// 自 ZIP 壓縮檔內直接即時讀取文字檔案內容 (無需使用者手動解壓縮)
+#[allow(dead_code)]
+fn read_text_from_zip(zip_path: &Path, entry_name: &str) -> Result<String, String> {
+    let zip_str = zip_path.to_string_lossy().replace('\'', "''");
+    let entry_clean = entry_name.replace('/', "\\").replace('\'', "''");
+    let entry_filename = Path::new(entry_name)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| entry_name.to_string())
+        .replace('\'', "''");
+
+    let script = format!(
+        r#"[System.Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null; $z = [System.IO.Compression.ZipFile]::OpenRead('{}'); $e = $z.Entries | Where-Object {{ $_.FullName.Replace('/','\') -eq '{}' -or $_.Name -eq '{}' }} | Select-Object -First 1; if ($e) {{ $s = $e.Open(); $r = New-Object System.IO.StreamReader($s, [System.Text.Encoding]::UTF8); $t = $r.ReadToEnd(); $r.Close(); $s.Close(); Write-Output $t }}; $z.Dispose();"#,
+        zip_str, entry_clean, entry_filename
+    );
+
+    let output = std::process::Command::new("powershell")
+        .args(&["-NoProfile", "-Command", &script])
+        .output()
+        .map_err(|e| format!("執行 PowerShell 讀取 ZIP 失敗: {}", e))?;
+
+    if output.status.success() {
+        let content = String::from_utf8_lossy(&output.stdout).to_string();
+        if !content.is_empty() {
+            Ok(content)
+        } else {
+            Err("壓縮檔內找不到指定檔案或檔案內容為空".to_string())
+        }
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
 /// 自 ZIP 壓縮檔內直接即時讀取二進制檔案數據 (圖片/SVG/圖示)
 fn read_bytes_from_zip(zip_path: &Path, entry_name: &str) -> Result<Vec<u8>, String> {
     let zip_str = zip_path.to_string_lossy().replace('\'', "''");
