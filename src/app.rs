@@ -13,7 +13,7 @@ use crate::updater::{
 };
 use crate::views::status_bar::render_nav_button;
 use crate::watcher::{FileWatcher, WatcherEvent};
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{
     Align, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
     TextEdit, Vec2,
