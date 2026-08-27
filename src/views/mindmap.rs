@@ -148,8 +148,14 @@ pub fn parse_markdown_to_mindmap(content: &str, fallback_root_title: &str) -> Mi
 
 fn clean_markdown_inline(text: &str) -> String {
     let mut s = text.to_string();
-    // 移除粗體/斜體 ** * `
-    s = s.replace("**", "").replace("__", "").replace('`', "").replace("~~", "");
+    // 移除粗體/斜體 ** * __ _ ` ~~
+    s = s
+        .replace("**", "")
+        .replace("__", "")
+        .replace('*', "")
+        .replace('_', "")
+        .replace('`', "")
+        .replace("~~", "");
     // 移除連結格式 [text](url) -> text
     while let Some(start_bracket) = s.find('[') {
         if let Some(end_bracket) = s[start_bracket..].find(']') {
