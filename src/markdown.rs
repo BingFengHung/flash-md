@@ -840,86 +840,102 @@ impl<'a> RenderContext<'a> {
         }
         let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
-        let mut job = LayoutJob::default();
-        job.wrap.max_width = ui.available_width();
-        let mut link_ranges: Vec<(std::ops::Range<usize>, String)> = Vec::new();
-        let mut current_char_idx = 0;
+        let has_hyperlinks = spans.iter().any(|s| s.link_url.is_some());
 
-        for span in spans {
-            let char_count = span.text.chars().count();
-            if char_count == 0 {
-                continue;
+        if !has_hyperlinks {
+            let mut job = LayoutJob::default();
+            for span in spans {
+                let color = if span.code {
+                    self.theme.accent_color()
+                } else {
+                    self.theme.text_primary()
+                };
+
+                let base_fmt = egui::TextFormat {
+                    font_id: FontId::proportional(14.5_f32 * self.font_scale),
+                    color,
+                    italics: span.italic,
+                    strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
+                    line_height: Some(22.0_f32 * self.font_scale),
+                    valign: egui::Align::Center,
+                    background: if span.code {
+                        self.theme.code_bg_color()
+                    } else {
+                        Color32::TRANSPARENT
+                    },
+                    ..Default::default()
+                };
+
+                append_highlighted_text(
+                    &mut job,
+                    &span.text,
+                    self.search_query,
+                    base_fmt,
+                    hl_bg,
+                    hl_fg,
+                    act_bg,
+                    act_fg,
+                    self.active_match_index,
+                    &mut self.match_counter,
+                );
             }
-
-            let is_link = span.link_url.is_some();
-            if let Some(ref url) = span.link_url {
-                link_ranges.push((current_char_idx..(current_char_idx + char_count), url.clone()));
-            }
-
-            let font_id = FontId::proportional(14.5_f32 * self.font_scale);
-
-            let color = if span.code || is_link {
-                self.theme.accent_color()
-            } else {
-                self.theme.text_primary()
-            };
-
-            let underline = if is_link {
-                Stroke::new(1.0_f32, self.theme.accent_color())
-            } else {
-                Stroke::NONE
-            };
-
-            let background = if span.code {
-                self.theme.code_bg_color()
-            } else {
-                Color32::TRANSPARENT
-            };
-
-            let base_fmt = egui::TextFormat {
-                font_id,
-                color,
-                italics: span.italic,
-                underline,
-                strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
-                line_height: Some(22.0_f32 * self.font_scale),
-                valign: egui::Align::Center,
-                background,
-                ..Default::default()
-            };
-
-            append_highlighted_text(
-                &mut job,
-                &span.text,
-                self.search_query,
-                base_fmt,
-                hl_bg,
-                hl_fg,
-                act_bg,
-                act_fg,
-                self.active_match_index,
-                &mut self.match_counter,
-            );
-
-            current_char_idx += char_count;
-        }
-
-        if link_ranges.is_empty() {
             ui.label(job);
         } else {
-            let resp = ui.add(egui::Label::new(job.clone()).sense(egui::Sense::click()));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0_f32;
 
-            if let Some(hover_pos) = resp.hover_pos() {
-                let local_pos = hover_pos - resp.rect.min;
-                let galley = ui.fonts(|f| f.layout_job(job));
-                let cursor = galley.cursor_from_pos(local_pos);
-                let char_idx = cursor.ccursor.index;
+                for span in spans {
+                    let mut span_job = LayoutJob::default();
+                    let is_link = span.link_url.is_some();
 
-                for (range, url) in &link_ranges {
-                    if range.contains(&char_idx) {
-                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                        resp.on_hover_text(url);
+                    let color = if span.code || is_link {
+                        self.theme.accent_color()
+                    } else {
+                        self.theme.text_primary()
+                    };
 
+                    let underline = if is_link {
+                        Stroke::new(1.0_f32, self.theme.accent_color())
+                    } else {
+                        Stroke::NONE
+                    };
+
+                    let background = if span.code {
+                        self.theme.code_bg_color()
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+
+                    let base_fmt = egui::TextFormat {
+                        font_id: FontId::proportional(14.5_f32 * self.font_scale),
+                        color,
+                        italics: span.italic,
+                        underline,
+                        strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
+                        line_height: Some(22.0_f32 * self.font_scale),
+                        valign: egui::Align::Center,
+                        background,
+                        ..Default::default()
+                    };
+
+                    append_highlighted_text(
+                        &mut span_job,
+                        &span.text,
+                        self.search_query,
+                        base_fmt,
+                        hl_bg,
+                        hl_fg,
+                        act_bg,
+                        act_fg,
+                        self.active_match_index,
+                        &mut self.match_counter,
+                    );
+
+                    if let Some(ref url) = span.link_url {
+                        let resp = ui.add(egui::Label::new(span_job).sense(egui::Sense::click()));
+                        if resp.hovered() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                        }
                         if resp.clicked() {
                             if url.starts_with('#') {
                                 self.clicked_anchor = Some(url.trim_start_matches('#').to_string());
@@ -927,10 +943,12 @@ impl<'a> RenderContext<'a> {
                                 let _ = open::that(url);
                             }
                         }
-                        break;
+                        resp.on_hover_text(url);
+                    } else {
+                        ui.label(span_job);
                     }
                 }
-            }
+            });
         }
     }
 
