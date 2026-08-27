@@ -855,11 +855,7 @@ impl<'a> RenderContext<'a> {
                 link_ranges.push((current_char_idx..(current_char_idx + char_count), url.clone()));
             }
 
-            let font_id = if span.code {
-                FontId::monospace(14.0_f32 * self.font_scale)
-            } else {
-                FontId::proportional(14.5_f32 * self.font_scale)
-            };
+            let font_id = FontId::proportional(14.5_f32 * self.font_scale);
 
             let color = if span.code || is_link {
                 self.theme.accent_color()
