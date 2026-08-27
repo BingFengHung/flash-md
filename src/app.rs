@@ -83,6 +83,7 @@ pub struct MdPreviewApp {
     pub status_toast: Option<(String, std::time::Instant)>,
     pub reset_scroll_to_top: bool,
     pub keyboard_scroll_delta: f32,
+    pub current_scroll_offset: f32,
     pub reading_progress: f32,
     pub is_ime_composing: bool,
     pub last_ime_activity: Option<std::time::Instant>,
@@ -164,6 +165,7 @@ impl MdPreviewApp {
             status_toast: None,
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
+            current_scroll_offset: 0.0,
             reading_progress: 0.0,
             is_ime_composing: false,
             last_ime_activity: None,
@@ -263,6 +265,7 @@ impl MdPreviewApp {
     pub fn load_file(&mut self, path: &Path) {
         info!("嘗試載入檔案: {:?}", path);
         self.reset_scroll_to_top = true;
+        self.current_scroll_offset = 0.0_f32;
         self.search_match_index = 0;
         self.target_scroll_offset = None;
         self.target_anchor = None;
@@ -971,45 +974,98 @@ impl MdPreviewApp {
                 }
             }
 
-            // ↑ / ↓ 或 j / k (Vim): 捲動瀏覽當前文件內容 (支援單擊與長按連續平滑捲動)
-            let mut scroll_y = 0.0_f32;
-            if input.key_pressed(egui::Key::ArrowDown) || input.key_down(egui::Key::ArrowDown)
-                || input.key_pressed(egui::Key::J) || input.key_down(egui::Key::J)
-            {
-                scroll_y -= 36.0 * self.font_scale;
-            }
-            if input.key_pressed(egui::Key::ArrowUp) || input.key_down(egui::Key::ArrowUp)
-                || input.key_pressed(egui::Key::K) || input.key_down(egui::Key::K)
-            {
-                scroll_y += 36.0 * self.font_scale;
-            }
-            if input.key_pressed(egui::Key::PageDown) {
-                scroll_y -= 360.0 * self.font_scale;
-            }
-            if input.key_pressed(egui::Key::PageUp) {
-                scroll_y += 360.0 * self.font_scale;
-            }
-            if input.key_pressed(egui::Key::Space) && !input.modifiers.alt && !input.modifiers.command {
-                if input.modifiers.shift {
-                    scroll_y += 360.0 * self.font_scale;
-                } else {
-                    scroll_y -= 360.0 * self.font_scale;
+            // ↑ / ↓ 或 j / k (Vim): 捲動瀏覽當前文件內容 (支援單擊、長按連續平滑捲動、Vim g/G 置頂置底、PageUp/PageDown/Space 翻頁)
+            let mut is_down = input.key_pressed(egui::Key::ArrowDown) || input.key_down(egui::Key::ArrowDown);
+            let mut is_up = input.key_pressed(egui::Key::ArrowUp) || input.key_down(egui::Key::ArrowUp);
+            let mut is_j = (input.key_pressed(egui::Key::J) || input.key_down(egui::Key::J)) && !input.modifiers.command && !input.modifiers.alt && !input.modifiers.shift;
+            let mut is_k = (input.key_pressed(egui::Key::K) || input.key_down(egui::Key::K)) && !input.modifiers.command && !input.modifiers.alt && !input.modifiers.shift;
+            let mut is_g = input.key_pressed(egui::Key::G) && !input.modifiers.command && !input.modifiers.alt && !input.modifiers.shift;
+            let mut is_big_g = (input.key_pressed(egui::Key::G) && input.modifiers.shift && !input.modifiers.command && !input.modifiers.alt)
+                || input.key_pressed(egui::Key::End);
+            let mut is_page_down = input.key_pressed(egui::Key::PageDown) || (input.modifiers.command && input.key_pressed(egui::Key::D));
+            let mut is_page_up = input.key_pressed(egui::Key::PageUp) || (input.modifiers.command && input.key_pressed(egui::Key::U));
+            let mut is_space = input.key_pressed(egui::Key::Space) && !input.modifiers.alt && !input.modifiers.command;
+            let is_shift = input.modifiers.shift;
+
+            // 雙重保險：檢查所有原始輸入事件 (Text events 如使用者鍵入 'j', 'k', 'g', 'G')
+            for ev in &input.events {
+                match ev {
+                    egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                        if !modifiers.command && !modifiers.alt {
+                            if *key == egui::Key::ArrowDown { is_down = true; }
+                            if *key == egui::Key::ArrowUp { is_up = true; }
+                            if *key == egui::Key::J && !modifiers.shift { is_j = true; }
+                            if *key == egui::Key::K && !modifiers.shift { is_k = true; }
+                            if *key == egui::Key::G && !modifiers.shift { is_g = true; }
+                            if *key == egui::Key::G && modifiers.shift { is_big_g = true; }
+                            if *key == egui::Key::PageDown { is_page_down = true; }
+                            if *key == egui::Key::PageUp { is_page_up = true; }
+                            if *key == egui::Key::Home { is_g = true; }
+                            if *key == egui::Key::End { is_big_g = true; }
+                        }
+                    }
+                    egui::Event::Text(s) => {
+                        if !input.modifiers.command && !input.modifiers.alt {
+                            if s == "j" { is_j = true; }
+                            if s == "k" { is_k = true; }
+                            if s == "g" { is_g = true; }
+                            if s == "G" { is_big_g = true; }
+                        }
+                    }
+                    _ => {}
                 }
             }
-            // Home 或 g (Vim): 置頂；End 或 G / Shift+g (Vim): 置底
-            if input.key_pressed(egui::Key::Home)
-                || (input.key_pressed(egui::Key::G) && !input.modifiers.shift && !input.modifiers.command)
-            {
+
+            let mut scroll_triggered = false;
+
+            if input.key_pressed(egui::Key::Home) || is_g {
+                // 置頂
+                self.current_scroll_offset = 0.0_f32;
+                self.target_scroll_offset = Some(0.0_f32);
                 self.reset_scroll_to_top = true;
-            }
-            if input.key_pressed(egui::Key::End)
-                || (input.key_pressed(egui::Key::G) && input.modifiers.shift && !input.modifiers.command)
-            {
-                scroll_y -= 100000.0;
+                scroll_triggered = true;
+            } else if is_big_g {
+                // 置底
+                self.current_scroll_offset = 999999.0_f32;
+                self.target_scroll_offset = Some(999999.0_f32);
+                scroll_triggered = true;
+            } else if is_down || is_j {
+                // 向下捲動 (單行)
+                let step = 48.0_f32 * self.font_scale;
+                self.current_scroll_offset += step;
+                self.target_scroll_offset = Some(self.current_scroll_offset);
+                scroll_triggered = true;
+            } else if is_up || is_k {
+                // 向上捲動 (單行)
+                let step = 48.0_f32 * self.font_scale;
+                self.current_scroll_offset = (self.current_scroll_offset - step).max(0.0_f32);
+                self.target_scroll_offset = Some(self.current_scroll_offset);
+                scroll_triggered = true;
+            } else if is_page_down {
+                // 向下翻頁
+                let step = 420.0_f32 * self.font_scale;
+                self.current_scroll_offset += step;
+                self.target_scroll_offset = Some(self.current_scroll_offset);
+                scroll_triggered = true;
+            } else if is_page_up {
+                // 向上翻頁
+                let step = 420.0_f32 * self.font_scale;
+                self.current_scroll_offset = (self.current_scroll_offset - step).max(0.0_f32);
+                self.target_scroll_offset = Some(self.current_scroll_offset);
+                scroll_triggered = true;
+            } else if is_space {
+                // 空白鍵翻頁
+                let step = 420.0_f32 * self.font_scale;
+                if is_shift {
+                    self.current_scroll_offset = (self.current_scroll_offset - step).max(0.0_f32);
+                } else {
+                    self.current_scroll_offset += step;
+                }
+                self.target_scroll_offset = Some(self.current_scroll_offset);
+                scroll_triggered = true;
             }
 
-            if scroll_y != 0.0 {
-                self.keyboard_scroll_delta += scroll_y;
+            if scroll_triggered {
                 ctx.request_repaint();
             }
         }
@@ -1174,6 +1230,7 @@ impl MdPreviewApp {
             };
 
             self.reset_scroll_to_top = true;
+            self.current_scroll_offset = 0.0_f32;
 
             self.set_toast(match self.view_mode {
                 ViewMode::Markdown => "已切換至 Markdown 渲染模式 📄".to_string(),
@@ -2233,27 +2290,19 @@ impl eframe::App for MdPreviewApp {
                         Some(self.search_match_index)
                     };
 
-                    let scroll_id = ui.make_persistent_id("main_content_scroll_area");
-                    let mut scroll_state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
-
+                    let mut scroll_target = self.target_scroll_offset;
                     if self.reset_scroll_to_top {
-                        scroll_state.offset.y = 0.0_f32;
-                        scroll_state.store(ui.ctx(), scroll_id);
-                    } else if let Some(offset) = self.target_scroll_offset {
-                        scroll_state.offset.y = offset;
-                        scroll_state.store(ui.ctx(), scroll_id);
-                    } else if self.keyboard_scroll_delta != 0.0_f32 {
-                        // 當向下捲動 (keyboard_scroll_delta < 0)，offset.y 需增加；向上捲動 (keyboard_scroll_delta > 0)，offset.y 需減少
-                        scroll_state.offset.y = (scroll_state.offset.y - self.keyboard_scroll_delta).max(0.0_f32);
-                        scroll_state.store(ui.ctx(), scroll_id);
+                        scroll_target = Some(0.0_f32);
+                        self.current_scroll_offset = 0.0_f32;
                     }
 
                     match self.view_mode {
                         ViewMode::Markdown => {
                             // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部、鍵盤方向鍵上下捲動與動態閱讀進度條)
-                            let scroll = ScrollArea::vertical()
-                                .id_source(scroll_id)
-                                .auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                            if let Some(target) = scroll_target {
+                                scroll = scroll.vertical_scroll_offset(target);
+                            }
 
                             let scroll_out = scroll.show(ui, |ui| {
                                 let anchor_to_jump = self.target_anchor.clone();
@@ -2274,8 +2323,11 @@ impl eframe::App for MdPreviewApp {
                                 }
                             });
 
+                            // 即時同步實際滾動偏移量 (支援滑鼠滾輪與鍵盤混合無縫操作)
+                            self.current_scroll_offset = scroll_out.state.offset.y;
+
                             let max_scroll = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(1.0);
-                            self.reading_progress = (scroll_out.state.offset.y / max_scroll).clamp(0.0, 1.0);
+                            self.reading_progress = (self.current_scroll_offset / max_scroll).clamp(0.0, 1.0);
 
                             // 繪製頂部閱讀進度條 (位於內文區最上方)
                             if self.reading_progress > 0.002 {
@@ -2290,11 +2342,12 @@ impl eframe::App for MdPreviewApp {
                         }
                         ViewMode::Table { separator } => {
                             // 現代斑馬紋資料表格模式 (支援 CSV 與 TSV 欄位解析、搜尋高亮與滾動)
-                            let scroll = ScrollArea::both()
-                                .id_source(scroll_id)
-                                .auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            if let Some(target) = scroll_target {
+                                scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
+                            }
 
-                            scroll.show(ui, |ui| {
+                            let scroll_out = scroll.show(ui, |ui| {
                                 let table_data = crate::markdown::parse_csv_or_tsv(&self.content, separator);
                                 let mut match_counter = 0;
                                 crate::markdown::render_csv_table(
@@ -2307,24 +2360,28 @@ impl eframe::App for MdPreviewApp {
                                     &mut match_counter,
                                 );
                             });
+                            self.current_scroll_offset = scroll_out.state.offset.y;
                         }
                         ViewMode::Code { ref lang } => {
                             // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動)
-                            let scroll = ScrollArea::both()
-                                .id_source(scroll_id)
-                                .auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            if let Some(target) = scroll_target {
+                                scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
+                            }
 
-                            scroll.show(ui, |ui| {
+                            let scroll_out = scroll.show(ui, |ui| {
                                 render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query, active_match_idx);
                             });
+                            self.current_scroll_offset = scroll_out.state.offset.y;
                         }
                         ViewMode::PlainText => {
                             // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動，快取 LayoutJob 零拷貝)
-                            let scroll = ScrollArea::both()
-                                .id_source(scroll_id)
-                                .auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            if let Some(target) = scroll_target {
+                                scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
+                            }
 
-                            scroll.show(ui, |ui| {
+                            let scroll_out = scroll.show(ui, |ui| {
                                 ui.add_space(4.0);
                                 let font_scale = self.font_scale;
                                 let font_id = FontId::monospace(14.0 * font_scale);
@@ -2385,6 +2442,7 @@ impl eframe::App for MdPreviewApp {
 
                                 ui.label(text_job);
                             });
+                            self.current_scroll_offset = scroll_out.state.offset.y;
                         }
                         ViewMode::Image { .. } => {
                             // 圖片與 SVG 向量圖檢視模式 (支援縮放、滾輪、適應視窗)
