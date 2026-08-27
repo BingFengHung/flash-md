@@ -11,11 +11,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  check:
-    name: Quick Check (${{ matrix.target }})
+  build:
+    name: Build & Package (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,8 +23,12 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            binary_name: flash-md.exe
+            archive_name: flash-md-windows-x86_64.zip
           - os: windows-latest
             target: aarch64-pc-windows-msvc
+            binary_name: flash-md.exe
+            archive_name: flash-md-windows-aarch64.zip
 
     steps:
       - name: Checkout repository
@@ -40,23 +44,17 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Run Fast Cargo Check
-        shell: pwsh
-        run: |
-          $out = & cargo check --target ${{ matrix.target }} 2>&1
-          $code = $LASTEXITCODE
-          $out | Out-File -FilePath "check-err.txt" -Encoding utf8
-          if ($code -ne 0) {
-            exit $code
-          }
+      - name: Build Release Binary
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Push Diagnostic Log on Failure
-        if: failure()
+      - name: Package Binary (Windows)
         shell: pwsh
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -B "ci-debug"
-          git add -f "check-err.txt"
-          git commit -m "CI failure diagnostic log"
-          git push origin "ci-debug" --force
+          $bin_path = "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          Compress-Archive -Path $bin_path, "README.md", "README.zh-TW.md" -DestinationPath "${{ matrix.archive_name }}"
+
+      - name: Upload Test Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive_name }}
+          path: ${{ matrix.archive_name }}
