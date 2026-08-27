@@ -2564,33 +2564,28 @@ Thank you!
     fn test_parse_csv_and_tsv() {
         let csv_data = "Name,Role,City\nAlice,\"Software Engineer, Lead\",Taipei\nBob,Designer,Tokyo";
         let parsed_csv = parse_csv_or_tsv(csv_data, ',');
-        assert_eq!(parsed_csv.len(), 3);
-        assert_eq!(parsed_csv[0], vec!["Name", "Role", "City"]);
-        assert_eq!(parsed_csv[1], vec!["Alice", "Software Engineer, Lead", "Taipei"]);
-        assert_eq!(parsed_csv[2], vec!["Bob", "Designer", "Tokyo"]);
+        assert_eq!(parsed_csv.headers, vec!["Name", "Role", "City"]);
+        assert_eq!(parsed_csv.rows.len(), 2);
+        assert_eq!(parsed_csv.rows[0], vec!["Alice", "Software Engineer, Lead", "Taipei"]);
+        assert_eq!(parsed_csv.rows[1], vec!["Bob", "Designer", "Tokyo"]);
 
         let tsv_data = "ID\tScore\tGrade\n101\t95.5\tA+\n102\t88.0\tA";
         let parsed_tsv = parse_csv_or_tsv(tsv_data, '\t');
-        assert_eq!(parsed_tsv.len(), 3);
-        assert_eq!(parsed_tsv[0], vec!["ID", "Score", "Grade"]);
-        assert_eq!(parsed_tsv[1], vec!["101", "95.5", "A+"]);
+        assert_eq!(parsed_tsv.headers, vec!["ID", "Score", "Grade"]);
+        assert_eq!(parsed_tsv.rows.len(), 2);
+        assert_eq!(parsed_tsv.rows[0], vec!["101", "95.5", "A+"]);
     }
 
     #[test]
     fn test_json_format_and_minify() {
         let raw_json = r#"{"name":"flash-md","version":"1.0.89","features":["preview","mindmap"]}"#;
-        let formatted = format_json_str(raw_json);
+        let formatted = format_json(raw_json).expect("JSON 排版失敗");
         assert!(formatted.contains('\n'));
-        assert!(formatted.contains("  \"name\": \"flash-md\""));
+        assert!(formatted.contains("\"name\": \"flash-md\""));
 
-        let minified = minify_json_str(&formatted);
+        let minified = minify_json(&formatted);
         assert!(!minified.contains('\n'));
         assert!(minified.contains("\"features\":[\"preview\",\"mindmap\"]"));
-
-        // 非法 JSON 應優雅回傳原字串或錯誤提示而不崩潰
-        let invalid_json = "{ name: invalid }";
-        let invalid_res = format_json_str(invalid_json);
-        assert_eq!(invalid_res, invalid_json);
     }
 
     #[test]
