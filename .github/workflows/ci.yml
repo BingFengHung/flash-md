@@ -45,7 +45,18 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Run Cargo Check
-        run: cargo check --target ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $output = & cargo check --target ${{ matrix.target }} 2>&1
+          $exit_code = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exit_code -ne 0) {
+            "### ❌ Cargo Check Failed on ${{ matrix.target }}" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            ($output | Out-String) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "```" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            exit $exit_code
+          }
 
       - name: Build Release Binary
         run: cargo build --release --target ${{ matrix.target }}

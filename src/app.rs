@@ -1,6 +1,7 @@
 use crate::config::{AppConfig, SaveMode};
 use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
+use crate::markdown::{render_code_viewer, MarkdownRenderer};
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
 use crate::updater::{
@@ -10,12 +11,13 @@ use crate::updater::{
 use crate::watcher::{FileWatcher, WatcherEvent};
 use crossbeam_channel::Receiver;
 use egui::{
-    Align, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Vec2,
+    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Vec2,
 };
 use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
