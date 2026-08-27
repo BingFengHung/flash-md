@@ -815,13 +815,13 @@ impl MdPreviewApp {
         }
         if toggle_fullscreen {
             self.is_slides_fullscreen = !self.is_slides_fullscreen;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_slides_fullscreen));
+            self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
         }
         if exit_slides {
             self.is_slides_mode = false;
             if self.is_slides_fullscreen {
                 self.is_slides_fullscreen = false;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                self.set_fullscreen_state(ctx, false);
             }
             self.set_toast("👁️ 已退出簡報投影模式".to_string());
         }
@@ -836,6 +836,14 @@ impl MdPreviewApp {
                 Stroke::new(3.0_f32, self.theme.accent_color()),
             );
         }
+    }
+
+    /// 安全切換全螢幕狀態並強制維護 Windows 前景層級 (避免 Windows 樣式轉移時視窗掉落至檔案總管背後)
+    pub fn set_fullscreen_state(&mut self, ctx: &egui::Context, fullscreen: bool) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        show_and_focus_app_window();
+        ctx.request_repaint();
     }
 
     pub fn reload_current_file(&mut self) {
@@ -1076,7 +1084,7 @@ impl MdPreviewApp {
                 self.is_slides_mode = false;
                 if self.is_slides_fullscreen {
                     self.is_slides_fullscreen = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                    self.set_fullscreen_state(ctx, false);
                 }
                 self.set_toast("👁️ 已退出簡報投影模式".to_string());
             } else if self.settings_open {
@@ -1089,7 +1097,7 @@ impl MdPreviewApp {
                 self.search_query.clear();
                 self.search_match_index = 0;
             } else if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                self.set_fullscreen_state(ctx, false);
                 self.set_toast("🗗 已退出全螢幕模式".to_string());
             } else {
                 self.visible = false;
@@ -1212,7 +1220,7 @@ impl MdPreviewApp {
                 } else {
                     if self.is_slides_fullscreen {
                         self.is_slides_fullscreen = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                        self.set_fullscreen_state(ctx, false);
                     }
                     self.set_toast("👁️ 已退出簡報投影模式".to_string());
                 }
@@ -1253,7 +1261,7 @@ impl MdPreviewApp {
             }
             if input.key_pressed(egui::Key::F) && !input.modifiers.command && !input.modifiers.alt {
                 self.is_slides_fullscreen = !self.is_slides_fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_slides_fullscreen));
+                self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
             }
         }
 
@@ -1261,11 +1269,11 @@ impl MdPreviewApp {
         if input.key_pressed(egui::Key::F11) {
             if self.is_slides_mode {
                 self.is_slides_fullscreen = !self.is_slides_fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_slides_fullscreen));
+                self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
             } else {
                 let is_fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 let next_fs = !is_fs;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(next_fs));
+                self.set_fullscreen_state(ctx, next_fs);
                 self.set_toast(if next_fs { "⛶ 已進入全螢幕模式 (F11 退出)".to_string() } else { "🗗 已退出全螢幕模式".to_string() });
             }
         }
@@ -2227,7 +2235,7 @@ impl eframe::App for MdPreviewApp {
                         let fs_label = if is_fs { "🗗 視窗" } else { "⛶ 全螢幕" };
                         if render_nav_button(ui, self.theme, fs_label, is_fs, "切換全螢幕模式 (F11)").clicked() {
                             let next_fs = !is_fs;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(next_fs));
+                            self.set_fullscreen_state(ctx, next_fs);
                             self.set_toast(if next_fs { "⛶ 已進入全螢幕模式 (F11 退出)".to_string() } else { "🗗 已退出全螢幕模式".to_string() });
                         }
 
