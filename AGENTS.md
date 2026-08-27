@@ -189,6 +189,33 @@
   - 當使用者按下 `Enter` 作為組字確認時，自動自 `i.events` 中透過 `retain` 過濾清除伴隨的 `Key::Enter` 與 `Text("\n")` 事件，並重置狀態。
   - 當組字確認完成後，使用者再次按下 `Enter` 即可正常進行段落換行，且純英數輸入不會受任何影響，兼具 100% 跨平台零 FFI 依賴與極致穩定性！
 
+### 16. egui (0.29+) ScrollArea 雙向滾動狀態與鍵盤導航規範 (Double-Hash 陷阱與 vertical_scroll_offset)
+- **`ScrollArea` Double-Hash 陷阱**：
+  - 在 `egui` 中若手動透過 `egui::scroll_area::State::load/store` 存取捲動狀態，`ScrollArea::id_source` 內部會執行二次雜湊 (`ui.make_persistent_id`)，導致外部存入的 ID 與內部讀取的不一致，捲動完全無效。
+- **`ui.scroll_with_delta` 單幀結算失效**：
+  - 在 `scroll.show` 內部呼叫 `ui.scroll_with_delta`，因 ScrollArea 在當前幀已完成佈局與位移結算，若當幀結束即重置 delta，下一幀無法生效。
+- **標準解決架構 (官方原生 `vertical_scroll_offset` 雙向滾動引擎)**：
+  - **步驟 1**：在主 App 結構體維護 `current_scroll_offset: f32` 實時追蹤視口位置。
+  - **步驟 2**：透過官方一級 API **`ScrollArea::vertical_scroll_offset(target)`** 進行精確強制位移。
+  - **步驟 3**：每次幀結算時自動回讀 `scroll_out.state.offset.y`，確保滑鼠滾輪與鍵盤操作無縫混合。
+  - **步驟 4 (雙軌事件探測器)**：同時監聽 `input.key_pressed` / `input.key_down`（長按連發）以及 `input.events` 中的 `Event::Key` 與 `Event::Text`，確保 Vim `j`/`k`/`g`/`G`、方向鍵 `↑`/`↓` 與 `PageUp`/`PageDown`/`Space` 零漏接！
+
+### 17. UI 模組化拆分與現代卡片設計規範 (Modular View Architecture)
+- **單一檔案膨脹與維護性低落問題**：
+  - 嚴禁讓單一 `app.rs` 膨脹至數千行，UI 元件與彈窗必須高度解耦。
+- **標準視圖模組架構**：
+  - 將所有獨立畫面拆分至 `src/views/`（如 `settings_modal.rs`、`empty_state.rs`、`status_bar.rs`、`toc_sidebar.rs`、`editor.rs`、`image_viewer.rs`、`presentation.rs`）。
+  - 元件透過純函式接收 `ctx` / `ui` 與狀態，回傳強型別 Action Output（如 `SettingsModalOutput`），`app.rs` 僅專注於生命週期與狀態調度。
+  - **現代 Fluent/macOS 卡片設計規範**：偏好設定與彈窗優先採用「分段膠囊控制器 (Segmented Control)」、「整塊互動式功能卡片」與圓角微邊框，避免使用陽春的預設按鈕與單選點。
+
+### 18. Cargo Release 編譯提速與 CI/CD 效能規範 (ThinLTO & Codegen Units)
+- **Fat LTO 雲端過度耗時問題**：
+  - `[profile.release]` 若設為 `lto = true` 與 `codegen-units = 1`，會使雲端單次 Release 建置耗時長達 5 分鐘。
+- **最佳效能配置**：
+  - 採用 `lto = "thin"` 配合 `codegen-units = 16`，多核心並行編譯與鏈結提速 60% 以上，二進制體積與執行效能近乎相同。
+- **分支極速檢查**：
+  - 在 `ci.yml` 中善用 `Swatinem/rust-cache@v2`，達成 15 秒內完成雙架構（x86_64 / aarch64）型別安全驗證。
+
 ---
 
 ## 🚀 標準開發與發布工作流程 (Standard Release Workflow)
