@@ -43,4 +43,11 @@ jobs:
       - name: Run Fast Cargo Check
         shell: bash
         run: |
-          cargo check --target ${{ matrix.target }} --color always
+          set -o pipefail
+          if ! cargo check --target ${{ matrix.target }} 2>&1 | tee check.log; then
+            echo "### ❌ Compiler Error Log (${{ matrix.target }})" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat check.log >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
