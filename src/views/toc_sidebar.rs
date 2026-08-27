@@ -97,7 +97,7 @@ pub fn render_toc_sidebar(
                     RichText::new(&item.title).size(font_size).color(text_color)
                 };
 
-                ui.add(egui::Label::new(label_text).sense(egui::Sense::click()).truncate(true))
+                ui.add(egui::Label::new(label_text).sense(egui::Sense::click()).truncate())
             }).inner;
 
             if item_resp.hovered() {

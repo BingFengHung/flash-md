@@ -1,7 +1,10 @@
 use crate::config::{AppConfig, SaveMode};
 use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
 use crate::hotkey::HotkeyEvent;
-use crate::markdown::{render_code_viewer, MarkdownRenderer};
+use crate::markdown::{
+    calculate_text_stats, get_image_badge, get_language_badge, is_code_extension,
+    is_image_extension, is_pdf_extension, render_code_viewer, MarkdownRenderer,
+};
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
 use crate::updater::{
@@ -9,9 +12,10 @@ use crate::updater::{
     CURRENT_VERSION,
 };
 use crate::watcher::{FileWatcher, WatcherEvent};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{unbounded, Receiver};
 use egui::{
-    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Vec2,
+    Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
+    TextEdit, Vec2,
 };
 use log::{error, info};
 use std::fs;
@@ -2437,8 +2441,6 @@ impl MdPreviewApp {
     }
 }
 
-pub use crate::views::status_bar::render_nav_button;
-pub use crate::views::empty_state::render_keycap;
 
 fn rfd_open_file() -> Option<PathBuf> {
     #[cfg(windows)]

@@ -58,7 +58,7 @@ pub fn render_slides_mode(
     );
 
     // 卡片內部渲染 Markdown 投影片
-    ui.allocate_ui_at_rect(card_rect, |ui| {
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(card_rect), |ui| {
         let pad_h = if is_slides_fullscreen { 44.0_f32 } else { 28.0_f32 };
         let pad_v = if is_slides_fullscreen { 32.0_f32 } else { 20.0_f32 };
         Frame::none()
@@ -128,7 +128,7 @@ pub fn render_slides_mode(
     let mut toggle_fullscreen = false;
     let mut exit_slides = false;
 
-    ui.allocate_ui_at_rect(pill_rect, |ui| {
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(pill_rect), |ui| {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0_f32;
             Frame::none()
