@@ -843,6 +843,14 @@ impl MdPreviewApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         show_and_focus_app_window();
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            show_and_focus_app_window();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            show_and_focus_app_window();
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            show_and_focus_app_window();
+        });
         ctx.request_repaint();
     }
 
@@ -1216,7 +1224,9 @@ impl MdPreviewApp {
                 self.is_slides_mode = !self.is_slides_mode;
                 if self.is_slides_mode {
                     self.current_slide_index = 0;
-                    self.set_toast("📽️ 已進入簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
+                    self.is_slides_fullscreen = true;
+                    self.set_fullscreen_state(ctx, true);
+                    self.set_toast("📽️ 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
                 } else {
                     if self.is_slides_fullscreen {
                         self.is_slides_fullscreen = false;
@@ -2158,11 +2168,13 @@ impl eframe::App for MdPreviewApp {
                             self.is_slides_mode = !self.is_slides_mode;
                             if self.is_slides_mode {
                                 self.current_slide_index = 0;
-                                self.set_toast("📽️ 已進入簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
+                                self.is_slides_fullscreen = true;
+                                self.set_fullscreen_state(ctx, true);
+                                self.set_toast("📽️ 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
                             } else {
                                 if self.is_slides_fullscreen {
                                     self.is_slides_fullscreen = false;
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                                    self.set_fullscreen_state(ctx, false);
                                 }
                                 self.set_toast("👁️ 已退出簡報投影模式".to_string());
                             }

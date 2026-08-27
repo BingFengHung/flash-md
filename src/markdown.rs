@@ -442,21 +442,48 @@ pub fn get_or_render_mermaid_diagram(code: &str) -> Option<MermaidDiagramData> {
 }
 
 fn decode_uri_component(s: &str) -> String {
-    let mut result = String::new();
-    let bytes = s.as_bytes();
+    let mut bytes = Vec::with_capacity(s.len());
+    let src = s.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte_val) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                result.push(byte_val as char);
-                i += 3;
-                continue;
+    while i < src.len() {
+        if src[i] == b'%' && i + 2 < src.len() {
+            if let Ok(hex_str) = std::str::from_utf8(&src[i + 1..i + 3]) {
+                if let Ok(byte_val) = u8::from_str_radix(hex_str, 16) {
+                    bytes.push(byte_val);
+                    i += 3;
+                    continue;
+                }
             }
         }
-        result.push(bytes[i] as char);
+        bytes.push(src[i]);
         i += 1;
     }
-    result
+    String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).to_string())
+}
+
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    let clean = input.trim();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for &b in clean.as_bytes() {
+        let val = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' | b'\r' | b'\n' | b' ' => continue,
+            _ => return None,
+        } as u32;
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
 }
 
 impl<'a> RenderContext<'a> {
@@ -540,10 +567,32 @@ impl<'a> RenderContext<'a> {
 
         let clean_url = dest_url.trim().trim_matches('\0');
         let is_web_url = clean_url.starts_with("http://") || clean_url.starts_with("https://");
+        let is_data_uri = clean_url.starts_with("data:image/");
 
-        // 判斷是否為本地檔案路徑並解析 (徹底相容 Windows 相對路徑、前導斜線與百分比編碼)
-        let local_path: Option<std::path::PathBuf> = if !is_web_url {
-            let decoded = decode_uri_component(clean_url);
+        let (data_bytes, data_ext) = if is_data_uri {
+            let ext = if let Some(slash_pos) = clean_url.find('/') {
+                let after_slash = &clean_url[slash_pos + 1..];
+                let end = after_slash.find(';').unwrap_or(after_slash.find(',').unwrap_or(3));
+                after_slash[..end].to_string()
+            } else {
+                "png".to_string()
+            };
+            let bytes = if let Some(comma_pos) = clean_url.find(',') {
+                decode_base64(&clean_url[comma_pos + 1..])
+            } else {
+                None
+            };
+            (bytes, ext)
+        } else {
+            (None, "png".to_string())
+        };
+
+        // 判斷是否為本地檔案路徑並解析 (徹底相容 Windows 相對路徑、前導斜線、URL query/anchor 與百分比編碼)
+        let (image_bytes, resolved_ext) = if is_data_uri {
+            (data_bytes, data_ext)
+        } else if !is_web_url {
+            let url_without_query = clean_url.split('?').next().unwrap_or(clean_url).split('#').next().unwrap_or(clean_url);
+            let decoded = decode_uri_component(url_without_query);
             let raw_path = decoded
                 .trim_start_matches("file:///")
                 .trim_start_matches("file://")
@@ -556,35 +605,46 @@ impl<'a> RenderContext<'a> {
                 .trim_start_matches('\\')
                 .trim_start_matches('/');
 
-            let path = std::path::PathBuf::from(&raw_path);
-            if path.is_absolute() && path.exists() {
-                Some(path)
+            let mut final_path: Option<std::path::PathBuf> = None;
+            let direct_path = std::path::PathBuf::from(&raw_path);
+            if direct_path.is_absolute() && direct_path.exists() {
+                final_path = Some(direct_path);
             } else if let Some(base) = self.base_dir {
-                let joined_clean = base.join(clean_relative);
-                let joined_raw = base.join(&raw_path);
-                if joined_clean.exists() {
-                    Some(joined_clean)
-                } else if joined_raw.exists() {
-                    Some(joined_raw)
-                } else {
-                    Some(path)
+                let candidates = [
+                    base.join(clean_relative),
+                    base.join(&raw_path),
+                    base.join(&decoded),
+                    base.join(url_without_query),
+                ];
+                for cand in candidates {
+                    if cand.exists() {
+                        final_path = Some(cand);
+                        break;
+                    }
+                }
+                if final_path.is_none() {
+                    final_path = Some(base.join(clean_relative));
                 }
             } else {
-                Some(path)
+                final_path = Some(direct_path);
             }
-        } else {
-            None
-        };
 
-        // 嘗試讀取本地檔案二進制數據
-        let image_bytes: Option<Vec<u8>> = if let Some(ref p) = local_path {
-            if p.exists() {
+            let bytes = if let Some(ref p) = final_path {
                 std::fs::read(p).ok()
             } else {
                 None
-            }
+            };
+
+            let ext = final_path
+                .as_ref()
+                .and_then(|p| p.extension())
+                .and_then(|e| e.to_str())
+                .unwrap_or("png")
+                .to_string();
+
+            (bytes, ext)
         } else {
-            None
+            (None, "png".to_string())
         };
 
         let available_w = (ui.available_width() - 16.0_f32).max(100.0_f32);
@@ -599,12 +659,7 @@ impl<'a> RenderContext<'a> {
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     use std::hash::{Hash, Hasher};
                     clean_url.hash(&mut hasher);
-                    let ext = local_path
-                        .as_ref()
-                        .and_then(|p| p.extension())
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("png");
-                    let uri = format!("bytes://md_img_{:x}.{}", hasher.finish(), ext);
+                    let uri = format!("bytes://md_img_{:x}.{}", hasher.finish(), resolved_ext);
 
                     let img = egui::Image::from_bytes(uri, bytes)
                         .rounding(Rounding::same(6.0_f32))
