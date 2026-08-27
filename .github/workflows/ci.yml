@@ -41,21 +41,14 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Run Fast Cargo Check
-        shell: bash
+        shell: pwsh
         run: |
-          cargo check --target ${{ matrix.target }} > "check-${{ matrix.target }}.log" 2>&1
-
-      - name: Upload Check Log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: check-log-${{ matrix.target }}
-          path: check-${{ matrix.target }}.log
-
-      - name: Verify Check Exit Code
-        shell: bash
-        run: |
-          cat "check-${{ matrix.target }}.log"
-          if grep -q "error:" "check-${{ matrix.target }}.log" || grep -q "error\[" "check-${{ matrix.target }}.log"; then
-            exit 1
-          fi
+          $check_out = & cargo check --target ${{ matrix.target }} 2>&1
+          $check_code = $LASTEXITCODE
+          if ($check_code -ne 0) {
+            "### ❌ Compiler Error Log (${{ matrix.target }})" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            $check_out | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            exit $check_code
+          }
