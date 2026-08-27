@@ -651,13 +651,20 @@ impl MdPreviewApp {
         let available_rect = ui.available_rect_before_wrap();
         let center_pos = available_rect.center();
 
-        // 幻燈片主卡片 (寬高依照視窗比例居中自適應)
-        let max_w = (available_rect.width() - 48.0_f32).min(1100.0_f32 * self.font_scale).max(300.0_f32);
-        let max_h = (available_rect.height() - 70.0_f32).min(720.0_f32 * self.font_scale).max(200.0_f32);
-        let card_rect = egui::Rect::from_center_size(center_pos, egui::vec2(max_w, max_h));
+        // 幻燈片主卡片：若全螢幕則填滿整個螢幕，若視窗模式則自適應填滿視窗
+        let margin_x = if self.is_slides_fullscreen { 28.0_f32 } else { 20.0_f32 };
+        let margin_top = if self.is_slides_fullscreen { 24.0_f32 } else { 16.0_f32 };
+        let margin_bottom = if self.is_slides_fullscreen { 76.0_f32 } else { 62.0_f32 };
+
+        let card_w = (available_rect.width() - margin_x * 2.0_f32).max(200.0_f32);
+        let card_h = (available_rect.height() - margin_top - margin_bottom).max(150.0_f32);
+        let card_rect = egui::Rect::from_min_size(
+            egui::pos2(available_rect.min.x + margin_x, available_rect.min.y + margin_top),
+            egui::vec2(card_w, card_h),
+        );
 
         let card_bg = match self.theme {
-            AppTheme::Dark => Color32::from_rgb(24, 26, 32),
+            AppTheme::Dark => Color32::from_rgb(20, 22, 28),
             AppTheme::Light => Color32::from_rgb(255, 255, 255),
         };
         let card_stroke = Stroke::new(1.0_f32, self.theme.border_color());
@@ -671,21 +678,23 @@ impl MdPreviewApp {
 
         // 卡片內部渲染 Markdown 投影片
         ui.allocate_ui_at_rect(card_rect, |ui| {
+            let pad_h = if self.is_slides_fullscreen { 44.0 } else { 28.0 };
+            let pad_v = if self.is_slides_fullscreen { 32.0 } else { 20.0 };
             Frame::none()
-                .inner_margin(Margin::symmetric(36.0, 24.0))
+                .inner_margin(Margin::symmetric(pad_h, pad_v))
                 .show(ui, |ui| {
                     // 幻燈片頂部微型資訊
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new("📽️ 簡報投影模式")
-                                .size(11.0)
+                                .size(11.5)
                                 .color(self.theme.accent_color())
                                 .strong(),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(
                                 RichText::new(format!("第 {} / {} 頁", self.current_slide_index + 1, total))
-                                    .size(11.5)
+                                    .size(12.0)
                                     .color(self.theme.text_secondary()),
                             );
                         });
@@ -695,14 +704,15 @@ impl MdPreviewApp {
                     ui.separator();
                     ui.add_space(10.0_f32);
 
-                    // 簡報內容 Markdown 渲染 (使用放大的簡報字級 1.35x)
+                    // 簡報內容 Markdown 渲染 (全螢幕使用 1.5x 字級，視窗模式使用 1.35x 字級)
+                    let scale_mult = if self.is_slides_fullscreen { 1.5_f32 } else { 1.35_f32 };
                     ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
                             let renderer = crate::markdown::MarkdownRenderer::new(
                                 self.theme,
-                                self.font_scale * 1.35_f32,
+                                self.font_scale * scale_mult,
                                 "",
                                 None,
                                 None,
@@ -714,21 +724,21 @@ impl MdPreviewApp {
         });
 
         // 底部懸浮控制條 (Floating Pill Controller)
-        let pill_height = 40.0_f32;
-        let pill_width = 330.0_f32;
+        let pill_height = 42.0_f32;
+        let pill_width = 350.0_f32;
         let pill_rect = egui::Rect::from_min_size(
-            egui::pos2(center_pos.x - pill_width / 2.0_f32, available_rect.max.y - pill_height - 16.0_f32),
+            egui::pos2(center_pos.x - pill_width / 2.0_f32, available_rect.max.y - pill_height - 14.0_f32),
             egui::vec2(pill_width, pill_height),
         );
 
         let pill_bg = match self.theme {
-            AppTheme::Dark => Color32::from_rgba_premultiplied(15, 17, 23, 230),
-            AppTheme::Light => Color32::from_rgba_premultiplied(240, 244, 250, 230),
+            AppTheme::Dark => Color32::from_rgba_premultiplied(15, 17, 23, 240),
+            AppTheme::Light => Color32::from_rgba_premultiplied(240, 244, 250, 240),
         };
 
         ui.painter().rect(
             pill_rect,
-            Rounding::same(20.0_f32),
+            Rounding::same(21.0_f32),
             pill_bg,
             Stroke::new(1.0_f32, self.theme.accent_color()),
         );
@@ -1078,6 +1088,9 @@ impl MdPreviewApp {
                 self.search_open = false;
                 self.search_query.clear();
                 self.search_match_index = 0;
+            } else if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                self.set_toast("🗗 已退出全螢幕模式".to_string());
             } else {
                 self.visible = false;
                 hide_app_window();
@@ -1235,11 +1248,22 @@ impl MdPreviewApp {
                 self.current_slide_index = total_slides.saturating_sub(1);
                 ctx.request_repaint();
             }
-            if (input.key_pressed(egui::Key::F) && !input.modifiers.command && !input.modifiers.alt)
-                || input.key_pressed(egui::Key::F11)
-            {
+            if input.key_pressed(egui::Key::F) && !input.modifiers.command && !input.modifiers.alt {
                 self.is_slides_fullscreen = !self.is_slides_fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_slides_fullscreen));
+            }
+        }
+
+        // F11: 全域切換全螢幕模式 (一般預覽與簡報模式均支援)
+        if input.key_pressed(egui::Key::F11) {
+            if self.is_slides_mode {
+                self.is_slides_fullscreen = !self.is_slides_fullscreen;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_slides_fullscreen));
+            } else {
+                let is_fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                let next_fs = !is_fs;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(next_fs));
+                self.set_toast(if next_fs { "⛶ 已進入全螢幕模式 (F11 退出)".to_string() } else { "🗗 已退出全螢幕模式".to_string() });
             }
         }
 
@@ -1814,11 +1838,12 @@ impl eframe::App for MdPreviewApp {
             self.trigger_self_update();
         }
 
-        // 頂部現代精緻導航列 (Fluent / macOS 玻璃質感風格，雙階層防遮擋設計)
-        egui::TopBottomPanel::top("top_header")
-            .frame(
-                Frame::none()
-                    .fill(self.theme.card_bg_color())
+        // 頂部現代精緻導航列 (Fluent / macOS 玻璃質感風格，簡報模式下自動隱藏以保持沉浸全螢幕)
+        if !self.is_slides_mode {
+            egui::TopBottomPanel::top("top_header")
+                .frame(
+                    Frame::none()
+                        .fill(self.theme.card_bg_color())
                     .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
                     .inner_margin(Margin::symmetric(14.0, 7.0)),
             )
@@ -2194,6 +2219,15 @@ impl eframe::App for MdPreviewApp {
                             }
                         }
 
+                        // 全螢幕 / 視窗切換按鈕 (F11)
+                        let is_fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                        let fs_label = if is_fs { "🗗 視窗" } else { "⛶ 全螢幕" };
+                        if render_nav_button(ui, self.theme, fs_label, is_fs, "切換全螢幕模式 (F11)").clicked() {
+                            let next_fs = !is_fs;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(next_fs));
+                            self.set_toast(if next_fs { "⛶ 已進入全螢幕模式 (F11 退出)".to_string() } else { "🗗 已退出全螢幕模式".to_string() });
+                        }
+
                         // 偏好設定按鈕
                         if render_nav_button(ui, self.theme, "⚙️ 設定", self.settings_open, "偏好設定 (亮/暗色主題、自動防抖保存、字型縮放)").clicked() {
                             self.settings_open = !self.settings_open;
@@ -2307,6 +2341,7 @@ impl eframe::App for MdPreviewApp {
                     });
                 }
             });
+        }
 
         // 偏好設定彈出對話框 (以局部變數解耦，徹底避免 closure 內部借用衝突)
         let mut settings_open = self.settings_open;
@@ -2394,80 +2429,82 @@ impl eframe::App for MdPreviewApp {
             self.config.save();
         }
 
-        // 底部狀態列 / Toast 提示
-        egui::TopBottomPanel::bottom("bottom_status")
-            .frame(
-                Frame::none()
-                    .fill(self.theme.card_bg_color())
-                    .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
-                    .inner_margin(Margin::symmetric(16.0, 6.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if let Some((ref msg, instant)) = self.status_toast {
-                        if instant.elapsed().as_secs() < 4 {
-                            ui.label(
-                                RichText::new(msg)
-                                    .color(self.theme.accent_color())
-                                    .strong()
-                                    .size(12.0),
-                            );
+        // 底部狀態列 / Toast 提示 (簡報模式下自動隱藏以保持沉浸全螢幕)
+        if !self.is_slides_mode {
+            egui::TopBottomPanel::bottom("bottom_status")
+                .frame(
+                    Frame::none()
+                        .fill(self.theme.card_bg_color())
+                        .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
+                        .inner_margin(Margin::symmetric(16.0, 6.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if let Some((ref msg, instant)) = self.status_toast {
+                            if instant.elapsed().as_secs() < 4 {
+                                ui.label(
+                                    RichText::new(msg)
+                                        .color(self.theme.accent_color())
+                                        .strong()
+                                        .size(12.0),
+                                );
+                            } else {
+                                self.render_bottom_tips(ui);
+                            }
                         } else {
                             self.render_bottom_tips(ui);
                         }
-                    } else {
-                        self.render_bottom_tips(ui);
-                    }
 
-                    // 右側縮放控制 (針對文字或圖片模式各自適配)
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if let ViewMode::Image { .. } = self.view_mode {
-                            let zoom_str = if self.image_fit_mode {
-                                "適應視窗".to_string()
+                        // 右側縮放控制 (針對文字或圖片模式各自適配)
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if let ViewMode::Image { .. } = self.view_mode {
+                                let zoom_str = if self.image_fit_mode {
+                                    "適應視窗".to_string()
+                                } else {
+                                    format!("{}%", (self.image_zoom * 100.0).round() as u32)
+                                };
+                                ui.label(
+                                    RichText::new(zoom_str)
+                                        .color(self.theme.text_secondary())
+                                        .size(11.5),
+                                );
+
+                                if ui.small_button(" ↔ ").on_hover_text("自適應視窗大小").clicked() {
+                                    self.image_fit_mode = true;
+                                }
+                                if ui.small_button(" 1:1 ").on_hover_text("原始尺寸 100% (Ctrl + 0)").clicked() {
+                                    self.image_zoom = 1.0;
+                                    self.image_fit_mode = false;
+                                }
+                                if ui.small_button(" + ").on_hover_text("放大 (Ctrl + +)").clicked() {
+                                    self.image_zoom = (self.image_zoom * 1.2).min(10.0);
+                                    self.image_fit_mode = false;
+                                }
+                                if ui.small_button(" − ").on_hover_text("縮小 (Ctrl + -)").clicked() {
+                                    self.image_zoom = (self.image_zoom / 1.2).max(0.1);
+                                    self.image_fit_mode = false;
+                                }
                             } else {
-                                format!("{}%", (self.image_zoom * 100.0).round() as u32)
-                            };
-                            ui.label(
-                                RichText::new(zoom_str)
-                                    .color(self.theme.text_secondary())
-                                    .size(11.5),
-                            );
+                                ui.label(
+                                    RichText::new(format!("{}%", (self.font_scale * 100.0).round() as u32))
+                                        .color(self.theme.text_secondary())
+                                        .size(11.5),
+                                );
 
-                            if ui.small_button(" ↔ ").on_hover_text("自適應視窗大小").clicked() {
-                                self.image_fit_mode = true;
+                                if ui.small_button(" + ").on_hover_text("放大字體 (Ctrl + +)").clicked() {
+                                    self.font_scale = (self.font_scale + 0.1).min(2.5);
+                                }
+                                if ui.small_button(" − ").on_hover_text("縮小字體 (Ctrl + -)").clicked() {
+                                    self.font_scale = (self.font_scale - 0.1).max(0.6);
+                                }
+                                if ui.small_button(" 1:1 ").on_hover_text("重設字體 (Ctrl + 0)").clicked() {
+                                    self.font_scale = 1.0;
+                                }
                             }
-                            if ui.small_button(" 1:1 ").on_hover_text("原始尺寸 100% (Ctrl + 0)").clicked() {
-                                self.image_zoom = 1.0;
-                                self.image_fit_mode = false;
-                            }
-                            if ui.small_button(" + ").on_hover_text("放大 (Ctrl + +)").clicked() {
-                                self.image_zoom = (self.image_zoom * 1.2).min(10.0);
-                                self.image_fit_mode = false;
-                            }
-                            if ui.small_button(" − ").on_hover_text("縮小 (Ctrl + -)").clicked() {
-                                self.image_zoom = (self.image_zoom / 1.2).max(0.1);
-                                self.image_fit_mode = false;
-                            }
-                        } else {
-                            ui.label(
-                                RichText::new(format!("{}%", (self.font_scale * 100.0).round() as u32))
-                                    .color(self.theme.text_secondary())
-                                    .size(11.5),
-                            );
-
-                            if ui.small_button(" + ").on_hover_text("放大字體 (Ctrl + +)").clicked() {
-                                self.font_scale = (self.font_scale + 0.1).min(2.5);
-                            }
-                            if ui.small_button(" − ").on_hover_text("縮小字體 (Ctrl + -)").clicked() {
-                                self.font_scale = (self.font_scale - 0.1).max(0.6);
-                            }
-                            if ui.small_button(" 1:1 ").on_hover_text("重設字體 (Ctrl + 0)").clicked() {
-                                self.font_scale = 1.0;
-                            }
-                        }
+                        });
                     });
                 });
-            });
+        }
 
         let mut should_close_toc = false;
         let mut toc_target_anchor = None;
@@ -2504,12 +2541,18 @@ impl eframe::App for MdPreviewApp {
             ctx.request_repaint();
         }
 
+        let panel_margin = if self.is_slides_mode {
+            Margin::symmetric(0.0, 0.0)
+        } else {
+            Margin::symmetric(24.0, 16.0)
+        };
+
         // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖 / 全螢幕就地編輯)
         egui::CentralPanel::default()
             .frame(
                 Frame::none()
                     .fill(self.theme.bg_color())
-                    .inner_margin(Margin::symmetric(24.0, 16.0)),
+                    .inner_margin(panel_margin),
             )
             .show(ctx, |ui| {
                 if self.is_slides_mode {

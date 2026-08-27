@@ -54,7 +54,8 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | **`↑` / `↓`** or **`j` / `k`** | **Scroll Document**: Scroll up / down inside current document (supports continuous smooth scrolling) |
 | **`PageUp` / `PageDown`** | **Page Scroll**: Fast page up / page down scrolling |
 | **`Home` / `End`** or **`g` / `G`** | **Jump to Top / Bottom**: Jump directly to the top or bottom of the document |
-| **`Esc`** | Exit in-place editor / close search bar / instantly hide preview window |
+| **`Esc`** | Exit fullscreen / exit in-place editor / close search bar / instantly hide preview window |
+| **`F11`** | **Fullscreen**: Toggle between fullscreen and windowed preview mode |
 | **`Ctrl + F`** or **`/`** | Open search bar and auto-focus search input (Vim style) |
 | **`Enter`** / **`n`** / **`F3`** | **Next Match**: Automatically scroll and jump to next search match (vivid orange focus highlight) |
 | **`Shift + Enter`** / **`N`** / **`Shift + F3`** | **Previous Match**: Automatically scroll and jump to previous search match |
