@@ -1202,7 +1202,7 @@ impl MdPreviewApp {
 
             self.view_mode = match self.view_mode {
                 ViewMode::Markdown => {
-                    if is_markdown_extension(&ext) || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
+                    if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkdn") || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
                         ViewMode::Mindmap
                     } else if is_image_extension(&ext) {
                         ViewMode::Image { format: ext }
@@ -1795,7 +1795,7 @@ impl eframe::App for MdPreviewApp {
 
                             self.view_mode = match self.view_mode {
                                 ViewMode::Markdown => {
-                                    if is_markdown_extension(&ext) || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
+                                    if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkdn") || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
                                         ViewMode::Mindmap
                                     } else if is_image_extension(&ext) {
                                         ViewMode::Image { format: ext }
