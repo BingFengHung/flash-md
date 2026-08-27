@@ -709,7 +709,7 @@ impl MdPreviewApp {
                             None,
                             base_dir,
                         );
-                        renderer.render(ui, &slide_text);
+                        let _ = renderer.render(ui, &slide_text);
                     });
             });
 
