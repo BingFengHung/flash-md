@@ -2489,40 +2489,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_headings_and_slugs() {
+    fn test_extract_markdown_toc() {
         let md = r#"
 # Introduction
 Here is some intro text.
 
+```rust
+# This is a code comment, not a heading
+fn main() {}
+```
+
 ## Features
 ### Blazing Fast
 ### Instant Preview
-
-## Features
-Duplicate heading test.
 "#;
-        let headings = extract_headings(md);
-        assert_eq!(headings.len(), 5);
+        let toc = extract_markdown_toc(md);
+        assert_eq!(toc.len(), 4);
 
-        assert_eq!(headings[0].title, "Introduction");
-        assert_eq!(headings[0].level, 1);
-        assert_eq!(headings[0].slug, "introduction");
+        assert_eq!(toc[0].title, "Introduction");
+        assert_eq!(toc[0].level, 1);
 
-        assert_eq!(headings[1].title, "Features");
-        assert_eq!(headings[1].level, 2);
-        assert_eq!(headings[1].slug, "features");
+        assert_eq!(toc[1].title, "Features");
+        assert_eq!(toc[1].level, 2);
 
-        assert_eq!(headings[2].title, "Blazing Fast");
-        assert_eq!(headings[2].level, 3);
-        assert_eq!(headings[2].slug, "blazing-fast");
+        assert_eq!(toc[2].title, "Blazing Fast");
+        assert_eq!(toc[2].level, 3);
 
-        assert_eq!(headings[3].title, "Instant Preview");
-        assert_eq!(headings[3].level, 3);
-
-        // 重複標題應自動去重並附加流水號
-        assert_eq!(headings[4].title, "Features");
-        assert_eq!(headings[4].level, 2);
-        assert_eq!(headings[4].slug, "features-1");
+        assert_eq!(toc[3].title, "Instant Preview");
+        assert_eq!(toc[3].level, 3);
     }
 
     #[test]
@@ -2559,10 +2553,10 @@ Thank you!
         let stats = calculate_text_stats(text);
 
         // 中文字數統計
-        assert!(stats.cjk_count > 0);
-        // 英文字詞統計 (Welcome, to, flash-md, fast, preview, tool)
-        assert!(stats.word_count >= 5);
-        assert_eq!(stats.line_count, 2);
+        assert!(stats.cjk_chars > 0);
+        // 英文字詞統計 (Welcome, to, flash, md, fast, preview, tool)
+        assert!(stats.words >= 5);
+        assert_eq!(stats.lines, 2);
         assert!(stats.reading_time_mins >= 1);
     }
 
@@ -2600,18 +2594,24 @@ Thank you!
     }
 
     #[test]
-    fn test_find_search_matches_in_text() {
-        let text = "Line 1: Rust is blazing fast.\nLine 2: egui provides native UI.\nLine 3: RUST is awesome.";
-        let matches = find_search_matches_in_text(text, "rust");
-        assert_eq!(matches.len(), 2);
-        assert_eq!(matches[0], 0); // Line 1
-        assert_eq!(matches[1], 2); // Line 3
-
-        let cjk_text = "第 1 行：微軟正黑體字型\n第 2 行：純英文字串\n第 3 行：字型測試";
-        let cjk_matches = find_search_matches_in_text(cjk_text, "字型");
-        assert_eq!(cjk_matches.len(), 2);
-        assert_eq!(cjk_matches[0], 0);
-        assert_eq!(cjk_matches[1], 2);
+    fn test_append_highlighted_text() {
+        let mut job = LayoutJob::default();
+        let base_fmt = egui::TextFormat::default();
+        let mut match_counter = 0;
+        append_highlighted_text(
+            &mut job,
+            "Rust is fast. Pure Rust power.",
+            "Rust",
+            base_fmt,
+            Color32::YELLOW,
+            Color32::BLACK,
+            Color32::RED,
+            Color32::WHITE,
+            Some(0),
+            &mut match_counter,
+        );
+        assert_eq!(match_counter, 2);
+        assert_eq!(job.text, "Rust is fast. Pure Rust power.");
     }
 
     #[test]
