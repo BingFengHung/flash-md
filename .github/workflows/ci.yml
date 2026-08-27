@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check:
@@ -43,12 +43,20 @@ jobs:
       - name: Run Fast Cargo Check
         shell: pwsh
         run: |
-          $check_out = & cargo check --target ${{ matrix.target }} 2>&1
-          $check_code = $LASTEXITCODE
-          if ($check_code -ne 0) {
-            "### ❌ Compiler Error Log (${{ matrix.target }})" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            $check_out | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-            exit $check_code
+          $out = & cargo check --target ${{ matrix.target }} 2>&1
+          $code = $LASTEXITCODE
+          $out | Out-File -FilePath "check-err.txt" -Encoding utf8
+          if ($code -ne 0) {
+            exit $code
           }
+
+      - name: Push Diagnostic Log on Failure
+        if: failure()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B "ci-debug"
+          git add -f "check-err.txt"
+          git commit -m "CI failure diagnostic log"
+          git push origin "ci-debug" --force
