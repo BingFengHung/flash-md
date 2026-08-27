@@ -1373,15 +1373,15 @@ impl eframe::App for MdPreviewApp {
         ctx.input_mut(|i| {
             for ev in &i.events {
                 match ev {
-                    egui::Event::Ime(egui::Ime::Preedit(s)) => {
+                    egui::Event::Ime(egui::ImeEvent::Preedit(s)) => {
                         ime_event_this_frame = true;
                         self.is_ime_composing = !s.is_empty();
                     }
-                    egui::Event::Ime(egui::Ime::Commit(_)) => {
+                    egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
                         ime_event_this_frame = true;
                         self.is_ime_composing = false;
                     }
-                    egui::Event::Ime(egui::Ime::Disabled) => {
+                    egui::Event::Ime(egui::ImeEvent::Disabled) => {
                         self.is_ime_composing = false;
                     }
                     egui::Event::Text(ref s) => {
