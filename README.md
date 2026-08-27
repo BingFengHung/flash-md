@@ -13,6 +13,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ## ✨ Features
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
+- 📽️ **Full-Screen Markdown Slides Mode**: Press **`F5`** or **`P`** to instantly convert any Markdown document (split by `---`) into an elegant presentation deck with keyboard navigation (`←`/`→`/`Space`), floating controls, and fullscreen projection!
 - ✏️ **In-Place Full-Screen Editor**: Press **`E`** or **`Ctrl + E`** during preview to seamlessly switch to an in-place markdown/text editor—modify files without launching heavy external editors!
 - 🔤 **Smart IME Enter Filter**: Flawless compatibility with Chinese (Zhuyin/Bopomofo, Pinyin) and Japanese IMEs—Enter key confirms composition without inserting unwanted newlines!
 - 💾 **Manual & Auto-Debounce Save**: Save manually with `Ctrl + S` or enable "Auto-debounce save (800ms)" in settings, with real-time status bar indication of unsaved changes!
@@ -46,6 +47,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 | Shortcut | Description |
 | :--- | :--- |
 | **`Alt + Space`** | **Global Hotkey**: Preview selected file in File Explorer / Desktop (press again to close) |
+| **`F5`** or **`P`** | **Slides Mode**: Enter / exit full-screen Markdown presentation slides (supports arrow keys) |
 | **`E`** or **`Ctrl + E`** | **In-place Editor**: Seamlessly toggle between rendered preview and full-screen editor |
 | **`Ctrl + S`** | **Save File**: Manually save in-place modifications to disk (or enable auto-debounce save) |
 | **`←` / `→`** or **`h` / `l`** | **Browse Files**: Navigate to previous / next file in the same directory (with `[3/18]` index) |

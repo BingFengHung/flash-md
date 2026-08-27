@@ -2228,5 +2228,50 @@ pub fn calculate_text_stats(text: &str) -> TextStats {
     }
 }
 
+/// 將 Markdown 內容依照投影片分隔線 (`---` 或 `***` 或 `___`) 解析為獨立簡報頁面
+pub fn extract_slides(content: &str) -> Vec<String> {
+    if content.trim().is_empty() {
+        return vec!["# 📽️ 簡報模式\n\n此文件暫無內容。".to_string()];
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    // 檢查並跳過開頭的 YAML frontmatter (--- ... ---)
+    let mut start_idx = 0;
+    if !lines.is_empty() && lines[0].trim() == "---" {
+        if let Some(pos) = lines[1..].iter().position(|l| l.trim() == "---") {
+            start_idx = pos + 2;
+        }
+    }
+
+    let mut slides = Vec::new();
+    let mut current_slide = Vec::new();
+
+    for line in &lines[start_idx..] {
+        let trimmed = line.trim();
+        // 判斷是否為投影片分隔線 (--- 或 *** 或 ___)
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            let slide_text = current_slide.join("\n").trim().to_string();
+            if !slide_text.is_empty() {
+                slides.push(slide_text);
+            }
+            current_slide.clear();
+        } else {
+            current_slide.push(*line);
+        }
+    }
+
+    let last_slide = current_slide.join("\n").trim().to_string();
+    if !last_slide.is_empty() {
+        slides.push(last_slide);
+    }
+
+    if slides.is_empty() {
+        vec![content.trim().to_string()]
+    } else {
+        slides
+    }
+}
+
+
 
 
