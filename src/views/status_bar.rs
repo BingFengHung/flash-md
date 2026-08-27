@@ -47,7 +47,7 @@ pub fn render_bottom_tips(ui: &mut egui::Ui, theme: AppTheme, is_editing: bool) 
         )
     } else {
         format!(
-            "flash-md v{}  •  Alt+Space (預覽)  •  E (就地編輯)  •  ←/→/h/l (切換)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  Ctrl+T (大綱)  •  Ctrl+Shift+O (定位)  •  Ctrl+M (模式)  •  Esc (隱藏)",
+            "flash-md v{}  •  Alt+Space (預覽)  •  E (就地編輯)  •  F5 (簡報)  •  F6 (心智圖)  •  ←/→/h/l (切換)  •  ↑/↓/j/k (捲動)  •  / (搜尋)  •  Ctrl+T (大綱)  •  Ctrl+Shift+O (定位)  •  Ctrl+M (模式)  •  Esc (隱藏)",
             CURRENT_VERSION
         )
     };

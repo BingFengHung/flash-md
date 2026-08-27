@@ -1,6 +1,7 @@
 pub mod editor;
 pub mod empty_state;
 pub mod image_viewer;
+pub mod mindmap;
 pub mod presentation;
 pub mod settings_modal;
 pub mod status_bar;

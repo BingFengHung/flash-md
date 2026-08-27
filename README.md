@@ -13,6 +13,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ## ✨ Features
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
+- 🧠 **Interactive Mindmap Mode**: Press **`F6`** or **`Ctrl + M`** to transform any Markdown outline into a **fluid, interactive vector mindmap**! Features smooth cubic Bezier connectors, pan & zoom, expandable/collapsible nodes (`[+]`/`[-]`), and 1-click jump back to markdown section!
 - 📽️ **Full-Screen Markdown Slides Mode**: Press **`F5`** or **`P`** to instantly convert any Markdown document (split by `---`) into an elegant presentation deck with keyboard navigation (`←`/`→`/`Space`), floating controls, and fullscreen projection!
 - ✏️ **In-Place Full-Screen Editor**: Press **`E`** or **`Ctrl + E`** during preview to seamlessly switch to an in-place markdown/text editor—modify files without launching heavy external editors!
 - 🔤 **Smart IME Enter Filter**: Flawless compatibility with Chinese (Zhuyin/Bopomofo, Pinyin) and Japanese IMEs—Enter key confirms composition without inserting unwanted newlines!

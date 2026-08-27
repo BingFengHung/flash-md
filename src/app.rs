@@ -28,6 +28,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewMode {
     Markdown,
+    Mindmap,
     Code { lang: String },
     PlainText,
     Table { separator: char },
@@ -90,6 +91,8 @@ pub struct MdPreviewApp {
     pub is_slides_mode: bool,
     pub current_slide_index: usize,
     pub is_slides_fullscreen: bool,
+    pub mindmap_state: crate::views::mindmap::MindmapState,
+    pub mindmap_root: Option<crate::views::mindmap::MindmapNode>,
 }
 
 impl MdPreviewApp {
@@ -172,6 +175,8 @@ impl MdPreviewApp {
             is_slides_mode: false,
             current_slide_index: 0,
             is_slides_fullscreen: false,
+            mindmap_state: Default::default(),
+            mindmap_root: None,
         };
 
         if !is_visible {
@@ -274,6 +279,8 @@ impl MdPreviewApp {
         self.current_slide_index = 0;
         self.is_modified = false;
         self.last_edit_instant = None;
+        self.mindmap_root = None;
+        self.mindmap_state = Default::default();
 
         if path.is_dir() {
             self.set_toast(format!("已選取資料夾: {:?}", path.file_name().unwrap_or_default()));
@@ -412,6 +419,7 @@ impl MdPreviewApp {
                 let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
                 let mode_desc = match self.view_mode {
                     ViewMode::Markdown => "Markdown 渲染".to_string(),
+                    ViewMode::Mindmap => "🧠 心智圖模式".to_string(),
                     ViewMode::Table { separator } => {
                         if separator == '\t' {
                             "TSV 資料表格 📊".to_string()
@@ -870,7 +878,7 @@ impl MdPreviewApp {
             ViewMode::Table { .. } => 26.0 * self.font_scale,
             ViewMode::Code { .. } => 21.0 * self.font_scale,
             ViewMode::PlainText => 22.0 * self.font_scale,
-            ViewMode::Image { .. } => return,
+            ViewMode::Mindmap | ViewMode::Image { .. } => return,
         };
 
         let target_y = (line_idx as f32) * line_height;
@@ -1159,6 +1167,17 @@ impl MdPreviewApp {
             }
         }
 
+        // F6: 快速切換 Markdown 與 互動心智圖模式
+        if !self.is_editing && input.key_pressed(egui::Key::F6) {
+            if matches!(self.view_mode, ViewMode::Mindmap) {
+                self.view_mode = ViewMode::Markdown;
+                self.set_toast("已切換回 Markdown 渲染模式 📄".to_string());
+            } else if matches!(self.view_mode, ViewMode::Markdown) && !self.content.is_empty() {
+                self.view_mode = ViewMode::Mindmap;
+                self.set_toast("已切換至 🧠 互動心智圖模式".to_string());
+            }
+        }
+
         // Ctrl + Shift + O: 在 Windows 檔案總管中高亮定位目前檔案
         if input.modifiers.command && input.modifiers.shift && input.key_pressed(egui::Key::O) {
             self.locate_current_file_in_explorer();
@@ -1183,6 +1202,21 @@ impl MdPreviewApp {
 
             self.view_mode = match self.view_mode {
                 ViewMode::Markdown => {
+                    if is_markdown_extension(&ext) || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
+                        ViewMode::Mindmap
+                    } else if is_image_extension(&ext) {
+                        ViewMode::Image { format: ext }
+                    } else if ext == "csv" {
+                        ViewMode::Table { separator: ',' }
+                    } else if ext == "tsv" {
+                        ViewMode::Table { separator: '\t' }
+                    } else if is_code_extension(&ext) {
+                        ViewMode::Code { lang: ext }
+                    } else {
+                        ViewMode::PlainText
+                    }
+                }
+                ViewMode::Mindmap => {
                     if is_image_extension(&ext) {
                         ViewMode::Image { format: ext }
                     } else if ext == "csv" {
@@ -1234,6 +1268,7 @@ impl MdPreviewApp {
 
             self.set_toast(match self.view_mode {
                 ViewMode::Markdown => "已切換至 Markdown 渲染模式 📄".to_string(),
+                ViewMode::Mindmap => "已切換至 🧠 互動心智圖模式".to_string(),
                 ViewMode::Table { separator } => {
                     if separator == '\t' {
                         "已切換至 TSV 資料表格模式 📊".to_string()
@@ -1719,6 +1754,7 @@ impl eframe::App for MdPreviewApp {
                     if !self.content.is_empty() || self.image_uri.is_some() {
                         let (badge_text, badge_tip) = match self.view_mode {
                             ViewMode::Markdown => ("📄 Markdown".to_string(), "目前為 Markdown 模式 (點擊切換 Ctrl+M)".to_string()),
+                            ViewMode::Mindmap => ("🧠 心智圖".to_string(), "目前為互動心智圖模式 (點擊切換 Ctrl+M)".to_string()),
                             ViewMode::Table { separator } => {
                                 if separator == '\t' {
                                     ("📊 TSV 表格".to_string(), "目前為 TSV 資料表格模式 (點擊切換 Ctrl+M)".to_string())
@@ -1759,6 +1795,21 @@ impl eframe::App for MdPreviewApp {
 
                             self.view_mode = match self.view_mode {
                                 ViewMode::Markdown => {
+                                    if is_markdown_extension(&ext) || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
+                                        ViewMode::Mindmap
+                                    } else if is_image_extension(&ext) {
+                                        ViewMode::Image { format: ext }
+                                    } else if ext == "csv" {
+                                        ViewMode::Table { separator: ',' }
+                                    } else if ext == "tsv" {
+                                        ViewMode::Table { separator: '\t' }
+                                    } else if is_code_extension(&ext) {
+                                        ViewMode::Code { lang: ext }
+                                    } else {
+                                        ViewMode::PlainText
+                                    }
+                                }
+                                ViewMode::Mindmap => {
                                     if is_image_extension(&ext) {
                                         ViewMode::Image { format: ext }
                                     } else if ext == "csv" {
@@ -1805,6 +1856,7 @@ impl eframe::App for MdPreviewApp {
                                 }
                             };
                             self.reset_scroll_to_top = true;
+                            self.current_scroll_offset = 0.0_f32;
                         }
                         if mode_btn.hovered() {
                             mode_btn.on_hover_text(badge_tip);
@@ -1933,6 +1985,20 @@ impl eframe::App for MdPreviewApp {
                                     self.set_fullscreen_state(ctx, false);
                                 }
                                 self.set_toast("👁️ 已退出簡報投影模式".to_string());
+                            }
+                        }
+                    }
+
+                    // Markdown 互動心智圖切換按鈕
+                    if matches!(self.view_mode, ViewMode::Markdown | ViewMode::Mindmap) && !self.is_editing && !self.content.is_empty() {
+                        let is_mindmap = matches!(self.view_mode, ViewMode::Mindmap);
+                        if render_nav_button(ui, self.theme, "🧠 心智圖", is_mindmap, "切換 Markdown 互動心智圖模式 (Ctrl + M)").clicked() {
+                            if is_mindmap {
+                                self.view_mode = ViewMode::Markdown;
+                                self.set_toast("已切換回 Markdown 渲染模式 📄".to_string());
+                            } else {
+                                self.view_mode = ViewMode::Mindmap;
+                                self.set_toast("已切換至 🧠 互動心智圖模式".to_string());
                             }
                         }
                     }
@@ -2443,6 +2509,41 @@ impl eframe::App for MdPreviewApp {
                                 ui.label(text_job);
                             });
                             self.current_scroll_offset = scroll_out.state.offset.y;
+                        }
+                        ViewMode::Mindmap => {
+                            // Markdown 互動式心智圖渲染模式 (支援樹狀水平佈局、貝茲曲線連線、縮放平移、節點收折與點擊跳轉回正文錨點)
+                            let fname = self
+                                .current_file
+                                .as_ref()
+                                .and_then(|p| p.file_stem())
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("Markdown Document");
+
+                            if self.mindmap_root.is_none() {
+                                self.mindmap_root = Some(crate::views::mindmap::parse_markdown_to_mindmap(
+                                    &self.content,
+                                    fname,
+                                ));
+                            }
+
+                            if let Some(ref mut root) = self.mindmap_root {
+                                let output = crate::views::mindmap::render_mindmap_view(
+                                    ui,
+                                    self.theme,
+                                    self.font_scale,
+                                    root,
+                                    &mut self.mindmap_state,
+                                );
+
+                                if let Some(anchor) = output.jump_to_anchor {
+                                    self.target_anchor = Some(anchor);
+                                    self.view_mode = ViewMode::Markdown;
+                                    ctx.request_repaint();
+                                } else if output.switch_to_markdown {
+                                    self.view_mode = ViewMode::Markdown;
+                                    ctx.request_repaint();
+                                }
+                            }
                         }
                         ViewMode::Image { .. } => {
                             // 圖片與 SVG 向量圖檢視模式 (支援縮放、滾輪、適應視窗)
