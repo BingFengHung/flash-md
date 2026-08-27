@@ -2233,19 +2233,29 @@ impl eframe::App for MdPreviewApp {
                         Some(self.search_match_index)
                     };
 
+                    let scroll_id = ui.make_persistent_id("main_content_scroll_area");
+                    let mut scroll_state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
+
+                    if self.reset_scroll_to_top {
+                        scroll_state.offset.y = 0.0_f32;
+                        scroll_state.store(ui.ctx(), scroll_id);
+                    } else if let Some(offset) = self.target_scroll_offset {
+                        scroll_state.offset.y = offset;
+                        scroll_state.store(ui.ctx(), scroll_id);
+                    } else if self.keyboard_scroll_delta != 0.0_f32 {
+                        // 當向下捲動 (keyboard_scroll_delta < 0)，offset.y 需增加；向上捲動 (keyboard_scroll_delta > 0)，offset.y 需減少
+                        scroll_state.offset.y = (scroll_state.offset.y - self.keyboard_scroll_delta).max(0.0_f32);
+                        scroll_state.store(ui.ctx(), scroll_id);
+                    }
+
                     match self.view_mode {
                         ViewMode::Markdown => {
                             // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部、鍵盤方向鍵上下捲動與動態閱讀進度條)
-                            let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
-                            if self.reset_scroll_to_top {
-                                scroll = scroll.vertical_scroll_offset(0.0);
-                            } else if let Some(offset) = self.target_scroll_offset {
-                                scroll = scroll.vertical_scroll_offset(offset);
-                            }
+                            let scroll = ScrollArea::vertical()
+                                .id_source(scroll_id)
+                                .auto_shrink([false, false]);
+
                             let scroll_out = scroll.show(ui, |ui| {
-                                if self.keyboard_scroll_delta != 0.0 {
-                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
-                                }
                                 let anchor_to_jump = self.target_anchor.clone();
                                 let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
                                 let renderer = MarkdownRenderer::new(
@@ -2280,16 +2290,11 @@ impl eframe::App for MdPreviewApp {
                         }
                         ViewMode::Table { separator } => {
                             // 現代斑馬紋資料表格模式 (支援 CSV 與 TSV 欄位解析、搜尋高亮與滾動)
-                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
-                            if self.reset_scroll_to_top {
-                                scroll = scroll.scroll_offset(Vec2::ZERO);
-                            } else if let Some(offset) = self.target_scroll_offset {
-                                scroll = scroll.scroll_offset(Vec2::new(0.0, offset));
-                            }
+                            let scroll = ScrollArea::both()
+                                .id_source(scroll_id)
+                                .auto_shrink([false, false]);
+
                             scroll.show(ui, |ui| {
-                                if self.keyboard_scroll_delta != 0.0 {
-                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
-                                }
                                 let table_data = crate::markdown::parse_csv_or_tsv(&self.content, separator);
                                 let mut match_counter = 0;
                                 crate::markdown::render_csv_table(
@@ -2305,31 +2310,21 @@ impl eframe::App for MdPreviewApp {
                         }
                         ViewMode::Code { ref lang } => {
                             // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動)
-                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
-                            if self.reset_scroll_to_top {
-                                scroll = scroll.scroll_offset(Vec2::ZERO);
-                            } else if let Some(offset) = self.target_scroll_offset {
-                                scroll = scroll.scroll_offset(Vec2::new(0.0, offset));
-                            }
+                            let scroll = ScrollArea::both()
+                                .id_source(scroll_id)
+                                .auto_shrink([false, false]);
+
                             scroll.show(ui, |ui| {
-                                if self.keyboard_scroll_delta != 0.0 {
-                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
-                                }
                                 render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query, active_match_idx);
                             });
                         }
                         ViewMode::PlainText => {
                             // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動，快取 LayoutJob 零拷貝)
-                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
-                            if self.reset_scroll_to_top {
-                                scroll = scroll.scroll_offset(Vec2::ZERO);
-                            } else if let Some(offset) = self.target_scroll_offset {
-                                scroll = scroll.scroll_offset(Vec2::new(0.0, offset));
-                            }
+                            let scroll = ScrollArea::both()
+                                .id_source(scroll_id)
+                                .auto_shrink([false, false]);
+
                             scroll.show(ui, |ui| {
-                                if self.keyboard_scroll_delta != 0.0 {
-                                    ui.scroll_with_delta(Vec2::new(0.0, self.keyboard_scroll_delta));
-                                }
                                 ui.add_space(4.0);
                                 let font_scale = self.font_scale;
                                 let font_id = FontId::monospace(14.0 * font_scale);
@@ -2365,7 +2360,7 @@ impl eframe::App for MdPreviewApp {
                                     } else {
                                         let mut job = egui::text::LayoutJob::default();
                                         let base_fmt = egui::TextFormat {
-                                            font_id: font_id.clone(),
+                                             font_id: font_id.clone(),
                                             color: text_color,
                                             line_height: Some(22.0 * font_scale),
                                             ..Default::default()

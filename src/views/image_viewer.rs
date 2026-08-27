@@ -25,14 +25,22 @@ pub fn render_image_viewer(
             *image_fit_mode = false;
         }
 
-        let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+        let scroll_id = ui.make_persistent_id("image_viewer_scroll_area");
+        let mut scroll_state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
+
         if reset_scroll_to_top {
-            scroll = scroll.scroll_offset(Vec2::ZERO);
+            scroll_state.offset = Vec2::ZERO;
+            scroll_state.store(ui.ctx(), scroll_id);
+        } else if keyboard_scroll_delta != 0.0_f32 {
+            scroll_state.offset.y = (scroll_state.offset.y - keyboard_scroll_delta).max(0.0_f32);
+            scroll_state.store(ui.ctx(), scroll_id);
         }
+
+        let scroll = ScrollArea::both()
+            .id_source(scroll_id)
+            .auto_shrink([false, false]);
+
         scroll.show(ui, |ui| {
-            if keyboard_scroll_delta != 0.0_f32 {
-                ui.scroll_with_delta(Vec2::new(0.0_f32, keyboard_scroll_delta));
-            }
             ui.centered_and_justified(|ui| {
                 let ext = if !format_ext.is_empty() {
                     format_ext
