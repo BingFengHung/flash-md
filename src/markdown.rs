@@ -1027,36 +1027,16 @@ impl<'a> RenderContext<'a> {
                 .rounding(Rounding::same(4.0_f32))
                 .stroke(Stroke::new(3.0_f32, self.theme.quote_bar_color()))
                 .show(ui, |ui| {
-                    self.render_inline_spans(ui, inlines);
+                    self.render_inline_spans(ui, inlines, false);
                 });
         } else if self.list_level > 0 {
-            let indent = (self.list_level.saturating_sub(1) as f32) * 16.0_f32;
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(indent);
-                let bullet = if let Some(idx) = self.ordered_list_index {
-                    format!("{}. ", idx)
-                } else {
-                    "• ".to_string()
-                };
-                ui.label(
-                    RichText::new(bullet)
-                        .color(self.theme.accent_color())
-                        .strong()
-                        .size(14.0_f32 * self.font_scale),
-                );
-
-                self.render_inline_spans(ui, inlines);
-            });
-
-            if let Some(ref mut idx) = self.ordered_list_index {
-                *idx += 1;
-            }
+            self.render_list_item_spans(ui, inlines);
         } else {
-            self.render_inline_spans(ui, inlines);
+            self.render_inline_spans(ui, inlines, false);
         }
     }
 
-    fn render_inline_spans(&mut self, ui: &mut Ui, spans: Vec<InlineSpan>) {
+    fn render_inline_spans(&mut self, ui: &mut Ui, spans: Vec<InlineSpan>, is_list_item: bool) {
         if spans.is_empty() {
             return;
         }
@@ -1066,8 +1046,10 @@ impl<'a> RenderContext<'a> {
 
         if !has_hyperlinks {
             let mut job = LayoutJob::default();
-            for span in spans {
-                let color = if span.code {
+            for (idx, span) in spans.into_iter().enumerate() {
+                let color = if is_list_item && idx == 0 {
+                    self.theme.accent_color()
+                } else if span.code {
                     self.theme.accent_color()
                 } else {
                     self.theme.text_primary()
@@ -1079,7 +1061,7 @@ impl<'a> RenderContext<'a> {
                     italics: span.italic,
                     strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
                     line_height: Some(22.0_f32 * self.font_scale),
-                    valign: egui::Align::Center,
+                    valign: egui::Align::BOTTOM,
                     background: if span.code {
                         self.theme.code_bg_color()
                     } else {
@@ -1106,11 +1088,13 @@ impl<'a> RenderContext<'a> {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0_f32;
 
-                for span in spans {
+                for (idx, span) in spans.into_iter().enumerate() {
                     let mut span_job = LayoutJob::default();
                     let is_link = span.link_url.is_some();
 
-                    let color = if span.code || is_link {
+                    let color = if is_list_item && idx == 0 {
+                        self.theme.accent_color()
+                    } else if span.code || is_link {
                         self.theme.accent_color()
                     } else {
                         self.theme.text_primary()
@@ -1135,7 +1119,7 @@ impl<'a> RenderContext<'a> {
                         underline,
                         strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
                         line_height: Some(22.0_f32 * self.font_scale),
-                        valign: egui::Align::Center,
+                        valign: egui::Align::BOTTOM,
                         background,
                         ..Default::default()
                     };
@@ -1233,24 +1217,40 @@ impl<'a> RenderContext<'a> {
             return;
         }
         let inlines = std::mem::take(&mut self.inlines);
-        let indent = (self.list_level.saturating_sub(1) as f32) * 16.0;
+        self.render_list_item_spans(ui, inlines);
+    }
 
-        ui.horizontal_wrapped(|ui| {
-            ui.add_space(indent);
-            let bullet = if let Some(idx) = self.ordered_list_index {
-                format!("{}. ", idx)
-            } else {
-                "• ".to_string()
-            };
-            ui.label(
-                RichText::new(bullet)
-                    .color(self.theme.accent_color())
-                    .strong()
-                    .size(14.0 * self.font_scale),
-            );
+    fn render_list_item_spans(&mut self, ui: &mut Ui, inlines: Vec<InlineSpan>) {
+        if inlines.is_empty() {
+            return;
+        }
 
-            self.render_inline_spans(ui, inlines);
+        let indent = (self.list_level.saturating_sub(1) as f32) * 16.0_f32;
+        let bullet = if let Some(idx) = self.ordered_list_index {
+            format!("{}. ", idx)
+        } else {
+            "• ".to_string()
+        };
+
+        let mut spans = Vec::with_capacity(inlines.len() + 1);
+        spans.push(InlineSpan {
+            text: bullet,
+            bold: true,
+            italic: false,
+            strikethrough: false,
+            code: false,
+            link_url: None,
         });
+        spans.extend(inlines);
+
+        if indent > 0.0_f32 {
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(indent);
+                self.render_inline_spans(ui, spans, true);
+            });
+        } else {
+            self.render_inline_spans(ui, spans, true);
+        }
 
         if let Some(ref mut idx) = self.ordered_list_index {
             *idx += 1;
@@ -1536,7 +1536,7 @@ impl<'a> RenderContext<'a> {
                                                 let base_fmt = egui::TextFormat {
                                                     font_id: FontId::proportional(13.5_f32 * self.font_scale),
                                                     color: self.theme.accent_color(),
-                                                    valign: egui::Align::Center,
+                                                    valign: egui::Align::BOTTOM,
                                                     ..Default::default()
                                                 };
                                                 let mut counter = 0;
@@ -1575,7 +1575,7 @@ impl<'a> RenderContext<'a> {
                                                     font_id: FontId::proportional(13.0_f32 * self.font_scale),
                                                     color: self.theme.text_primary(),
                                                     line_height: Some(19.0_f32 * self.font_scale),
-                                                    valign: egui::Align::Center,
+                                                    valign: egui::Align::BOTTOM,
                                                     ..Default::default()
                                                 };
                                                 let mut counter = 0;
