@@ -1,6 +1,9 @@
 // 隱藏 Windows Release 模式下的額外終端機視窗 (如果是純 GUI 啟動)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod app;
 mod config;
 mod explorer;

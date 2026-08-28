@@ -35,23 +35,25 @@ pub fn append_highlighted_text(
 ) {
     let clean_query = search_query.trim();
     if clean_query.is_empty() || text.is_empty() {
-        job.append(text, 0.0, base_format);
+        job.append(text, 0.0_f32, base_format);
         return;
     }
 
-    // ASCII 快速路徑：無任何堆疊分配，零拷貝極速掃描
+    // ASCII 快速路徑：採用 CPU AVX2/SSE SIMD 向量指令集極速掃描
     if text.is_ascii() && clean_query.is_ascii() {
         let query_lower = clean_query.to_ascii_lowercase();
         let text_lower = text.to_ascii_lowercase();
+        let finder = memchr::memmem::Finder::new(query_lower.as_bytes());
         let mut last_end = 0;
         let mut search_idx = 0;
+        let text_bytes = text_lower.as_bytes();
 
-        while let Some(pos) = text_lower[search_idx..].find(&query_lower) {
+        while let Some(pos) = finder.find(&text_bytes[search_idx..]) {
             let start = search_idx + pos;
             let end = start + query_lower.len();
 
             if start > last_end {
-                job.append(&text[last_end..start], 0.0, base_format.clone());
+                job.append(&text[last_end..start], 0.0_f32, base_format.clone());
             }
 
             let is_active = active_match_idx == Some(*match_counter);
@@ -65,14 +67,14 @@ pub fn append_highlighted_text(
                 hl_fmt.background = normal_hl_bg;
                 hl_fmt.color = normal_hl_fg;
             }
-            job.append(&text[start..end], 0.0, hl_fmt);
+            job.append(&text[start..end], 0.0_f32, hl_fmt);
 
             last_end = end;
             search_idx = end;
         }
 
         if last_end < text.len() {
-            job.append(&text[last_end..], 0.0, base_format);
+            job.append(&text[last_end..], 0.0_f32, base_format);
         }
         return;
     }
@@ -98,7 +100,7 @@ pub fn append_highlighted_text(
             };
 
             if start_byte > last_byte_idx {
-                job.append(&text[last_byte_idx..start_byte], 0.0, base_format.clone());
+                job.append(&text[last_byte_idx..start_byte], 0.0_f32, base_format.clone());
             }
 
             let is_active = active_match_idx == Some(*match_counter);
@@ -112,7 +114,7 @@ pub fn append_highlighted_text(
                 hl_fmt.background = normal_hl_bg;
                 hl_fmt.color = normal_hl_fg;
             }
-            job.append(&text[start_byte..end_byte], 0.0, hl_fmt);
+            job.append(&text[start_byte..end_byte], 0.0_f32, hl_fmt);
 
             i += query_lower.len();
             last_byte_idx = end_byte;
@@ -122,7 +124,7 @@ pub fn append_highlighted_text(
     }
 
     if last_byte_idx < text.len() {
-        job.append(&text[last_byte_idx..], 0.0, base_format);
+        job.append(&text[last_byte_idx..], 0.0_f32, base_format);
     }
 }
 
@@ -1397,15 +1399,15 @@ impl<'a> RenderContext<'a> {
                 ui.separator();
                 ui.add_space(4.0);
 
-                // 語法高亮 (快取 LayoutJob 避免每幀重複執行 syntect 正則高亮)
-                let cache_id = ui.make_persistent_id(format!(
-                    "md_cb_hl_{:p}_{}_{}_{}_{:?}_{:?}",
-                    code.as_ptr(),
+                // 語法高亮 (快取 LayoutJob 避免每幀重複執行 syntect 正則高亮，零堆疊分配雜湊)
+                let cache_id = egui::Id::new((
+                    0xCB_HL_01_u64,
+                    code.as_ptr() as usize,
                     code.len(),
-                    (self.font_scale * 100.0) as u32,
+                    (self.font_scale * 100.0_f32) as u32,
                     self.search_query,
                     self.active_match_index,
-                    self.theme
+                    self.theme as u8,
                 ));
 
                 let layout_job = ui.ctx().data_mut(|d| {
@@ -1685,15 +1687,15 @@ pub fn render_code_viewer(
         ),
     };
 
-    // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算
-    let cache_id = ui.make_persistent_id(format!(
-        "code_viewer_full_{:p}_{}_{}_{}_{:?}_{:?}",
-        code.as_ptr(),
+    // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算 (零堆疊分配雜湊)
+    let cache_id = egui::Id::new((
+        0xCODE_VIEW_FULL_01_u64,
+        code.as_ptr() as usize,
         code.len(),
-        (font_scale * 100.0) as u32,
+        (font_scale * 100.0_f32) as u32,
         search_query,
         active_match_index,
-        theme
+        theme as u8,
     ));
 
     let (gutter_job, code_job, line_count, is_large_file) = ui.ctx().data_mut(|d| {
@@ -2625,6 +2627,27 @@ Thank you!
         let (name_py, emoji_py) = get_language_badge("py");
         assert_eq!(name_py, "Python");
         assert_eq!(emoji_py, "🐍");
+    }
+
+    #[test]
+    fn test_simd_highlighted_text_multibyte_and_ascii() {
+        let mut job = LayoutJob::default();
+        let base_fmt = egui::TextFormat::default();
+        let mut match_counter = 0;
+        append_highlighted_text(
+            &mut job,
+            "測試繁體中文與 English text 一同高亮搜尋測試",
+            "測試",
+            base_fmt,
+            Color32::YELLOW,
+            Color32::BLACK,
+            Color32::RED,
+            Color32::WHITE,
+            Some(1),
+            &mut match_counter,
+        );
+        assert_eq!(match_counter, 2);
+        assert_eq!(job.text, "測試繁體中文與 English text 一同高亮搜尋測試");
     }
 }
 

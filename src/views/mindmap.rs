@@ -320,6 +320,7 @@ pub fn render_mindmap_view(
     let mut toggle_collapse_id: Option<usize> = None;
     let mut clicked_anchor_title: Option<String> = None;
 
+    let cull_rect = available_rect.expand(60.0_f32);
     render_mindmap_node_and_edges(
         ui,
         &painter,
@@ -328,6 +329,7 @@ pub fn render_mindmap_view(
         state.zoom,
         theme,
         font_scale,
+        cull_rect,
         &mut toggle_collapse_id,
         &mut clicked_anchor_title,
     );
@@ -399,7 +401,7 @@ pub fn render_mindmap_view(
     output
 }
 
-/// 遞迴繪製心智圖連線與節點卡片
+/// 遞迴繪製心智圖連線與節點卡片（含視口視錐剔除 Viewport Culling）
 fn render_mindmap_node_and_edges<F>(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
@@ -408,6 +410,7 @@ fn render_mindmap_node_and_edges<F>(
     zoom: f32,
     theme: AppTheme,
     font_scale: f32,
+    cull_rect: Rect,
     toggle_collapse_id: &mut Option<usize>,
     clicked_anchor_title: &mut Option<String>,
 ) where
@@ -428,18 +431,22 @@ fn render_mindmap_node_and_edges<F>(
             let child_center_y = child_screen_origin.y;
             let end_pt = pos2(child_screen_origin.x, child_center_y);
 
-            // 依據子節點索引分配柔和層級色彩
-            let line_color = get_branch_color(child.level, idx, theme);
-            let ctrl_dist = (end_pt.x - start_pt.x) * 0.5_f32;
-            let ctrl1 = pos2(start_pt.x + ctrl_dist, start_pt.y);
-            let ctrl2 = pos2(end_pt.x - ctrl_dist, end_pt.y);
+            // 視口剔除：若曲線範圍不在視口內則跳過繪製
+            let curve_rect = Rect::from_two_pos(start_pt, end_pt).expand(30.0_f32);
+            if curve_rect.intersects(cull_rect) {
+                // 依據子節點索引分配柔和層級色彩
+                let line_color = get_branch_color(child.level, idx, theme);
+                let ctrl_dist = (end_pt.x - start_pt.x) * 0.5_f32;
+                let ctrl1 = pos2(start_pt.x + ctrl_dist, start_pt.y);
+                let ctrl2 = pos2(end_pt.x - ctrl_dist, end_pt.y);
 
-            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-                [start_pt, ctrl1, ctrl2, end_pt],
-                false,
-                Color32::TRANSPARENT,
-                Stroke::new((1.8_f32 * zoom).clamp(1.0_f32, 2.5_f32), line_color),
-            ));
+                painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                    [start_pt, ctrl1, ctrl2, end_pt],
+                    false,
+                    Color32::TRANSPARENT,
+                    Stroke::new((1.8_f32 * zoom).clamp(1.0_f32, 2.5_f32), line_color),
+                ));
+            }
 
             render_mindmap_node_and_edges(
                 ui,
@@ -449,10 +456,16 @@ fn render_mindmap_node_and_edges<F>(
                 zoom,
                 theme,
                 font_scale,
+                cull_rect,
                 toggle_collapse_id,
                 clicked_anchor_title,
             );
         }
+    }
+
+    // 視口邊界剔除 (Viewport Frustum Culling)：若節點卡片完全在螢幕外，直接跳過繪製以釋放 GPU 與 Painter 資源
+    if !screen_node_rect.intersects(cull_rect) {
+        return;
     }
 
     // 2. 計算節點配色與圓角
