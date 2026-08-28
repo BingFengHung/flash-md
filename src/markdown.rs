@@ -1399,7 +1399,7 @@ impl<'a> RenderContext<'a> {
 
                 // 語法高亮 (快取 LayoutJob 避免每幀重複執行 syntect 正則高亮，零堆疊分配雜湊)
                 let cache_id = egui::Id::new((
-                    0xCB_HL_01_u64,
+                    "md_cb_hl",
                     code.as_ptr() as usize,
                     code.len(),
                     (self.font_scale * 100.0_f32) as u32,
@@ -1687,7 +1687,7 @@ pub fn render_code_viewer(
 
     // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算 (零堆疊分配雜湊)
     let cache_id = egui::Id::new((
-        0xCODE_VIEW_FULL_01_u64,
+        "code_viewer_full",
         code.as_ptr() as usize,
         code.len(),
         (font_scale * 100.0_f32) as u32,
