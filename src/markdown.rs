@@ -39,16 +39,14 @@ pub fn append_highlighted_text(
         return;
     }
 
-    // ASCII 快速路徑：採用 CPU AVX2/SSE SIMD 向量指令集極速掃描
+    // ASCII 快速路徑：零堆疊分配，零拷貝極速掃描
     if text.is_ascii() && clean_query.is_ascii() {
         let query_lower = clean_query.to_ascii_lowercase();
         let text_lower = text.to_ascii_lowercase();
-        let finder = memchr::memmem::Finder::new(query_lower.as_bytes());
         let mut last_end = 0;
         let mut search_idx = 0;
-        let text_bytes = text_lower.as_bytes();
 
-        while let Some(pos) = finder.find(&text_bytes[search_idx..]) {
+        while let Some(pos) = text_lower[search_idx..].find(&query_lower) {
             let start = search_idx + pos;
             let end = start + query_lower.len();
 
@@ -2630,7 +2628,7 @@ Thank you!
     }
 
     #[test]
-    fn test_simd_highlighted_text_multibyte_and_ascii() {
+    fn test_highlighted_text_multibyte_and_ascii() {
         let mut job = LayoutJob::default();
         let base_fmt = egui::TextFormat::default();
         let mut match_counter = 0;
