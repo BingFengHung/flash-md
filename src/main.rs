@@ -1,6 +1,7 @@
 // 隱藏 Windows Release 模式下的額外終端機視窗 (如果是純 GUI 啟動)
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_arch = "x86_64")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
