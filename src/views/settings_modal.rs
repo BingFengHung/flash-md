@@ -32,7 +32,7 @@ pub fn render_settings_modal(
         let text_primary = current_theme.text_primary();
         let text_secondary = current_theme.text_secondary();
 
-        egui::Window::new("⚙️  偏好設定")
+        egui::Window::new("⚙  偏好設定")
             .open(&mut open)
             .resizable(false)
             .collapsible(false)
@@ -51,7 +51,7 @@ pub fn render_settings_modal(
                 // 頂部標題與副標
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("⚙️ flash-md 偏好設定")
+                        RichText::new("⚙ flash-md 偏好設定")
                             .size(16.0_f32)
                             .strong()
                             .color(text_primary),
@@ -96,7 +96,7 @@ pub fn render_settings_modal(
                             let btn_light = cols[0].add_sized(
                                 [cols[0].available_width(), 32.0_f32],
                                 egui::Button::new(
-                                    RichText::new("☀️  亮色主題 (Light)")
+                                    RichText::new("☀  亮色主題 (Light)")
                                         .size(12.5_f32)
                                         .strong()
                                         .color(fg_light),

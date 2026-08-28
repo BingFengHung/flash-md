@@ -602,14 +602,14 @@ impl MdPreviewApp {
 
     pub fn toggle_edit_mode(&mut self) {
         if matches!(self.view_mode, ViewMode::Image { .. }) && self.content.is_empty() {
-            self.set_toast("ℹ️ 二進制圖片不支援文字編輯".to_string());
+            self.set_toast("ℹ 二進制圖片不支援文字編輯".to_string());
             return;
         }
         self.is_editing = !self.is_editing;
         if self.is_editing {
-            self.set_toast("✏️ 已進入全螢幕就地編輯模式 (Ctrl+S 保存，E 退出)".to_string());
+            self.set_toast("✏ 已進入全螢幕就地編輯模式 (Ctrl+S 保存，E 退出)".to_string());
         } else {
-            self.set_toast("👁️ 已切換至美化預覽模式".to_string());
+            self.set_toast("👁 已切換至美化預覽模式".to_string());
         }
     }
 
@@ -644,7 +644,7 @@ impl MdPreviewApp {
                 self.is_slides_fullscreen = false;
                 self.set_fullscreen_state(ctx, false);
             }
-            self.set_toast("👁️ 已退出簡報投影模式".to_string());
+            self.set_toast("👁 已退出簡報投影模式".to_string());
         }
     }
 
@@ -904,12 +904,12 @@ impl MdPreviewApp {
                     self.is_slides_fullscreen = false;
                     self.set_fullscreen_state(ctx, false);
                 }
-                self.set_toast("👁️ 已退出簡報投影模式".to_string());
+                self.set_toast("👁 已退出簡報投影模式".to_string());
             } else if self.settings_open {
                 self.settings_open = false;
             } else if self.is_editing {
                 self.is_editing = false;
-                self.set_toast("👁️ 已退出編輯模式，回到預覽".to_string());
+                self.set_toast("👁 已退出編輯模式，回到預覽".to_string());
             } else if self.search_open {
                 self.search_open = false;
                 self.search_query.clear();
@@ -1089,13 +1089,13 @@ impl MdPreviewApp {
                     self.current_slide_index = 0;
                     self.is_slides_fullscreen = true;
                     self.set_fullscreen_state(ctx, true);
-                    self.set_toast("📽️ 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
+                    self.set_toast("📽 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
                 } else {
                     if self.is_slides_fullscreen {
                         self.is_slides_fullscreen = false;
                         self.set_fullscreen_state(ctx, false);
                     }
-                    self.set_toast("👁️ 已退出簡報投影模式".to_string());
+                    self.set_toast("👁 已退出簡報投影模式".to_string());
                 }
             }
         }
@@ -1343,7 +1343,7 @@ impl MdPreviewApp {
             self.line_count = self.content.lines().count();
             self.set_toast("已完成 JSON 排版美化 ⚡".to_string());
         } else {
-            self.set_toast("JSON 格式無效或解析失敗 ⚠️".to_string());
+            self.set_toast("JSON 格式無效或解析失敗 ⚠".to_string());
         }
     }
 
@@ -1885,12 +1885,12 @@ impl eframe::App for MdPreviewApp {
                                         };
                                         (
                                             format!("{}{}  •  {} 行  •  {}", sibling_str, save_status, self.line_count, self.file_size_str),
-                                            format!("✏️ 就地編輯模式\n• 儲存狀態: {}\n• 總行數: {} 行\n• 保存模式: {}", if self.is_modified { "已修改未保存" } else { "已保存" }, self.line_count, match self.config.save_mode { SaveMode::Manual => "按 Ctrl+S 手動保存", SaveMode::AutoDebounce => "打字停止自動防抖保存" }),
+                                            format!("✏ 就地編輯模式\n• 儲存狀態: {}\n• 總行數: {} 行\n• 保存模式: {}", if self.is_modified { "已修改未保存" } else { "已保存" }, self.line_count, match self.config.save_mode { SaveMode::Manual => "按 Ctrl+S 手動保存", SaveMode::AutoDebounce => "打字停止自動防抖保存" }),
                                         )
                                     } else if let ViewMode::Image { ref format } = self.view_mode {
                                         (
                                             format!("{}{format_upper}  •  {}  •  {}", sibling_str, self.file_size_str, self.last_modified_str, format_upper = format.to_uppercase()),
-                                            format!("🖼️ 圖片資訊\n• 格式: {}\n• 檔案大小: {}\n• 修改時間: {}", format.to_uppercase(), self.file_size_str, self.last_modified_str),
+                                            format!("🖼 圖片資訊\n• 格式: {}\n• 檔案大小: {}\n• 修改時間: {}", format.to_uppercase(), self.file_size_str, self.last_modified_str),
                                         )
                                     } else if matches!(self.view_mode, ViewMode::Markdown) {
                                         let stats = calculate_text_stats(&self.content);
@@ -1902,7 +1902,7 @@ impl eframe::App for MdPreviewApp {
                                             format!("{} 詞", stats.words)
                                         };
                                         (
-                                            format!("{}{} 行  •  {}  •  ⏱️ {} 分鐘  •  {}  •  {}", sibling_str, self.line_count, words_str, stats.reading_time_mins, self.file_size_str, self.last_modified_str),
+                                            format!("{}{} 行  •  {}  •  ⏱ {} 分鐘  •  {}  •  {}", sibling_str, self.line_count, words_str, stats.reading_time_mins, self.file_size_str, self.last_modified_str),
                                             format!("📊 文本統計資訊\n• 總行數: {} 行\n• 中文字數 (CJK): {} 字\n• 英文字數 (Words): {} 詞\n• 總字元數 (不含空白): {} 字元\n• 預估閱讀時間: 約 {} 分鐘 (中速 350 字/分)\n• 檔案大小: {}\n• 修改時間: {}", self.line_count, stats.cjk_chars, stats.words, stats.total_chars, stats.reading_time_mins, self.file_size_str, self.last_modified_str),
                                         )
                                     } else {
@@ -1929,7 +1929,7 @@ impl eframe::App for MdPreviewApp {
                     ui.spacing_mut().item_spacing.x = 5.0;
 
                     // 就地編輯模式切換按鈕
-                    let edit_btn_label = if self.is_editing { "👁️ 預覽" } else { "✏️ 編輯" };
+                    let edit_btn_label = if self.is_editing { "👁 預覽" } else { "✏ 編輯" };
                     let edit_btn_tip = if self.is_editing {
                         "切換回美化預覽模式 (E 或 Esc)"
                     } else {
@@ -1972,19 +1972,19 @@ impl eframe::App for MdPreviewApp {
 
                     // Markdown 簡報投影模式切換按鈕
                     if matches!(self.view_mode, ViewMode::Markdown) && !self.is_editing {
-                        if render_nav_button(ui, self.theme, "📽️ 簡報", self.is_slides_mode, "切換全螢幕簡報投影模式 (F5 或 P)").clicked() {
+                        if render_nav_button(ui, self.theme, "📽 簡報", self.is_slides_mode, "切換全螢幕簡報投影模式 (F5 或 P)").clicked() {
                             self.is_slides_mode = !self.is_slides_mode;
                             if self.is_slides_mode {
                                 self.current_slide_index = 0;
                                 self.is_slides_fullscreen = true;
                                 self.set_fullscreen_state(ctx, true);
-                                self.set_toast("📽️ 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
+                                self.set_toast("📽 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
                             } else {
                                 if self.is_slides_fullscreen {
                                     self.is_slides_fullscreen = false;
                                     self.set_fullscreen_state(ctx, false);
                                 }
-                                self.set_toast("👁️ 已退出簡報投影模式".to_string());
+                                self.set_toast("👁 已退出簡報投影模式".to_string());
                             }
                         }
                     }
@@ -2074,7 +2074,7 @@ impl eframe::App for MdPreviewApp {
                         }
 
                         // 偏好設定按鈕
-                        if render_nav_button(ui, self.theme, "⚙️ 設定", self.settings_open, "偏好設定 (亮/暗色主題、自動防抖保存、字型縮放)").clicked() {
+                        if render_nav_button(ui, self.theme, "⚙ 設定", self.settings_open, "偏好設定 (亮/暗色主題、自動防抖保存、字型縮放)").clicked() {
                             self.settings_open = !self.settings_open;
                         }
 

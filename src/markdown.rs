@@ -690,8 +690,13 @@ impl<'a> RenderContext<'a> {
         } else if self.in_code_block {
             self.code_block_content.push_str(text);
         } else {
+            let clean_text = if text.contains('\u{FE0F}') || text.contains('\u{FE0E}') {
+                text.chars().filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}').collect()
+            } else {
+                text.to_string()
+            };
             self.inlines.push(InlineSpan {
-                text: text.to_string(),
+                text: clean_text,
                 bold: self.current_bold,
                 italic: self.current_italic,
                 strikethrough: self.current_strikethrough,
@@ -796,7 +801,7 @@ impl<'a> RenderContext<'a> {
                 } else {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("🖼️ [圖片找不到]")
+                            RichText::new("🖼 [圖片找不到]")
                                 .color(self.theme.text_secondary())
                                 .italics(),
                         );
@@ -832,8 +837,13 @@ impl<'a> RenderContext<'a> {
                 if self.in_code_block {
                     self.code_block_content.push_str(&code);
                 } else {
+                    let clean_code = if code.contains('\u{FE0F}') || code.contains('\u{FE0E}') {
+                        code.chars().filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}').collect()
+                    } else {
+                        code.to_string()
+                    };
                     self.inlines.push(InlineSpan {
-                        text: code.to_string(),
+                        text: clean_code,
                         bold: self.current_bold,
                         italic: self.current_italic,
                         strikethrough: self.current_strikethrough,
@@ -1170,6 +1180,11 @@ impl<'a> RenderContext<'a> {
         }
 
         let heading_text: String = self.inlines.drain(..).map(|s| s.text).collect();
+        let clean_heading = if heading_text.contains('\u{FE0F}') || heading_text.contains('\u{FE0E}') {
+            heading_text.chars().filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}').collect()
+        } else {
+            heading_text
+        };
         let (size, is_h1_or_h2) = match level {
             HeadingLevel::H1 => (26.0 * self.font_scale, true),
             HeadingLevel::H2 => (21.0 * self.font_scale, true),
@@ -1189,7 +1204,7 @@ impl<'a> RenderContext<'a> {
         };
         append_highlighted_text(
             &mut job,
-            &heading_text,
+            &clean_heading,
             self.search_query,
             base_fmt,
             hl_bg,
@@ -1926,16 +1941,16 @@ pub fn is_image_extension(ext: &str) -> bool {
 /// 取得圖片類型的美觀顯示名稱與 Emoji 徽章
 pub fn get_image_badge(ext: &str) -> (String, &'static str) {
     match ext.to_lowercase().as_str() {
-        "png" => ("PNG 圖片".to_string(), "🖼️"),
+        "png" => ("PNG 圖片".to_string(), "🖼"),
         "jpg" | "jpeg" => ("JPEG 圖片".to_string(), "📷"),
         "svg" => ("SVG 向量圖".to_string(), "🎨"),
         "gif" => ("GIF 動態圖".to_string(), "🎬"),
         "webp" => ("WEBP 圖片".to_string(), "🌐"),
         "ico" => ("ICO 圖示".to_string(), "💠"),
-        "bmp" => ("BMP 點陣圖".to_string(), "🖼️"),
+        "bmp" => ("BMP 點陣圖".to_string(), "🖼"),
         "tiff" | "tif" => ("TIFF 圖片".to_string(), "📸"),
         "avif" => ("AVIF 圖片".to_string(), "🌟"),
-        _ => (format!("{} 圖片", ext.to_uppercase()), "🖼️"),
+        _ => (format!("{} 圖片", ext.to_uppercase()), "🖼"),
     }
 }
 
@@ -1962,11 +1977,11 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
         "rs" => ("Rust".to_string(), "🦀"),
         "py" => ("Python".to_string(), "🐍"),
         "js" | "mjs" | "cjs" => ("JavaScript".to_string(), "⚡"),
-        "jsx" => ("React JSX".to_string(), "⚛️"),
+        "jsx" => ("React JSX".to_string(), "⚛"),
         "ts" => ("TypeScript".to_string(), "🔷"),
-        "tsx" => ("React TSX".to_string(), "⚛️"),
+        "tsx" => ("React TSX".to_string(), "⚛"),
         "json" | "json5" | "jsonc" => ("JSON".to_string(), "📦"),
-        "toml" => ("TOML".to_string(), "⚙️"),
+        "toml" => ("TOML".to_string(), "⚙"),
         "yaml" | "yml" => ("YAML".to_string(), "📄"),
         "csv" => ("CSV 表格".to_string(), "📊"),
         "tsv" => ("TSV 表格".to_string(), "📊"),
@@ -1979,7 +1994,7 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
         "html" | "htm" | "xhtml" => ("HTML".to_string(), "🌐"),
         "css" => ("CSS".to_string(), "🎨"),
         "scss" | "sass" => ("SCSS".to_string(), "🎨"),
-        "sql" => ("SQL".to_string(), "🗄️"),
+        "sql" => ("SQL".to_string(), "🗄"),
         "sh" | "bash" | "zsh" | "fish" => ("Shell".to_string(), "🐚"),
         "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" | "ps" => ("PowerShell".to_string(), "💻"),
         "bat" | "cmd" => ("Batch".to_string(), "📜"),
@@ -1993,7 +2008,7 @@ pub fn get_language_badge(ext: &str) -> (String, &'static str) {
         "svelte" => ("Svelte".to_string(), "🧡"),
         "dockerfile" => ("Dockerfile".to_string(), "🐳"),
         "graphql" | "gql" => ("GraphQL".to_string(), "🔺"),
-        "ini" | "conf" | "env" => ("Config".to_string(), "⚙️"),
+        "ini" | "conf" | "env" => ("Config".to_string(), "⚙"),
         "diff" | "patch" => ("Diff".to_string(), "🔄"),
         "log" => ("Log 記錄".to_string(), "📋"),
         "zig" => ("Zig".to_string(), "⚡"),
@@ -2364,7 +2379,7 @@ pub fn extract_text_from_pdf_bytes(bytes: &[u8]) -> Result<(String, usize), Stri
 
     if pages_text.is_empty() {
         Ok((
-            format!("### 📄 PDF 快速預覽 (共 {} 頁)\n\n> ⚠️ 此 PDF 文件的頁面可能為純掃描圖檔或加密內容，未包含可提取的內嵌文字字串。", total_pages),
+            format!("### 📄 PDF 快速預覽 (共 {} 頁)\n\n> ⚠ 此 PDF 文件的頁面可能為純掃描圖檔或加密內容，未包含可提取的內嵌文字字串。", total_pages),
             total_pages,
         ))
     } else {
@@ -2443,7 +2458,7 @@ pub fn calculate_text_stats(text: &str) -> TextStats {
 /// 將 Markdown 內容依照投影片分隔線 (`---` 或 `***` 或 `___`) 解析為獨立簡報頁面
 pub fn extract_slides(content: &str) -> Vec<String> {
     if content.trim().is_empty() {
-        return vec!["# 📽️ 簡報模式\n\n此文件暫無內容。".to_string()];
+        return vec!["# 📽 簡報模式\n\n此文件暫無內容。".to_string()];
     }
 
     let lines: Vec<&str> = content.lines().collect();
