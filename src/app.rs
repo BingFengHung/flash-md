@@ -1924,8 +1924,8 @@ impl eframe::App for MdPreviewApp {
 
                 ui.add_space(5.0);
 
-                // 第二階：現代精緻功能工具按鈕列
-                ui.horizontal(|ui| {
+                // 第二階：現代精緻功能工具按鈕列 (垂直精準置中對齊)
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
 
                     // 就地編輯模式切換按鈕

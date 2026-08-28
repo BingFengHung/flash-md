@@ -125,7 +125,24 @@ impl AppTheme {
 pub fn setup_system_cjk_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
-    // 候選字型列表 (優先尋找微軟正黑體、微軟雅黑、思源黑體等)
+    // 1. 優先載入 Windows 系統 Segoe UI Emoji 字型 (保證 Emoji 具備正確比例、大小與間距，避免被 CJK 全形字元占用多餘空白)
+    let mut loaded_emoji = false;
+    if let Ok(emoji_bytes) = std::fs::read(r"C:\Windows\Fonts\seguiemj.ttf") {
+        info!("成功載入 Windows Segoe UI Emoji 字型");
+        fonts.font_data.insert(
+            "segoe_emoji".to_owned(),
+            FontData::from_owned(emoji_bytes),
+        );
+        if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
+            prop.insert(0, "segoe_emoji".to_owned());
+        }
+        if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
+            mono.insert(0, "segoe_emoji".to_owned());
+        }
+        loaded_emoji = true;
+    }
+
+    // 2. 候選字型列表 (優先尋找微軟正黑體、微軟雅黑、思源黑體等)
     let cjk_font_paths = [
         r"C:\Windows\Fonts\msjh.ttc",   // 微軟正黑體 (Traditional Chinese)
         r"C:\Windows\Fonts\msjhl.ttc",  // 微軟正黑體 Light
@@ -142,12 +159,13 @@ pub fn setup_system_cjk_fonts(ctx: &egui::Context) {
                 FontData::from_owned(bytes),
             );
 
-            // 將中文字型加入 Proportional 與 Monospace 家族首位
+            // 將中文字型緊接在 Emoji 之後 (若有 Emoji 則在第 1 位，若無則在第 0 位)
+            let insert_pos = if loaded_emoji { 1 } else { 0 };
             if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
-                prop.insert(0, "windows_cjk".to_owned());
+                prop.insert(insert_pos, "windows_cjk".to_owned());
             }
             if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
-                mono.push("windows_cjk".to_owned());
+                mono.insert(insert_pos, "windows_cjk".to_owned());
             }
             loaded_cjk = true;
             break;
@@ -156,21 +174,6 @@ pub fn setup_system_cjk_fonts(ctx: &egui::Context) {
 
     if !loaded_cjk {
         warn!("未能在系統目錄中找到 Windows CJK 字型檔案！");
-    }
-
-    // 載入 Windows 系統 Segoe UI Emoji 字型
-    if let Ok(emoji_bytes) = std::fs::read(r"C:\Windows\Fonts\seguiemj.ttf") {
-        info!("成功載入 Windows Segoe UI Emoji 字型");
-        fonts.font_data.insert(
-            "segoe_emoji".to_owned(),
-            FontData::from_owned(emoji_bytes),
-        );
-        if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
-            prop.push("segoe_emoji".to_owned());
-        }
-        if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
-            mono.push("segoe_emoji".to_owned());
-        }
     }
 
     ctx.set_fonts(fonts);

@@ -28,9 +28,10 @@ pub fn render_nav_button(
 
     let btn = egui::Button::new(
         RichText::new(label)
-            .size(11.5_f32)
+            .size(12.0_f32)
             .color(text_color),
     )
+    .min_size(egui::vec2(0.0_f32, 24.0_f32))
     .fill(bg)
     .stroke(Stroke::new(1.0_f32, border))
     .rounding(Rounding::same(5.0_f32));
