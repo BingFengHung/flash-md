@@ -1217,7 +1217,7 @@ impl<'a> RenderContext<'a> {
         let heading_resp = ui.label(job);
 
         if let Some(target) = self.target_anchor {
-            if is_anchor_match(&heading_text, target) {
+            if is_anchor_match(&clean_heading, target) {
                 heading_resp.scroll_to_me(Some(egui::Align::TOP));
             }
         }
