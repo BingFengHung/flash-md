@@ -25,7 +25,26 @@ pub fn highlight_markdown_for_editor(
     let accent_color = theme.accent_color();
     let code_bg = theme.code_bg_color();
 
+    let mut line_count = 0;
+    const MAX_EDITOR_HIGHLIGHT_LINES: usize = 3500;
+
     for line in text.split_inclusive('\n') {
+        line_count += 1;
+        if line_count > MAX_EDITOR_HIGHLIGHT_LINES {
+            job.append(
+                line,
+                0.0_f32,
+                egui::TextFormat {
+                    font_id: normal_font.clone(),
+                    color: text_primary,
+                    line_height,
+                    valign: egui::Align::BOTTOM,
+                    ..Default::default()
+                },
+            );
+            continue;
+        }
+
         let trimmed = line.trim_start();
         if trimmed.starts_with('#') {
             // 標題行 (# 標題)

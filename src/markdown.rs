@@ -1776,18 +1776,19 @@ pub fn render_code_viewer(
         theme as u8,
     ));
 
-    let (gutter_job, code_job, line_count, is_large_file) = ui.ctx().data_mut(|d| {
-        if let Some(cached) = d.get_temp::<(LayoutJob, LayoutJob, usize, bool)>(cache_id) {
+    let (gutter_job, code_job, total_line_count, displayed_line_count, is_truncated) = ui.ctx().data_mut(|d| {
+        if let Some(cached) = d.get_temp::<(LayoutJob, LayoutJob, usize, usize, bool)>(cache_id) {
             cached.clone()
         } else {
             let mut highlighter = HighlightLines::new(syntax, syntect_theme);
             let mut gutter_job = LayoutJob::default();
             let mut code_job = LayoutJob::default();
-            let mut line_count = 0;
+            let mut total_lines = 0;
+            let mut displayed_lines = 0;
             let mut match_counter = 0;
             const MAX_HIGHLIGHT_LINES: usize = 3500;
-            const MAX_LINE_CHAR_LIMIT: usize = 2500;
-            let mut is_large = false;
+            const MAX_TOTAL_RENDER_LINES: usize = 5000;
+            const MAX_LINE_CHAR_LIMIT: usize = 2000;
 
             let default_text_color = match theme {
                 AppTheme::Dark => Color32::from_rgb(226, 232, 240),
@@ -1795,55 +1796,57 @@ pub fn render_code_viewer(
             };
 
             for line in syntect::util::LinesWithEndings::from(code) {
-                line_count += 1;
+                total_lines += 1;
 
-                if line_count <= MAX_HIGHLIGHT_LINES {
-                    // 超長單行截斷防護 (例如未排版的單行 minified JSON)，避免正則回溯卡頓
-                    let (highlight_chunk, remaining_chunk) = if line.len() > MAX_LINE_CHAR_LIMIT {
-                        is_large = true;
+                if displayed_lines < MAX_TOTAL_RENDER_LINES {
+                    displayed_lines += 1;
+
+                    // 超長單行截斷防護 (例如未排版的單行 minified bundle)
+                    let (highlight_chunk, is_line_truncated) = if line.len() > MAX_LINE_CHAR_LIMIT {
                         let boundary = line
                             .char_indices()
                             .nth(MAX_LINE_CHAR_LIMIT)
                             .map(|(idx, _)| idx)
                             .unwrap_or(line.len());
-                        (&line[..boundary], Some(&line[boundary..]))
+                        (&line[..boundary], true)
                     } else {
-                        (line, None)
+                        (line, false)
                     };
 
-                    let ranges = highlighter
-                        .highlight_line(highlight_chunk, syntax_set)
-                        .unwrap_or_default();
+                    if displayed_lines <= MAX_HIGHLIGHT_LINES {
+                        let ranges = highlighter
+                            .highlight_line(highlight_chunk, syntax_set)
+                            .unwrap_or_default();
 
-                    for (style, text) in ranges {
-                        let color = Color32::from_rgb(
-                            style.foreground.r,
-                            style.foreground.g,
-                            style.foreground.b,
-                        );
+                        for (style, text) in ranges {
+                            let color = Color32::from_rgb(
+                                style.foreground.r,
+                                style.foreground.g,
+                                style.foreground.b,
+                            );
 
-                        let base_fmt = egui::TextFormat {
-                            font_id: font_id.clone(),
-                            color,
-                            line_height: Some(21.0 * font_scale),
-                            ..Default::default()
-                        };
+                            let base_fmt = egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color,
+                                line_height: Some(21.0 * font_scale),
+                                ..Default::default()
+                            };
 
-                        append_highlighted_text(
-                            &mut code_job,
-                            text,
-                            search_query,
-                            base_fmt,
-                            hl_bg,
-                            hl_fg,
-                            act_bg,
-                            act_fg,
-                            active_match_index,
-                            &mut match_counter,
-                        );
-                    }
-
-                    if let Some(rest) = remaining_chunk {
+                            append_highlighted_text(
+                                &mut code_job,
+                                text,
+                                search_query,
+                                base_fmt,
+                                hl_bg,
+                                hl_fg,
+                                act_bg,
+                                act_fg,
+                                active_match_index,
+                                &mut match_counter,
+                            );
+                        }
+                    } else {
+                        // 3,501 ~ 5,000 行：極速純文字格式化，免除 syntect 正則狀態機消耗
                         let base_fmt = egui::TextFormat {
                             font_id: font_id.clone(),
                             color: default_text_color,
@@ -1852,7 +1855,7 @@ pub fn render_code_viewer(
                         };
                         append_highlighted_text(
                             &mut code_job,
-                            rest,
+                            highlight_chunk,
                             search_query,
                             base_fmt,
                             hl_bg,
@@ -1863,32 +1866,21 @@ pub fn render_code_viewer(
                             &mut match_counter,
                         );
                     }
-                } else {
-                    is_large = true;
-                    // 超過 3,500 行的超大型檔案，採用極速純文字格式化，免除 syntect 正則狀態機消耗
-                    let base_fmt = egui::TextFormat {
-                        font_id: font_id.clone(),
-                        color: default_text_color,
-                        line_height: Some(21.0 * font_scale),
-                        ..Default::default()
-                    };
-                    append_highlighted_text(
-                        &mut code_job,
-                        line,
-                        search_query,
-                        base_fmt,
-                        hl_bg,
-                        hl_fg,
-                        act_bg,
-                        act_fg,
-                        active_match_index,
-                        &mut match_counter,
-                    );
+
+                    if is_line_truncated {
+                        let base_fmt = egui::TextFormat {
+                            font_id: font_id.clone(),
+                            color: theme.text_secondary(),
+                            line_height: Some(21.0 * font_scale),
+                            ..Default::default()
+                        };
+                        code_job.append(" ... [單行過長已截斷]\n", 0.0, base_fmt);
+                    }
                 }
             }
 
-            let gutter_digits = format!("{}", line_count.max(1)).len().max(2);
-            for i in 0..line_count {
+            let gutter_digits = format!("{}", displayed_lines.max(1)).len().max(2);
+            for i in 0..displayed_lines {
                 let line_num_str = format!("{:>width$}\n", i + 1, width = gutter_digits);
                 gutter_job.append(
                     &line_num_str,
@@ -1902,7 +1894,8 @@ pub fn render_code_viewer(
                 );
             }
 
-            let result = (gutter_job, code_job, line_count, is_large);
+            let is_truncated = total_lines > displayed_lines;
+            let result = (gutter_job, code_job, total_lines, displayed_lines, is_truncated);
             d.insert_temp(cache_id, result.clone());
             result
         }
@@ -1924,19 +1917,24 @@ pub fn render_code_viewer(
                         .color(theme.accent_color())
                         .strong(),
                 );
+                let line_desc = if is_truncated {
+                    format!("•  {} 行 (已預覽前 {} 行)", total_line_count, displayed_line_count)
+                } else {
+                    format!("•  {} 行", total_line_count)
+                };
                 ui.label(
-                    RichText::new(format!("•  {} 行", line_count))
+                    RichText::new(line_desc)
                         .size(11.0 * font_scale)
                         .color(theme.text_secondary()),
                 );
-                if is_large_file {
+                if displayed_line_count > 3500 || is_truncated {
                     Frame::none()
                         .fill(theme.code_bg_color())
                         .rounding(Rounding::same(3.0))
                         .inner_margin(Margin::symmetric(5.0, 1.0))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new("⚡ 極速模式 (3,500+ 行加速)")
+                                RichText::new("⚡ 大檔極速防護模式")
                                     .size(10.0 * font_scale)
                                     .color(theme.accent_color()),
                             );
@@ -1952,12 +1950,12 @@ pub fn render_code_viewer(
                     });
 
                     let btn_text = if is_copied {
-                        RichText::new("✓ 已複製")
+                        RichText::new("✓ 已複製完整代碼")
                             .color(Color32::from_rgb(34, 197, 94))
                             .size(11.5 * font_scale)
                             .strong()
                     } else {
-                        RichText::new("📋 複製程式碼")
+                        RichText::new("📋 複製完整代碼")
                             .color(theme.text_secondary())
                             .size(11.5 * font_scale)
                     };
@@ -1983,7 +1981,7 @@ pub fn render_code_viewer(
 
                 // 分隔垂直線
                 ui.add_space(8.0);
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, (line_count as f32) * 21.0 * font_scale), egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, (displayed_line_count as f32) * 21.0 * font_scale), egui::Sense::hover());
                 ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0_f32, border_color));
                 ui.add_space(8.0);
 
@@ -1992,6 +1990,27 @@ pub fn render_code_viewer(
                     ui.label(code_job);
                 });
             });
+
+            if is_truncated {
+                ui.add_space(10.0);
+                Frame::none()
+                    .fill(theme.code_bg_color())
+                    .rounding(Rounding::same(6.0))
+                    .stroke(Stroke::new(1.0_f32, theme.accent_color().gamma_multiply(0.4)))
+                    .inner_margin(Margin::symmetric(14.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "⚡ 檔案較大（共 {} 行），已為您極速安全預覽前 {} 行以維持 60 FPS 順暢體驗。點擊右上角「複製完整代碼」可提取完整內容。",
+                                    total_line_count, displayed_line_count
+                                ))
+                                .color(theme.accent_color())
+                                .size(11.5 * font_scale),
+                            );
+                        });
+                    });
+            }
         });
 }
 
@@ -2726,6 +2745,18 @@ Thank you!
         );
         assert_eq!(match_counter, 2);
         assert_eq!(job.text, "測試繁體中文與 English text 一同高亮搜尋測試");
+    }
+
+    #[test]
+    fn test_large_file_code_viewer_safety() {
+        // 模擬 10,000 行超大程式碼
+        let mut large_code = String::new();
+        for i in 0..10_000 {
+            large_code.push_str(&format!("const line_{} = 'value_{}';\n", i, i));
+        }
+
+        let lines_count = syntect::util::LinesWithEndings::from(&large_code).count();
+        assert_eq!(lines_count, 10_000);
     }
 }
 

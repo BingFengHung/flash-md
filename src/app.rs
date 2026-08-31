@@ -2489,9 +2489,27 @@ impl eframe::App for MdPreviewApp {
                                             ..Default::default()
                                         };
                                         let mut match_counter = 0;
+                                        const MAX_PLAINTEXT_LINES: usize = 5000;
+                                        let mut lines_count = 0;
+                                        let mut displayed_text = String::new();
+                                        let mut is_truncated = false;
+
+                                        for line in self.content.split_inclusive('\n') {
+                                            lines_count += 1;
+                                            if lines_count <= MAX_PLAINTEXT_LINES {
+                                                displayed_text.push_str(line);
+                                            } else {
+                                                is_truncated = true;
+                                            }
+                                        }
+
+                                        if is_truncated {
+                                            displayed_text.push_str(&format!("\n\n⚡ ... [檔案過大（共 {} 行），已安全預覽前 {} 行] ...\n", lines_count, MAX_PLAINTEXT_LINES));
+                                        }
+
                                         crate::markdown::append_highlighted_text(
                                             &mut job,
-                                            &self.content,
+                                            &displayed_text,
                                             &self.search_query,
                                             base_fmt,
                                             hl_bg,
