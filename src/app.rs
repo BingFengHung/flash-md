@@ -392,9 +392,9 @@ impl MdPreviewApp {
                     self.view_mode = ViewMode::PlainText;
                 }
 
-                self.line_count = text.lines().count();
-                self.content = text.clone();
-                self.original_content = text;
+                self.line_count = text.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1;
+                self.content = text;
+                self.original_content = self.content.clone();
                 self.current_file = Some(path.to_path_buf());
 
                 if let Ok(metadata) = fs::metadata(path) {
