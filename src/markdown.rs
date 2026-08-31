@@ -1043,8 +1043,13 @@ impl<'a> RenderContext<'a> {
         let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
         let has_hyperlinks = spans.iter().any(|s| s.link_url.is_some());
+        let has_emojis = spans.iter().any(|s| {
+            crate::emoji::split_text_emojis(&s.text)
+                .iter()
+                .any(|seg| matches!(seg, crate::emoji::TextOrEmoji::Emoji(..)))
+        });
 
-        if !has_hyperlinks {
+        if !has_hyperlinks && !has_emojis {
             let mut job = LayoutJob::default();
             for (idx, span) in spans.into_iter().enumerate() {
                 let color = if is_list_item && idx == 0 {
@@ -1089,7 +1094,6 @@ impl<'a> RenderContext<'a> {
                 ui.spacing_mut().item_spacing.x = 0.0_f32;
 
                 for (idx, span) in spans.into_iter().enumerate() {
-                    let mut span_job = LayoutJob::default();
                     let is_link = span.link_url.is_some();
 
                     let color = if is_list_item && idx == 0 {
@@ -1124,34 +1128,55 @@ impl<'a> RenderContext<'a> {
                         ..Default::default()
                     };
 
-                    append_highlighted_text(
-                        &mut span_job,
-                        &span.text,
-                        self.search_query,
-                        base_fmt,
-                        hl_bg,
-                        hl_fg,
-                        act_bg,
-                        act_fg,
-                        self.active_match_index,
-                        &mut self.match_counter,
-                    );
+                    let segments = crate::emoji::split_text_emojis(&span.text);
+                    for seg in segments {
+                        match seg {
+                            crate::emoji::TextOrEmoji::Emoji(em, svg_str) => {
+                                let img_uri = format!("bytes://emoji_{}.svg", em);
+                                let img_size = 17.0_f32 * self.font_scale;
+                                ui.add_space(2.0_f32);
+                                ui.add(
+                                    egui::Image::from_bytes(img_uri, svg_str.as_bytes())
+                                        .fit_to_exact_size(Vec2::splat(img_size)),
+                                );
+                                ui.add_space(3.0_f32);
+                            }
+                            crate::emoji::TextOrEmoji::Text(t) => {
+                                if t.is_empty() {
+                                    continue;
+                                }
+                                let mut span_job = LayoutJob::default();
+                                append_highlighted_text(
+                                    &mut span_job,
+                                    t,
+                                    self.search_query,
+                                    base_fmt.clone(),
+                                    hl_bg,
+                                    hl_fg,
+                                    act_bg,
+                                    act_fg,
+                                    self.active_match_index,
+                                    &mut self.match_counter,
+                                );
 
-                    if let Some(ref url) = span.link_url {
-                        let resp = ui.add(egui::Label::new(span_job).sense(egui::Sense::click()));
-                        if resp.hovered() {
-                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                        }
-                        if resp.clicked() {
-                            if url.starts_with('#') {
-                                self.clicked_anchor = Some(url.trim_start_matches('#').to_string());
-                            } else {
-                                let _ = open::that(url);
+                                if let Some(ref url) = span.link_url {
+                                    let resp = ui.add(egui::Label::new(span_job).sense(egui::Sense::click()));
+                                    if resp.hovered() {
+                                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                                    }
+                                    if resp.clicked() {
+                                        if url.starts_with('#') {
+                                            self.clicked_anchor = Some(url.trim_start_matches('#').to_string());
+                                        } else {
+                                            let _ = open::that(url);
+                                        }
+                                    }
+                                    resp.on_hover_text(url);
+                                } else {
+                                    ui.label(span_job);
+                                }
                             }
                         }
-                        resp.on_hover_text(url);
-                    } else {
-                        ui.label(span_job);
                     }
                 }
             });
@@ -1180,25 +1205,65 @@ impl<'a> RenderContext<'a> {
 
         let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
-        let mut job = LayoutJob::default();
         let base_fmt = egui::TextFormat {
             font_id: FontId::proportional(size),
             color: self.theme.text_primary(),
+            valign: egui::Align::BOTTOM,
             ..Default::default()
         };
-        append_highlighted_text(
-            &mut job,
-            &clean_heading,
-            self.search_query,
-            base_fmt,
-            hl_bg,
-            hl_fg,
-            act_bg,
-            act_fg,
-            self.active_match_index,
-            &mut self.match_counter,
-        );
-        let heading_resp = ui.label(job);
+
+        let segments = crate::emoji::split_text_emojis(&clean_heading);
+        let has_emojis = segments.iter().any(|s| matches!(s, crate::emoji::TextOrEmoji::Emoji(..)));
+
+        let heading_resp = if has_emojis {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0_f32;
+                for seg in segments {
+                    match seg {
+                        crate::emoji::TextOrEmoji::Emoji(em, svg_str) => {
+                            let img_uri = format!("bytes://emoji_{}.svg", em);
+                            let em_size = size * 0.92_f32;
+                            ui.add(
+                                egui::Image::from_bytes(img_uri, svg_str.as_bytes())
+                                    .fit_to_exact_size(Vec2::splat(em_size)),
+                            );
+                            ui.add_space(3.0_f32);
+                        }
+                        crate::emoji::TextOrEmoji::Text(t) => {
+                            let mut job = LayoutJob::default();
+                            append_highlighted_text(
+                                &mut job,
+                                t,
+                                self.search_query,
+                                base_fmt.clone(),
+                                hl_bg,
+                                hl_fg,
+                                act_bg,
+                                act_fg,
+                                self.active_match_index,
+                                &mut self.match_counter,
+                            );
+                            ui.label(job);
+                        }
+                    }
+                }
+            }).response
+        } else {
+            let mut job = LayoutJob::default();
+            append_highlighted_text(
+                &mut job,
+                &clean_heading,
+                self.search_query,
+                base_fmt,
+                hl_bg,
+                hl_fg,
+                act_bg,
+                act_fg,
+                self.active_match_index,
+                &mut self.match_counter,
+            );
+            ui.label(job)
+        };
 
         if let Some(target) = self.target_anchor {
             if is_anchor_match(&clean_heading, target) {
