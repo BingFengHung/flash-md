@@ -121,11 +121,35 @@ impl AppTheme {
     }
 }
 
-/// 載入 Windows 繁體中文與系統 Emoji 字型，徹底解決中文方塊 (Tofu) 與 Emoji 缺字問題
+/// 載入 Windows 繁體中文、等寬編程字型與系統 Emoji 字型，徹底解決中文方塊 (Tofu)、Emoji 與等寬代碼排版問題
 pub fn setup_system_cjk_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
-    // 1. 優先載入 Windows 系統 Segoe UI Emoji 字型 (保證 Emoji 具備正確比例、大小與間距，避免被 CJK 全形字元占用多餘空白)
+    // 1. 優先為 Monospace 載入 Windows 原生等寬編程字型 (Consolas / Cascadia Mono / Cascadia Code)
+    let mono_font_paths = [
+        r"C:\Windows\Fonts\consola.ttf",      // Consolas (Windows 標準極致清晰等寬編程字型)
+        r"C:\Windows\Fonts\CascadiaMono.ttf", // Cascadia Mono
+        r"C:\Windows\Fonts\CascadiaCode.ttf", // Cascadia Code
+        r"C:\Windows\Fonts\cour.ttf",         // Courier New
+    ];
+
+    let mut loaded_mono = false;
+    for path in mono_font_paths {
+        if let Ok(bytes) = std::fs::read(path) {
+            info!("成功載入 Windows Monospace 系統字型: {}", path);
+            fonts.font_data.insert(
+                "windows_mono".to_owned(),
+                FontData::from_owned(bytes),
+            );
+            if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
+                mono.insert(0, "windows_mono".to_owned());
+            }
+            loaded_mono = true;
+            break;
+        }
+    }
+
+    // 2. 載入 Windows 系統 Segoe UI Emoji 字型 (保證 Emoji 具備正確比例與大小)
     let mut loaded_emoji = false;
     if let Ok(emoji_bytes) = std::fs::read(r"C:\Windows\Fonts\seguiemj.ttf") {
         info!("成功載入 Windows Segoe UI Emoji 字型");
@@ -137,12 +161,13 @@ pub fn setup_system_cjk_fonts(ctx: &egui::Context) {
             prop.insert(0, "segoe_emoji".to_owned());
         }
         if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
-            mono.insert(0, "segoe_emoji".to_owned());
+            let mono_pos = if loaded_mono { 1 } else { 0 };
+            mono.insert(mono_pos, "segoe_emoji".to_owned());
         }
         loaded_emoji = true;
     }
 
-    // 2. 候選字型列表 (優先尋找微軟正黑體、微軟雅黑、思源黑體等)
+    // 3. 候選中文字型列表 (優先尋找微軟正黑體、微軟雅黑、思源黑體等)
     let cjk_font_paths = [
         r"C:\Windows\Fonts\msjh.ttc",   // 微軟正黑體 (Traditional Chinese)
         r"C:\Windows\Fonts\msjhl.ttc",  // 微軟正黑體 Light
@@ -159,13 +184,16 @@ pub fn setup_system_cjk_fonts(ctx: &egui::Context) {
                 FontData::from_owned(bytes),
             );
 
-            // 將中文字型緊接在 Emoji 之後 (若有 Emoji 則在第 1 位，若無則在第 0 位)
-            let insert_pos = if loaded_emoji { 1 } else { 0 };
+            // Proportional: [segoe_emoji, windows_cjk, ...]
+            let prop_pos = if loaded_emoji { 1 } else { 0 };
             if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
-                prop.insert(insert_pos, "windows_cjk".to_owned());
+                prop.insert(prop_pos, "windows_cjk".to_owned());
             }
+
+            // Monospace: [windows_mono, segoe_emoji, windows_cjk, ...]
+            let mono_pos = (if loaded_mono { 1 } else { 0 }) + (if loaded_emoji { 1 } else { 0 });
             if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
-                mono.insert(insert_pos, "windows_cjk".to_owned());
+                mono.insert(mono_pos, "windows_cjk".to_owned());
             }
             loaded_cjk = true;
             break;
