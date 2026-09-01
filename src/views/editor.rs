@@ -6,7 +6,7 @@ pub struct EditorOutput {
     pub new_line_count: usize,
 }
 
-/// 針對編輯器進行 Markdown 輕量語法著色與寬敞行距優化 (徹底解決字句黏在一起的問題)
+/// 針對編輯器進行 Markdown 輕量語法著色與寬敞行距優化 (徹底解決水平基準線偏差與文字黏在一起的問題)
 pub fn highlight_markdown_for_editor(
     text: &str,
     theme: AppTheme,
@@ -16,8 +16,10 @@ pub fn highlight_markdown_for_editor(
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
 
-    let normal_font = FontId::monospace(14.0_f32 * font_scale);
-    let heading_font = FontId::monospace(15.0_f32 * font_scale);
+    // 使用比例字型 (微軟正黑體 msjh.ttc)，中文、英文、數字、符號共用 100% 完全相同的水平基準線與字高！
+    let normal_font = FontId::proportional(14.5_f32 * font_scale);
+    let heading_font = FontId::proportional(16.0_f32 * font_scale);
+    let code_font = FontId::monospace(13.5_f32 * font_scale);
     let line_height = Some(24.0_f32 * font_scale);
 
     let text_primary = theme.text_primary();
@@ -38,7 +40,6 @@ pub fn highlight_markdown_for_editor(
                     font_id: normal_font.clone(),
                     color: text_primary,
                     line_height,
-                    valign: egui::Align::BOTTOM,
                     ..Default::default()
                 },
             );
@@ -54,8 +55,7 @@ pub fn highlight_markdown_for_editor(
                 egui::TextFormat {
                     font_id: heading_font.clone(),
                     color: accent_color,
-                    line_height,
-                    valign: egui::Align::BOTTOM,
+                    line_height: Some(26.0_f32 * font_scale),
                     ..Default::default()
                 },
             );
@@ -69,7 +69,6 @@ pub fn highlight_markdown_for_editor(
                     color: text_secondary,
                     italics: true,
                     line_height,
-                    valign: egui::Align::BOTTOM,
                     ..Default::default()
                 },
             );
@@ -79,11 +78,10 @@ pub fn highlight_markdown_for_editor(
                 line,
                 0.0_f32,
                 egui::TextFormat {
-                    font_id: normal_font.clone(),
+                    font_id: code_font.clone(),
                     color: accent_color,
                     background: code_bg,
                     line_height,
-                    valign: egui::Align::BOTTOM,
                     ..Default::default()
                 },
             );
@@ -98,7 +96,6 @@ pub fn highlight_markdown_for_editor(
                     font_id: normal_font.clone(),
                     color: accent_color,
                     line_height,
-                    valign: egui::Align::BOTTOM,
                     ..Default::default()
                 },
             );
@@ -109,12 +106,11 @@ pub fn highlight_markdown_for_editor(
                     font_id: normal_font.clone(),
                     color: text_primary,
                     line_height,
-                    valign: egui::Align::BOTTOM,
                     ..Default::default()
                 },
             );
         } else {
-            // 一般內文行 (享有舒適的 24px 行高與純淨等寬字型排版)
+            // 一般內文行 (享有舒適的 24px 行高與完美統一的水平基準線)
             job.append(
                 line,
                 0.0_f32,
@@ -122,7 +118,6 @@ pub fn highlight_markdown_for_editor(
                     font_id: normal_font.clone(),
                     color: text_primary,
                     line_height,
-                    valign: egui::Align::BOTTOM,
                     ..Default::default()
                 },
             );
@@ -157,9 +152,11 @@ pub fn render_editor(
                     ui.fonts(|f| f.layout_job(job))
                 };
 
+                let font_id = FontId::proportional(14.5_f32 * font_scale);
                 let edit_resp = ui.add_sized(
                     Vec2::new(available_w, available_h),
                     egui::TextEdit::multiline(content)
+                        .font(font_id)
                         .layouter(&mut layouter)
                         .frame(false)
                         .desired_width(f32::INFINITY)
