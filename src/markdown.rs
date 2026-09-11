@@ -1766,6 +1766,16 @@ pub fn render_code_viewer(
     };
 
     // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算 (零堆疊分配雜湊)
+    // Large files start in a safe, fast preview. Keep the expansion state in
+    // egui's temporary data so the viewer can offer a real way to render the
+    // remaining content without adding UI state to every caller.
+    let expand_id = egui::Id::new((
+        "code_viewer_expand",
+        code.as_ptr() as usize,
+        code.len(),
+    ));
+    let is_expanded = ui.ctx().data(|d| d.get_temp::<bool>(expand_id).unwrap_or(false));
+
     let cache_id = egui::Id::new((
         "code_viewer_fast_v3",
         code.as_ptr() as usize,
@@ -1774,6 +1784,8 @@ pub fn render_code_viewer(
         search_query,
         active_match_index,
         theme as u8,
+        &lang_lower,
+        is_expanded,
     ));
 
     let (gutter_job, code_job, total_line_count, displayed_line_count, is_truncated) = ui.ctx().data_mut(|d| {
@@ -1788,8 +1800,20 @@ pub fn render_code_viewer(
 
             // 2. 依照檔案大小動態決定安全預覽策略
             let is_huge_file = code.len() > 300 * 1024; // > 300 KB
-            let max_render_lines = if is_huge_file { 1000 } else { 3000 };
-            let max_highlight_lines = if is_huge_file { 200 } else { 2000 };
+            let max_render_lines = if is_expanded {
+                total_lines
+            } else if is_huge_file {
+                1000
+            } else {
+                3000
+            };
+            let max_highlight_lines = if is_expanded {
+                total_lines
+            } else if is_huge_file {
+                200
+            } else {
+                2000
+            };
             const MAX_LINE_CHAR_LIMIT: usize = 1000;
 
             let default_text_color = match theme {
@@ -1808,13 +1832,14 @@ pub fn render_code_viewer(
 
             let mut displayed_lines = 0;
             let mut match_counter = 0;
+            let mut has_line_truncation = false;
 
             // 3. 僅迭代需要預覽的行數，絕不浪費 CPU 遍歷整個 7MB 字串
             for line in code.lines().take(max_render_lines) {
                 displayed_lines += 1;
 
                 // 超長單行截斷防護 (例如 minified bundle)
-                let (chunk, is_line_truncated) = if line.len() > MAX_LINE_CHAR_LIMIT {
+                let (chunk, is_line_truncated) = if !is_expanded && line.len() > MAX_LINE_CHAR_LIMIT {
                     let boundary = line
                         .char_indices()
                         .nth(MAX_LINE_CHAR_LIMIT)
@@ -1824,6 +1849,7 @@ pub fn render_code_viewer(
                 } else {
                     (line, false)
                 };
+                has_line_truncation |= is_line_truncated;
 
                 let line_with_nl = format!("{}\n", chunk);
 
@@ -1906,7 +1932,8 @@ pub fn render_code_viewer(
                 );
             }
 
-            let is_truncated = total_lines > displayed_lines;
+            let is_truncated = !is_expanded
+                && (total_lines > displayed_lines || has_line_truncation);
             let result = (gutter_job, code_job, total_lines, displayed_lines, is_truncated);
             d.insert_temp(cache_id, result.clone());
             result
@@ -2011,7 +2038,7 @@ pub fn render_code_viewer(
                     .stroke(Stroke::new(1.0_f32, theme.accent_color().gamma_multiply(0.4)))
                     .inner_margin(Margin::symmetric(14.0, 8.0))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(
                                 RichText::new(format!(
                                     "⚡ 檔案較大（共 {} 行），已為您極速安全預覽前 {} 行以維持 60 FPS 順暢體驗。點擊右上角「複製完整代碼」可提取完整內容。",
@@ -2020,6 +2047,10 @@ pub fn render_code_viewer(
                                 .color(theme.accent_color())
                                 .size(11.5 * font_scale),
                             );
+                            if ui.button("載入完整內容").clicked() {
+                                ui.ctx().data_mut(|d| d.insert_temp(expand_id, true));
+                                ui.ctx().request_repaint();
+                            }
                         });
                     });
             }

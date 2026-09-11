@@ -2467,14 +2467,26 @@ impl eframe::App for MdPreviewApp {
                                     ),
                                 };
 
+                                let plaintext_expand_id = egui::Id::new((
+                                    "plaintext_expand",
+                                    self.content.as_ptr() as usize,
+                                    self.content.len(),
+                                ));
+                                let plaintext_is_expanded = ctx
+                                    .data(|d| d.get_temp::<bool>(plaintext_expand_id).unwrap_or(false));
+                                let total_plaintext_lines = self.content.split_inclusive('\n').count();
+                                let plaintext_is_truncated = !plaintext_is_expanded
+                                    && total_plaintext_lines > 5000;
+
                                 let cache_id = ui.make_persistent_id(format!(
-                                    "plaintext_job_{:p}_{}_{}_{}_{:?}_{:?}",
+                                    "plaintext_job_{:p}_{}_{}_{}_{:?}_{:?}_{}",
                                     self.content.as_ptr(),
                                     self.content.len(),
                                     (font_scale * 100.0) as u32,
                                     self.search_query,
                                     active_match_idx,
-                                    self.theme
+                                    self.theme,
+                                    plaintext_is_expanded,
                                 ));
 
                                 let text_job = ui.ctx().data_mut(|d| {
@@ -2496,7 +2508,7 @@ impl eframe::App for MdPreviewApp {
 
                                         for line in self.content.split_inclusive('\n') {
                                             lines_count += 1;
-                                            if lines_count <= MAX_PLAINTEXT_LINES {
+                                            if plaintext_is_expanded || lines_count <= MAX_PLAINTEXT_LINES {
                                                 displayed_text.push_str(line);
                                             } else {
                                                 is_truncated = true;
@@ -2525,6 +2537,25 @@ impl eframe::App for MdPreviewApp {
                                 });
 
                                 ui.label(text_job);
+                                if plaintext_is_truncated {
+                                    ui.add_space(8.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "檔案共 {} 行，目前為安全預覽前 5000 行。",
+                                                total_plaintext_lines
+                                            ))
+                                            .color(self.theme.accent_color())
+                                            .size(11.5 * self.font_scale),
+                                        );
+                                        if ui.button("載入完整內容").clicked() {
+                                            ctx.data_mut(|d| {
+                                                d.insert_temp(plaintext_expand_id, true);
+                                            });
+                                            ctx.request_repaint();
+                                        }
+                                    });
+                                }
                             });
                             self.current_scroll_offset = scroll_out.state.offset.y;
                         }

@@ -25,6 +25,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - 📊 **Word Count & Reading Time Estimation**: Real-time CJK / English word count, estimated reading time, and an elegant top reading progress bar!
 - ⬅️➡️ **Keyboard Sibling File Navigation**: Press `←` / `→` (or click `◀` / `▶` buttons) to instantly browse previous/next files in the same directory, complete with index indicators `[3/18]`!
 - 📜 **Smooth Document Keyboard Scrolling**: Scroll through long documents seamlessly using `↑` / `↓` or `PageUp` / `PageDown` / `Home` / `End` keys!
+- ⚡ **Full Large-File Preview**: Large files open in a fast partial preview with a visible **Load Full Content** button when you need to inspect everything.
 - 📋 **1-Click Code Block Copying**: Code blocks in Markdown and the standalone Code Viewer now feature dedicated copy buttons with instant green "✓ Copied" feedback.
 - 🔍 **Robust Full-Text Search (Ctrl + F or /)**: Live match count (`Match X / Y`), auto-focus on open, **vivid electric orange active focus highlight**, jump to next/previous matches via `Enter` / `n` or `Shift + Enter` / `N` / `F3`, and Unicode-safe text highlighting.
 - ⚡ **Vim-Style Navigation**: Supports `/` to search, `n` / `N` to navigate matches, `h` / `l` for sibling files, `j` / `k` for smooth scrolling, and `g` / `G` to jump to top/bottom!
