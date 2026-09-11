@@ -2146,6 +2146,19 @@ impl eframe::App for MdPreviewApp {
                             self.navigate_search_match(!shift);
                         }
 
+                        // 搜尋列開啟但焦點不在輸入框時，提供 Vim 風格的 n/N 導航。
+                        // 輸入框取得焦點時不攔截，讓使用者仍能正常輸入 n 或 N。
+                        if !search_input_resp.has_focus()
+                            && ui.input(|i| {
+                                i.key_pressed(egui::Key::N)
+                                    && !i.modifiers.command
+                                    && !i.modifiers.alt
+                            })
+                        {
+                            let shift = ui.input(|i| i.modifiers.shift);
+                            self.navigate_search_match(!shift);
+                        }
+
                         let query_clean = self.search_query.trim();
                         if !query_clean.is_empty() {
                             let (count_text, count_color) = if match_count > 0 {
