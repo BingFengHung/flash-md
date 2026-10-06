@@ -21,6 +21,18 @@ impl CachedImage {
 #[derive(Clone, Default)]
 struct TextureCache(HashMap<String, CachedImage>);
 
+pub fn store_raster(ctx: &Context, key: &str, pixels: egui::ColorImage) {
+    let image = CachedImage::Raster(ctx.load_texture(key, pixels, egui::TextureOptions::LINEAR));
+    ctx.data_mut(|data| {
+        let cache =
+            data.get_temp_mut_or_default::<TextureCache>(egui::Id::new("flash-md-textures"));
+        if cache.0.len() >= 32 {
+            cache.0.clear();
+        }
+        cache.0.insert(key.to_string(), image);
+    });
+}
+
 pub fn cached_image(
     ctx: &Context,
     key: &str,

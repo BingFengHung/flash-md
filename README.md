@@ -10,6 +10,15 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 ---
 
+## v1.0.106 Responsiveness and verification
+
+- Read files, extract PDF/ZIP content, decode images and scan new directories on one background worker. Rapid navigation keeps only the latest request; cancelling, closing or editing prevents late results from replacing the current document.
+- CSV/TSV tables cache stable column widths and multiline row heights, paint only visible rows/columns, and locate search matches outside the viewport. Markdown search navigation is deferred until nested tables finish rendering.
+- Keyboard scrolling uses elapsed frame time. `Ctrl+P` only pins the window, preview modes complete their cycle, image zoom shortcuts affect images, and settings/input fields prevent accidental file navigation. Slides and editors keep separate document state.
+- Auto-save always reschedules the remaining debounce time; JSON formatting participates in auto-save. Real IME events consume confirmation Enter once while normal Chinese text/paste keep intentional newlines. Editor layouts are cached and preference changes are persisted.
+- CI includes full UI-frame regression tests, optimized CPU frame measurements for eight view scenarios, and native Windows startup/responsiveness checks for text, tables, code, images, SVG, PDF, ZIP and resident mode. The Windows VM uses a checksum-pinned software OpenGL driver for these checks only; it is excluded from release packages.
+- Frame measurements report CPU layout/tessellation time on the CI runner. Windows Explorer tabs, system IMEs and physical display/GPU behavior still need device-level validation.
+
 ## v1.0.105 preview fixes
 
 - Markdown tables measure stable column widths before painting, wrap long cells, align left/center/right, and keep every cell in a row at the same height. Narrow windows scroll horizontally instead of squeezing columns.

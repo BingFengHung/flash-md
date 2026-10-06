@@ -11,6 +11,7 @@ pub struct LoadedDocument {
     pub extension: String,
     pub content: String,
     pub image_bytes: Option<Vec<u8>>,
+    pub image_pixels: Option<egui::ColorImage>,
     pub size: String,
     pub modified: String,
 }
@@ -63,6 +64,17 @@ pub fn load_document(path: &Path) -> Result<LoadedDocument, String> {
             })
             .unwrap_or_default()
     };
+    let image_pixels = if is_image_extension(&extension) && extension != "svg" {
+        image::load_from_memory(&bytes).ok().map(|decoded| {
+            let rgba = decoded.to_rgba8();
+            egui::ColorImage::from_rgba_unmultiplied(
+                [rgba.width() as usize, rgba.height() as usize],
+                rgba.as_raw(),
+            )
+        })
+    } else {
+        None
+    };
     let (kind, content, image_bytes) = if is_image_extension(&extension) {
         let kind = if extension == "svg" {
             DocumentKind::Svg
@@ -92,6 +104,7 @@ pub fn load_document(path: &Path) -> Result<LoadedDocument, String> {
         extension,
         content,
         image_bytes,
+        image_pixels,
         size,
         modified,
     })
@@ -114,7 +127,13 @@ try {{
 }} finally {{ $z.Dispose(); }}"#,
         zip, entry
     );
-    let output = Command::new("powershell")
+    let mut command = Command::new("powershell");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .map_err(|e| e.to_string())?;

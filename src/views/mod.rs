@@ -1,3 +1,4 @@
+pub mod data_table;
 pub mod editor;
 pub mod empty_state;
 pub mod image_viewer;

@@ -115,6 +115,11 @@ pub fn render_slides_mode(
                     1.35_f32
                 };
                 ScrollArea::vertical()
+                    .id_salt((
+                        "slide",
+                        crate::parsers::content_hash(content),
+                        *current_slide_index,
+                    ))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         let renderer = crate::markdown::MarkdownRenderer::new(

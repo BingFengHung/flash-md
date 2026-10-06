@@ -141,6 +141,7 @@ pub fn cached_toc(ctx: &egui::Context, content: &str) -> Arc<Vec<TocItem>> {
 
 #[derive(Debug, Clone)]
 pub struct CsvTableData {
+    pub fingerprint: u64,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub total_rows: usize,
@@ -175,6 +176,7 @@ pub fn parse_csv_or_tsv(content: &str, separator: char) -> CsvTableData {
         .max(records.iter().map(Vec::len).max().unwrap_or(0));
     let total_rows = records.len();
     CsvTableData {
+        fingerprint: content_hash(content) ^ (separator as u64).rotate_left(32),
         headers,
         rows: records,
         total_rows,

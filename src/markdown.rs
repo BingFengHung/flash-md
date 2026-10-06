@@ -12,7 +12,7 @@ pub use code::{
 use mermaid::{extract_attr_str, get_or_render_mermaid_diagram};
 pub use pdf::{extract_text_from_pdf_bytes, is_pdf_extension};
 
-pub use crate::parsers::{format_json, minify_json, CsvTableData};
+pub use crate::parsers::{format_json, minify_json};
 use crate::theme::AppTheme;
 use egui::{
     text::LayoutJob, Align, Align2, Color32, FontId, Frame, Layout, Margin, RichText, Rounding,
@@ -136,6 +136,8 @@ impl<'a> MarkdownRenderer<'a> {
         // heading target only after every nested area has finished rendering.
         if let Some(rect) = context.anchor_rect {
             ui.scroll_to_rect(rect, Some(egui::Align::TOP));
+        } else if let Some(rect) = context.search_rect {
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
         }
         RenderOutput {
             clicked_anchor: context.clicked_anchor,
@@ -164,6 +166,7 @@ struct RenderContext<'a> {
     base_dir: Option<&'a std::path::Path>,
     clicked_anchor: Option<String>,
     anchor_rect: Option<egui::Rect>,
+    search_rect: Option<egui::Rect>,
     match_counter: usize,
     search_jump: bool,
     heading_counts: std::collections::HashMap<String, usize>,
@@ -400,6 +403,7 @@ impl<'a> RenderContext<'a> {
             base_dir,
             clicked_anchor: None,
             anchor_rect: None,
+            search_rect: None,
             match_counter: 0,
             search_jump: false,
             heading_counts: Default::default(),
@@ -466,7 +470,7 @@ impl<'a> RenderContext<'a> {
 
     fn label_job(&mut self, ui: &mut Ui, mut job: LayoutJob, sense: Sense) -> egui::Response {
         let local = self.highlight_job(&mut job);
-        crate::search::searchable_label(
+        let (response, target) = crate::search::searchable_label_target(
             ui,
             job,
             self.search_query,
@@ -474,7 +478,11 @@ impl<'a> RenderContext<'a> {
             self.search_jump,
             sense,
             true,
-        )
+        );
+        if target.is_some() {
+            self.search_rect = target;
+        }
+        response
     }
 
     fn push_text(&mut self, text: &str) {
@@ -1275,151 +1283,7 @@ impl<'a> RenderContext<'a> {
 
 /// 渲染現代斑馬紋資料表格
 #[allow(clippy::too_many_arguments)]
-pub fn render_csv_table(
-    ui: &mut Ui,
-    theme: AppTheme,
-    font_scale: f32,
-    table: &CsvTableData,
-    search_query: &str,
-    active_match_index: Option<usize>,
-    match_counter: &mut usize,
-    search_jump: bool,
-) {
-    if table.headers.is_empty() && table.rows.is_empty() {
-        ui.label("表格內容為空");
-        return;
-    }
-
-    ui.label(format!(
-        "{} 筆資料 · {} 欄",
-        table.total_rows, table.total_cols
-    ));
-    if let Some(error) = &table.error {
-        ui.colored_label(theme.accent_color(), format!("CSV 解析失敗：{error}"));
-    }
-
-    let header_bg = theme.card_bg_color();
-    let border_color = theme.border_color();
-    let even_row_bg = theme.bg_color();
-    let odd_row_bg = match theme {
-        AppTheme::Dark => Color32::from_rgba_unmultiplied(255, 255, 255, 6),
-        AppTheme::Light => Color32::from_rgba_unmultiplied(0, 0, 0, 8),
-    };
-
-    let (hl_bg, hl_fg, act_bg, act_fg) = match theme {
-        AppTheme::Dark => (
-            Color32::from_rgba_unmultiplied(234, 179, 8, 110),
-            Color32::from_rgb(254, 240, 138),
-            Color32::from_rgb(249, 115, 22),
-            Color32::BLACK,
-        ),
-        AppTheme::Light => (
-            Color32::from_rgb(254, 240, 138),
-            Color32::from_rgb(113, 63, 18),
-            Color32::from_rgb(234, 88, 12),
-            Color32::WHITE,
-        ),
-    };
-
-    egui::Grid::new("csv_grid_table")
-        .striped(false)
-        .spacing(Vec2::new(14.0 * font_scale, 8.0 * font_scale))
-        .show(ui, |ui| {
-            // 表頭行 (Header)
-            for header in &table.headers {
-                Frame::none()
-                    .fill(header_bg)
-                    .stroke(Stroke::new(1.0_f32, border_color))
-                    .inner_margin(Margin::symmetric(10.0 * font_scale, 6.0 * font_scale))
-                    .show(ui, |ui| {
-                        let mut job = LayoutJob::default();
-                        let base_fmt = egui::TextFormat {
-                            font_id: FontId::proportional(13.0 * font_scale),
-                            color: theme.accent_color(),
-                            ..Default::default()
-                        };
-                        let base = *match_counter;
-                        append_highlighted_text(
-                            &mut job,
-                            header,
-                            search_query,
-                            base_fmt,
-                            hl_bg,
-                            hl_fg,
-                            act_bg,
-                            act_fg,
-                            active_match_index,
-                            match_counter,
-                        );
-                        let local = active_match_index
-                            .and_then(|i| (base..*match_counter).contains(&i).then(|| i - base));
-                        crate::search::searchable_label(
-                            ui,
-                            job,
-                            search_query,
-                            local,
-                            search_jump,
-                            Sense::hover(),
-                            true,
-                        );
-                    });
-            }
-            ui.end_row();
-
-            // 資料行 (Data Rows with Zebra Striping)
-            for (row_idx, row) in table.rows.iter().enumerate() {
-                let row_bg = if row_idx % 2 == 0 {
-                    even_row_bg
-                } else {
-                    odd_row_bg
-                };
-
-                for col_idx in 0..table.total_cols {
-                    let cell_text = row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
-
-                    Frame::none()
-                        .fill(row_bg)
-                        .stroke(Stroke::new(0.5_f32, border_color))
-                        .inner_margin(Margin::symmetric(10.0 * font_scale, 5.0 * font_scale))
-                        .show(ui, |ui| {
-                            let mut job = LayoutJob::default();
-                            let base_fmt = egui::TextFormat {
-                                font_id: FontId::proportional(12.5 * font_scale),
-                                color: theme.text_primary(),
-                                line_height: Some(18.0 * font_scale),
-                                ..Default::default()
-                            };
-                            let base = *match_counter;
-                            append_highlighted_text(
-                                &mut job,
-                                cell_text,
-                                search_query,
-                                base_fmt,
-                                hl_bg,
-                                hl_fg,
-                                act_bg,
-                                act_fg,
-                                active_match_index,
-                                match_counter,
-                            );
-                            let local = active_match_index.and_then(|i| {
-                                (base..*match_counter).contains(&i).then(|| i - base)
-                            });
-                            crate::search::searchable_label(
-                                ui,
-                                job,
-                                search_query,
-                                local,
-                                search_jump,
-                                Sense::hover(),
-                                true,
-                            );
-                        });
-                }
-                ui.end_row();
-            }
-        });
-}
+pub use crate::views::data_table::render_csv_table;
 
 #[cfg(test)]
 mod tests {

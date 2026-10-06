@@ -151,8 +151,25 @@ pub fn render_editor(
                 let available_h = (ui.available_height() - 8.0_f32).max(200.0_f32);
 
                 let mut layouter = |ui: &egui::Ui, string: &str, wrap_width: f32| {
+                    let key = (
+                        crate::parsers::content_hash(string),
+                        theme as u8,
+                        font_scale.to_bits(),
+                        wrap_width.to_bits(),
+                    );
+                    let id = ui.make_persistent_id("editor-layout");
+                    if let Some((old, galley)) = ui.ctx().data(|data| {
+                        data.get_temp::<((u64, u8, u32, u32), std::sync::Arc<egui::Galley>)>(id)
+                    }) {
+                        if old == key {
+                            return galley;
+                        }
+                    }
                     let job = highlight_markdown_for_editor(string, theme, font_scale, wrap_width);
-                    ui.fonts(|f| f.layout_job(job))
+                    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(id, (key, galley.clone())));
+                    galley
                 };
 
                 let font_id = FontId::proportional(14.5_f32 * font_scale);

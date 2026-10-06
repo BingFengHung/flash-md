@@ -1,12 +1,14 @@
 mod documents;
+mod input;
 mod shortcuts;
 mod updates;
 
 use crate::config::{AppConfig, SaveMode};
 use crate::document::{DocumentKind, PendingAction, UnsavedChoice};
 use crate::explorer::{hide_app_window, show_and_focus_app_window};
-use crate::files::{load_document, LoadedDocument};
+use crate::files::LoadedDocument;
 use crate::hotkey::HotkeyEvent;
+use crate::loader::{DocumentLoader, LoadRequest};
 use crate::markdown::{
     get_image_badge, get_language_badge, is_code_extension, is_image_extension, render_code_viewer,
     MarkdownRenderer,
@@ -45,6 +47,8 @@ pub struct MdPreviewApp {
     pub pending_action: Option<PendingAction>,
     pub close_confirmed: bool,
     pub content_revision: u64,
+    loader: DocumentLoader,
+    loading_request: Option<LoadRequest>,
     pub search_match_count: usize,
     pub search_jump_requested: bool,
     pub siblings: Vec<PathBuf>,
@@ -96,8 +100,9 @@ pub struct MdPreviewApp {
 
     pub status_toast: Option<(String, std::time::Instant)>,
     pub reset_scroll_to_top: bool,
-    pub keyboard_scroll_delta: f32,
+    held_scroll_started: Option<(f64, i8)>,
     pub current_scroll_offset: f32,
+    pub max_scroll_offset: f32,
     pub preview_generation: u64,
     pub reading_progress: f32,
     pub is_ime_composing: bool,
@@ -125,11 +130,14 @@ impl MdPreviewApp {
         let font_scale = config.font_scale;
         let always_on_top = config.always_on_top;
         let (update_tx, update_rx) = unbounded();
+        let loader = DocumentLoader::new(ctx_holder.clone());
         Self {
             document_kind: DocumentKind::Text,
             pending_action: None,
             close_confirmed: false,
             content_revision: 0,
+            loader,
+            loading_request: None,
             search_match_count: 0,
             search_jump_requested: false,
             siblings: Vec::new(),
@@ -173,8 +181,9 @@ impl MdPreviewApp {
             ctx_holder: ctx_holder.clone(),
             status_toast: None,
             reset_scroll_to_top: false,
-            keyboard_scroll_delta: 0.0,
+            held_scroll_started: None,
             current_scroll_offset: 0.0,
+            max_scroll_offset: 0.0,
             preview_generation: 0,
             reading_progress: 0.0,
             is_ime_composing: false,
@@ -265,14 +274,6 @@ impl MdPreviewApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         show_and_focus_app_window();
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(30));
-            show_and_focus_app_window();
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            show_and_focus_app_window();
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            show_and_focus_app_window();
-        });
         ctx.request_repaint();
     }
 
@@ -292,8 +293,9 @@ impl MdPreviewApp {
     }
 }
 
-impl eframe::App for MdPreviewApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl MdPreviewApp {
+    fn update_ui(&mut self, ctx: &egui::Context) {
+        self.poll_document_loads();
         // 背景常駐未顯示時低頻輪詢，視窗顯現時由使用者操作與事件驅動，達成 0% CPU 靜止待機
         if !self.visible {
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -405,103 +407,39 @@ impl eframe::App for MdPreviewApp {
             return;
         }
 
-        // 自動防抖保存檢查 (打字停止 800ms 後自動寫回檔案)
-        if self.config.save_mode == SaveMode::AutoDebounce && self.is_modified {
-            if let Some(instant) = self.last_edit_instant {
-                if instant.elapsed() >= Duration::from_millis(800) {
-                    self.save_current_file(true);
-                    self.last_edit_instant = None;
-                }
-            }
-        }
-
-        // IME (注音/拼音/日文輸入法) 組字與選字確認 Enter 防誤換行過濾：
-        // 1. 偵測 egui::Event::Ime(Preedit / Commit) 與 Event::Text (含 CJK 漢字或注音符號)
-        // 2. 當處於 IME 組字中 (Preedit) 或剛進行組字/選字 (400ms 內) 時，
-        //    Windows 會發送 Key::Enter 與 Text("\n") 來結束組字或確認候選字。
-        // 3. 自動自 i.events 與 i.keys_down 中徹底吞噬該次 Enter，防止編輯器直接換行！
-        // 4. 組字確認後，使用者再次按下 Enter 即可正常進行段落換行，英數模式輸入亦完全不受影響。
-        let now = std::time::Instant::now();
-        let was_recent_ime = if let Some(instant) = self.last_ime_activity {
-            instant.elapsed() < Duration::from_millis(400)
-        } else {
-            false
-        };
-
-        let mut ime_event_this_frame = false;
-        let mut enter_was_swallowed = false;
-
-        ctx.input_mut(|i| {
-            for ev in &i.events {
-                match ev {
-                    egui::Event::Ime(egui::ImeEvent::Preedit(s)) => {
-                        ime_event_this_frame = true;
-                        self.is_ime_composing = !s.is_empty();
-                    }
-                    egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
-                        ime_event_this_frame = true;
-                        self.is_ime_composing = false;
-                    }
-                    egui::Event::Ime(egui::ImeEvent::Disabled) => {
-                        self.is_ime_composing = false;
-                    }
-                    // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
-                    egui::Event::Text(ref s) if s.chars().any(|c| c >= '\u{2E80}') => {
-                        ime_event_this_frame = true;
-                    }
-                    _ => {}
-                }
-            }
-
-            if ime_event_this_frame {
-                self.last_ime_activity = Some(now);
-            }
-
-            let should_filter_enter =
-                self.is_ime_composing || was_recent_ime || ime_event_this_frame;
-
-            if should_filter_enter {
-                let mut found_enter = false;
-                i.events.retain(|ev| match ev {
-                    egui::Event::Key {
-                        key: egui::Key::Enter,
-                        ..
-                    } => {
-                        found_enter = true;
-                        false
-                    }
-                    egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => {
-                        found_enter = true;
-                        false
-                    }
-                    _ => true,
-                });
-                if found_enter || i.keys_down.contains(&egui::Key::Enter) {
-                    enter_was_swallowed = true;
-                    i.keys_down.remove(&egui::Key::Enter);
-                }
-            }
-        });
-
-        if enter_was_swallowed {
-            // 已成功吞噬組字確認 Enter，重置計時器，使下一次 Enter 能正常進行段落換行
-            self.last_ime_activity = None;
-            self.is_ime_composing = false;
-        } else {
-            ctx.input(|i| {
-                if i.key_pressed(egui::Key::Backspace) || i.pointer.any_click() {
-                    self.last_ime_activity = None;
-                    self.is_ime_composing = false;
-                }
-            });
-        }
+        self.process_timers(ctx);
+        self.handle_ime_input(ctx);
 
         // 快捷鍵監聽
         self.handle_shortcuts(ctx);
+        self.sync_preferences();
 
         // 如果視窗處於隱藏狀態，則確保 OS 視窗不顯現並直接 return 節省資源
         if !self.visible && !self.is_standalone {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            return;
+        }
+
+        if let Some(request) = self
+            .loading_request
+            .as_ref()
+            .filter(|request| request.reset_view)
+        {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(48.0_f32);
+                    ui.spinner();
+                    ui.label(format!(
+                        "正在載入 {}…",
+                        request
+                            .path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    ));
+                    ui.label("Esc 取消 · 左右鍵切換檔案");
+                });
+            });
             return;
         }
 
@@ -745,79 +683,8 @@ impl eframe::App for MdPreviewApp {
                             .rounding(Rounding::same(5.0)),
                         );
 
-                        if mode_btn.clicked() {
-                            let ext = self
-                                .current_file
-                                .as_ref()
-                                .and_then(|p| p.extension())
-                                .and_then(|e| e.to_str())
-                                .unwrap_or("")
-                                .to_lowercase();
-
-                            self.view_mode = match self.view_mode {
-                                ViewMode::Markdown => {
-                                    if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkdn") || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
-                                        ViewMode::Mindmap
-                                    } else if is_image_extension(&ext) {
-                                        ViewMode::Image { format: ext }
-                                    } else if ext == "csv" {
-                                        ViewMode::Table { separator: ',' }
-                                    } else if ext == "tsv" {
-                                        ViewMode::Table { separator: '\t' }
-                                    } else if is_code_extension(&ext) {
-                                        ViewMode::Code { lang: ext }
-                                    } else {
-                                        ViewMode::PlainText
-                                    }
-                                }
-                                ViewMode::Mindmap => {
-                                    if is_image_extension(&ext) {
-                                        ViewMode::Image { format: ext }
-                                    } else if ext == "csv" {
-                                        ViewMode::Table { separator: ',' }
-                                    } else if ext == "tsv" {
-                                        ViewMode::Table { separator: '\t' }
-                                    } else if is_code_extension(&ext) {
-                                        ViewMode::Code { lang: ext }
-                                    } else {
-                                        ViewMode::PlainText
-                                    }
-                                }
-                                ViewMode::Table { separator } => {
-                                    ViewMode::Code { lang: if separator == '\t' { "tsv".to_string() } else { "csv".to_string() } }
-                                }
-                                ViewMode::Code { .. } => {
-                                    if is_image_extension(&ext) {
-                                        ViewMode::Image { format: ext }
-                                    } else if ext == "csv" {
-                                        ViewMode::Table { separator: ',' }
-                                    } else if ext == "tsv" {
-                                        ViewMode::Table { separator: '\t' }
-                                    } else {
-                                        ViewMode::PlainText
-                                    }
-                                }
-                                ViewMode::PlainText => {
-                                    if is_image_extension(&ext) {
-                                        ViewMode::Image { format: ext }
-                                    } else if ext == "csv" {
-                                        ViewMode::Table { separator: ',' }
-                                    } else if ext == "tsv" {
-                                        ViewMode::Table { separator: '\t' }
-                                    } else {
-                                        ViewMode::Markdown
-                                    }
-                                }
-                                ViewMode::Image { .. } => {
-                                    if ext == "svg" || !self.content.is_empty() {
-                                        ViewMode::Code { lang: "xml".to_string() }
-                                    } else {
-                                        ViewMode::PlainText
-                                    }
-                                }
-                            };
-                            self.reset_scroll_to_top = true;
-                            self.current_scroll_offset = 0.0_f32;
+                        if mode_btn.clicked() && !self.is_editing {
+                            self.cycle_view_mode();
                         }
                         if mode_btn.hovered() {
                             mode_btn.on_hover_text(badge_tip);
@@ -1345,7 +1212,7 @@ impl eframe::App for MdPreviewApp {
                     self.render_slides_mode(ui, ctx);
                 } else if self.is_editing {
                     // 全螢幕就地編輯模式 (支援即時打字、行數統計與自動防抖/Ctrl+S保存)
-                    self.render_editor(ui);
+                    ui.push_id(("editor", self.preview_generation), |ui| self.render_editor(ui));
                 } else if self.content.is_empty() && self.image_uri.is_none() {
                     // 極具現代質感的空狀態卡片介面 (Raycast / Linear Style)
                     self.render_empty_state(ui);
@@ -1368,9 +1235,10 @@ impl eframe::App for MdPreviewApp {
                             let mut scroll = ScrollArea::vertical()
                                 .id_salt(("markdown", self.current_file.as_deref(), self.preview_generation))
                                 .auto_shrink([false, false]);
-                            if self.target_anchor.is_some() {
+                            if self.target_anchor.is_some() || self.search_jump_requested {
                                 scroll = scroll.animated(false);
                             }
+                            if self.search_jump_requested { scroll = scroll.animated(false); }
                             if let Some(target) = scroll_target {
                                 scroll = scroll.vertical_scroll_offset(target);
                             }
@@ -1400,6 +1268,7 @@ impl eframe::App for MdPreviewApp {
 
                             // 即時同步實際滾動偏移量 (支援滑鼠滾輪與鍵盤混合無縫操作)
                             self.current_scroll_offset = scroll_out.state.offset.y;
+                            self.max_scroll_offset = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(0.0_f32);
 
                             let max_scroll = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(1.0);
                             self.reading_progress = (self.current_scroll_offset / max_scroll).clamp(0.0, 1.0);
@@ -1420,8 +1289,9 @@ impl eframe::App for MdPreviewApp {
                             let mut scroll = ScrollArea::both()
                                 .id_salt(("document", self.current_file.as_deref(), self.preview_generation, &self.view_mode))
                                 .auto_shrink([false, false]);
+                            if self.search_jump_requested { scroll = scroll.animated(false); }
                             if let Some(target) = scroll_target {
-                                scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
+                                scroll = scroll.vertical_scroll_offset(target);
                             }
 
                             let scroll_out = scroll.show(ui, |ui| {
@@ -1440,28 +1310,32 @@ impl eframe::App for MdPreviewApp {
                                 self.search_match_count = match_counter;
                             });
                             self.current_scroll_offset = scroll_out.state.offset.y;
+                            self.max_scroll_offset = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(0.0_f32);
                         }
                         ViewMode::Code { ref lang } => {
                             // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動)
                             let mut scroll = ScrollArea::both()
                                 .id_salt(("document", self.current_file.as_deref(), self.preview_generation, &self.view_mode))
                                 .auto_shrink([false, false]);
+                            if self.search_jump_requested { scroll = scroll.animated(false); }
                             if let Some(target) = scroll_target {
-                                scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
+                                scroll = scroll.vertical_scroll_offset(target);
                             }
 
                             let scroll_out = scroll.show(ui, |ui| {
                                 self.search_match_count = render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query, active_match_idx, self.search_jump_requested);
                             });
                             self.current_scroll_offset = scroll_out.state.offset.y;
+                            self.max_scroll_offset = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(0.0_f32);
                         }
                         ViewMode::PlainText => {
                             // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動，快取 LayoutJob 零拷貝)
                             let mut scroll = ScrollArea::both()
                                 .id_salt(("document", self.current_file.as_deref(), self.preview_generation, &self.view_mode))
                                 .auto_shrink([false, false]);
+                            if self.search_jump_requested { scroll = scroll.animated(false); }
                             if let Some(target) = scroll_target {
-                                scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
+                                scroll = scroll.vertical_scroll_offset(target);
                             }
 
                             let scroll_out = scroll.show(ui, |ui| {
@@ -1574,6 +1448,7 @@ impl eframe::App for MdPreviewApp {
                                 }
                             });
                             self.current_scroll_offset = scroll_out.state.offset.y;
+                            self.max_scroll_offset = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(0.0_f32);
                         }
                         ViewMode::Mindmap => {
                             // Markdown 互動式心智圖渲染模式 (支援樹狀水平佈局、貝茲曲線連線、縮放平移、節點收折與點擊跳轉回正文錨點)
@@ -1623,7 +1498,6 @@ impl eframe::App for MdPreviewApp {
         // 渲染完成後清除滾輪回到頂部、目標搜尋偏移與鍵盤捲動旗標，允許使用者後續正常捲動
         self.reset_scroll_to_top = false;
         self.target_scroll_offset = None;
-        self.keyboard_scroll_delta = 0.0;
         if previous_match_count != self.search_match_count {
             self.search_match_index = self
                 .search_match_index
@@ -1631,6 +1505,13 @@ impl eframe::App for MdPreviewApp {
             ctx.request_repaint();
         }
         self.search_jump_requested = false;
+        self.process_timers(ctx);
+    }
+}
+
+impl eframe::App for MdPreviewApp {
+    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.update_ui(ctx);
     }
 }
 
@@ -1657,16 +1538,23 @@ impl MdPreviewApp {
             ""
         };
 
-        crate::views::image_viewer::render_image_viewer(
+        let scroll_target = if self.reset_scroll_to_top {
+            Some(0.0_f32)
+        } else {
+            self.target_scroll_offset
+        };
+        if let Some((offset, maximum)) = crate::views::image_viewer::render_image_viewer(
             ui,
             self.image_bytes.as_deref(),
             self.image_uri.as_deref(),
             format_ext,
             &mut self.image_zoom,
             &mut self.image_fit_mode,
-            self.reset_scroll_to_top,
-            self.keyboard_scroll_delta,
-        );
+            scroll_target,
+        ) {
+            self.current_scroll_offset = offset;
+            self.max_scroll_offset = maximum;
+        }
     }
 }
 
@@ -1693,169 +1581,6 @@ fn rfd_open_file() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn app() -> MdPreviewApp {
-        let (_, hotkey_rx) = unbounded();
-        let (watcher_tx, watcher_rx) = unbounded();
-        let (_, tray_rx) = unbounded();
-        let holder = Arc::new(Mutex::new(Some(Context::default())));
-        let watcher = FileWatcher::new(watcher_tx, holder.clone());
-        MdPreviewApp::empty(
-            AppConfig::default(),
-            true,
-            true,
-            watcher,
-            hotkey_rx,
-            watcher_rx,
-            tray_rx,
-            holder,
-        )
-    }
-
-    #[test]
-    fn opening_or_reloading_a_failed_file_preserves_the_current_document() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("current.md");
-        fs::write(&path, "original").unwrap();
-        let mut app = app();
-        app.open_document(&path);
-        app.open_document(&dir.path().join("missing.md"));
-        assert_eq!(app.current_file.as_deref(), Some(path.as_path()));
-        assert_eq!(app.content, "original");
-        app.content = "unsaved draft".to_string();
-        app.is_modified = true;
-        fs::write(&path, "external change").unwrap();
-        app.reload_current_file();
-        assert_eq!(app.content, "unsaved draft");
-        assert!(app.is_modified);
-    }
-
-    #[test]
-    fn cancel_keeps_draft_and_failed_save_keeps_pending_action() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("current.md");
-        let next = dir.path().join("next.md");
-        fs::write(&path, "original").unwrap();
-        fs::write(&next, "next").unwrap();
-        let mut app = app();
-        app.open_document(&path);
-        app.content = "draft".to_string();
-        app.is_modified = true;
-        app.load_file(&next);
-        assert!(app.pending_action.is_some());
-        assert_eq!(app.content, "draft");
-        app.resolve_pending_action(UnsavedChoice::Cancel);
-        assert!(app.pending_action.is_none());
-        assert!(app.is_modified);
-        app.load_file(&next);
-        fs::write(&path, "external").unwrap();
-        app.resolve_pending_action(UnsavedChoice::Save);
-        assert!(app.pending_action.is_some());
-        assert_eq!(app.content, "draft");
-        assert!(app.is_modified);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "external");
-        app.resolve_pending_action(UnsavedChoice::Discard);
-        assert_eq!(app.current_file, Some(next));
-        assert_eq!(app.content, "next");
-        assert!(!app.is_modified);
-    }
-
-    #[test]
-    fn save_and_continue_writes_the_draft_before_switching() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("current.md");
-        let next = dir.path().join("next.md");
-        fs::write(&path, "original").unwrap();
-        fs::write(&next, "next").unwrap();
-        let mut app = app();
-        app.open_document(&path);
-        app.content = "draft".to_string();
-        app.is_modified = true;
-        app.load_file(&next);
-        app.resolve_pending_action(UnsavedChoice::Save);
-        assert_eq!(fs::read_to_string(&path).unwrap(), "draft");
-        assert_eq!(app.current_file, Some(next));
-        assert!(app.pending_action.is_none());
-        assert!(!app.is_modified);
-    }
-
-    #[test]
-    fn image_reload_changes_bytes_and_derived_caches_are_invalidated() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("image.png");
-        fs::write(&path, b"old image").unwrap();
-        let mut app = app();
-        app.open_document(&path);
-        let uri = app.image_uri.clone();
-        let revision = app.content_revision;
-        fs::write(&path, b"new image").unwrap();
-        app.reload_current_file();
-        assert_ne!(app.image_uri, uri);
-        assert_eq!(app.image_bytes.as_deref(), Some(b"new image".as_slice()));
-        assert!(app.content_revision > revision);
-        app.mindmap_root = Some(crate::views::mindmap::parse_markdown_to_mindmap(
-            "# old", "old",
-        ));
-        app.invalidate_content();
-        assert!(app.mindmap_root.is_none());
-    }
-
-    #[test]
-    fn updater_failure_unlocks_the_ui_and_allows_retry() {
-        let mut app = app();
-        app.is_updating = true;
-        app.handle_update_event(UpdateEvent::Installed(Err("download failed".to_string())));
-        assert!(!app.is_updating);
-        assert!(app
-            .status_toast
-            .as_ref()
-            .unwrap()
-            .0
-            .contains("download failed"));
-    }
-
-    #[test]
-    fn hotkey_switching_documents_resets_view_and_keeps_drafts_guarded() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = dir.path().join("first.md");
-        let second = dir.path().join("second.md");
-        fs::write(&first, "# First").unwrap();
-        fs::write(&second, "# Second").unwrap();
-        let mut app = app();
-        app.handle_hotkey_preview(Some(first.clone()));
-        let generation = app.preview_generation;
-        app.current_scroll_offset = 500.0_f32;
-        app.target_anchor = Some("first".to_string());
-        app.handle_hotkey_preview(Some(second.clone()));
-        assert_eq!(app.content, "# Second");
-        assert_eq!(app.current_file.as_deref(), Some(second.as_path()));
-        assert_eq!(app.current_scroll_offset, 0.0_f32);
-        assert!(app.target_anchor.is_none());
-        assert!(app.preview_generation > generation);
-        assert!(app.visible);
-        app.content = "draft".to_string();
-        app.is_modified = true;
-        app.handle_hotkey_preview(Some(first));
-        assert_eq!(app.content, "draft");
-        assert!(app.pending_action.is_some());
-    }
-
-    #[test]
-    fn sibling_navigation_uses_the_existing_directory_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = dir.path().join("a.md");
-        let second = dir.path().join("c.md");
-        fs::write(&first, "first").unwrap();
-        fs::write(&second, "second").unwrap();
-        let mut app = app();
-        app.open_document(&first);
-        // New entries are picked up by DirectoryChanged, not a scan on every key.
-        fs::write(dir.path().join("b.md"), "new entry").unwrap();
-        app.navigate_sibling_file(true);
-        assert_eq!(app.current_file.as_deref(), Some(second.as_path()));
-        assert_eq!(app.content, "second");
-        assert_eq!(app.siblings.len(), 2);
-    }
-}
+mod tests;
+#[cfg(test)]
+mod ui_tests;

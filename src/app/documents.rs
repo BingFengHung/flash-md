@@ -6,26 +6,102 @@ impl MdPreviewApp {
     }
 
     pub(super) fn open_document(&mut self, path: &Path) {
-        match load_document(path) {
-            Ok(loaded) => {
-                self.apply_document(loaded, true);
-                self.visible = true;
-                show_and_focus_app_window();
-                self.set_toast(format!(
-                    "⚡ 已開啟：{}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                ));
+        self.queue_document_load(path, true);
+        self.visible = true;
+        crate::explorer::wake_app_window();
+    }
+
+    fn queue_document_load(&mut self, path: &Path, reset_view: bool) {
+        let path = match std::path::absolute(path) {
+            Ok(path) => path,
+            Err(error) => {
+                self.set_toast(format!("❌ 無效檔案路徑：{}", error));
+                return;
             }
-            Err(error) => self.set_toast(format!("❌ 無法開啟檔案：{}", error)),
+        };
+        let scan_directory = self
+            .current_file
+            .as_ref()
+            .is_none_or(|previous| previous.parent() != path.parent())
+            || !self.siblings.contains(&path);
+        self.loading_request = Some(self.loader.request(LoadRequest {
+            id: 0,
+            path,
+            reset_view,
+            revision: self.content_revision,
+            scan_directory,
+        }));
+    }
+
+    pub(super) fn cancel_document_load(&mut self) {
+        self.loader.cancel();
+        self.loading_request = None;
+    }
+
+    pub(super) fn poll_document_loads(&mut self) {
+        while let Ok(result) = self.loader.receiver.try_recv() {
+            if self
+                .loading_request
+                .as_ref()
+                .is_none_or(|request| request.id != result.request.id)
+            {
+                continue;
+            }
+            self.loading_request = None;
+            if self.is_modified || self.content_revision != result.request.revision {
+                self.set_toast("ℹ 已保留目前編輯，取消背景載入結果".to_string());
+                continue;
+            }
+            match result.document {
+                Ok(loaded) => {
+                    if !result.request.reset_view
+                        && loaded.content == self.content
+                        && loaded.image_bytes == self.image_bytes
+                    {
+                        self.file_size_str = loaded.size;
+                        self.last_modified_str = loaded.modified;
+                        continue;
+                    }
+                    if let Some(siblings) = result.siblings {
+                        self.siblings = siblings;
+                    }
+                    if result.request.reset_view && self.is_slides_fullscreen {
+                        let ctx = self
+                            .ctx_holder
+                            .lock()
+                            .ok()
+                            .and_then(|holder| holder.clone());
+                        if let Some(ctx) = ctx {
+                            self.set_fullscreen_state(&ctx, false);
+                        }
+                        self.is_slides_fullscreen = false;
+                    }
+                    let name = loaded
+                        .path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    self.apply_document(loaded, result.request.reset_view);
+                    log::info!(
+                        "已載入預覽：{:?} · {:?}",
+                        self.document_kind,
+                        self.current_file
+                    );
+                    if result.request.reset_view {
+                        self.visible = true;
+                        show_and_focus_app_window();
+                        self.set_toast(format!("⚡ 已開啟：{}", name));
+                    } else {
+                        self.set_toast("檔案已即時同步更新 ⚡".to_string());
+                    }
+                }
+                Err(error) => self.set_toast(format!("❌ 無法載入檔案：{}", error)),
+            }
         }
     }
 
     pub(super) fn apply_document(&mut self, loaded: LoadedDocument, reset_view: bool) {
-        let refresh_siblings = self
-            .current_file
-            .as_ref()
-            .is_none_or(|previous| previous.parent() != loaded.path.parent())
-            || !self.siblings.contains(&loaded.path);
         if reset_view {
             self.preview_generation = self.preview_generation.wrapping_add(1);
             self.view_mode = if loaded.image_bytes.is_some() {
@@ -35,7 +111,7 @@ impl MdPreviewApp {
             } else if loaded.kind == DocumentKind::Pdf
                 || matches!(
                     loaded.extension.as_str(),
-                    "md" | "markdown" | "mdown" | "mkd" | "pdf"
+                    "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "pdf"
                 )
             {
                 ViewMode::Markdown
@@ -52,6 +128,7 @@ impl MdPreviewApp {
             };
             self.reset_scroll_to_top = true;
             self.current_scroll_offset = 0.0_f32;
+            self.max_scroll_offset = 0.0_f32;
             self.target_scroll_offset = None;
             self.target_anchor = None;
             self.search_match_index = 0;
@@ -73,14 +150,17 @@ impl MdPreviewApp {
         self.current_file = Some(loaded.path);
         self.image_bytes = loaded.image_bytes;
         self.refresh_image_uri(&loaded.extension);
-        self.invalidate_content();
-        if refresh_siblings {
-            self.siblings = self
-                .current_file
-                .as_deref()
-                .map(crate::files::sibling_files)
-                .unwrap_or_default();
+        if let (Some(pixels), Some(uri)) = (loaded.image_pixels, &self.image_uri) {
+            if let Some(ctx) = self
+                .ctx_holder
+                .lock()
+                .ok()
+                .and_then(|holder| holder.clone())
+            {
+                crate::textures::store_raster(&ctx, uri, pixels);
+            }
         }
+        self.invalidate_content();
         self.watched_file = Some(loaded.watch_path.clone());
         self.file_watcher.watch_file(&loaded.watch_path);
     }
@@ -175,6 +255,7 @@ impl MdPreviewApp {
         match action {
             PendingAction::Open(path) => self.open_document(&path),
             PendingAction::Clear => {
+                self.cancel_document_load();
                 self.current_file = None;
                 self.watched_file = None;
                 self.document_kind = DocumentKind::Text;
@@ -182,6 +263,12 @@ impl MdPreviewApp {
                 self.original_content.clear();
                 self.is_modified = false;
                 self.is_editing = false;
+                self.is_slides_mode = false;
+                self.target_anchor = None;
+                self.target_scroll_offset = None;
+                self.current_scroll_offset = 0.0_f32;
+                self.max_scroll_offset = 0.0_f32;
+                self.reset_scroll_to_top = true;
                 self.image_uri = None;
                 self.image_bytes = None;
                 self.line_count = 0;
@@ -194,6 +281,7 @@ impl MdPreviewApp {
                 show_and_focus_app_window();
             }
             PendingAction::Close => {
+                self.cancel_document_load();
                 self.visible = false;
                 hide_app_window();
                 if self.is_standalone {
@@ -206,7 +294,10 @@ impl MdPreviewApp {
                 }
             }
             PendingAction::Exit => std::process::exit(0),
-            PendingAction::Update => self.start_self_update(),
+            PendingAction::Update => {
+                self.cancel_document_load();
+                self.start_self_update();
+            }
         }
     }
 
@@ -323,17 +414,16 @@ impl MdPreviewApp {
     }
 
     pub fn reload_current_file(&mut self) {
-        if self.is_modified {
+        if self.is_modified
+            || self
+                .loading_request
+                .as_ref()
+                .is_some_and(|request| request.reset_view)
+        {
             return;
         }
         if let Some(path) = self.current_file.clone() {
-            match load_document(&path) {
-                Ok(loaded) => {
-                    self.apply_document(loaded, false);
-                    self.set_toast("檔案已即時同步更新 ⚡".to_string());
-                }
-                Err(error) => self.set_toast(format!("❌ 檔案重載失敗：{}", error)),
-            }
+            self.queue_document_load(&path, false);
         }
     }
 
@@ -344,17 +434,29 @@ impl MdPreviewApp {
             return;
         }
         if let Some(path) = target_path {
+            if self
+                .loading_request
+                .as_ref()
+                .is_some_and(|request| request.reset_view && request.path == path)
+            {
+                self.cancel_document_load();
+                self.visible = false;
+                hide_app_window();
+                return;
+            }
             if self.current_file.as_deref() == Some(path.as_path()) {
                 self.visible = !self.visible;
                 if self.visible {
                     show_and_focus_app_window();
                 } else {
+                    self.cancel_document_load();
                     hide_app_window();
                 }
             } else {
                 self.load_file(&path);
             }
         } else if self.visible {
+            self.cancel_document_load();
             self.visible = false;
             hide_app_window();
         } else {
@@ -363,7 +465,13 @@ impl MdPreviewApp {
     }
 
     pub fn navigate_sibling_file(&mut self, forward: bool) {
-        let Some(current) = self.current_file.as_ref() else {
+        let Some(current) = self
+            .loading_request
+            .as_ref()
+            .filter(|request| request.reset_view)
+            .map(|request| &request.path)
+            .or(self.current_file.as_ref())
+        else {
             return;
         };
         let files = &self.siblings;

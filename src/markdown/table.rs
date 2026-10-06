@@ -126,7 +126,7 @@ impl RenderContext<'_> {
                     .layout(Layout::top_down(align)),
             );
             cell_ui.set_clip_rect(inner_rect.intersect(ui.clip_rect()));
-            crate::search::searchable_galley(
+            let (_, target) = crate::search::searchable_galley_target(
                 &mut cell_ui,
                 galley,
                 self.search_query,
@@ -134,6 +134,9 @@ impl RenderContext<'_> {
                 self.search_jump,
                 Sense::hover(),
             );
+            if target.is_some() {
+                self.search_rect = target;
+            }
             x += *width;
             if column + 1 < widths.len() {
                 ui.painter().vline(x, rect.y_range(), border);

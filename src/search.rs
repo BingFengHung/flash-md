@@ -110,30 +110,47 @@ pub fn highlight_job(
 /// font size, images and preceding blocks rather than estimated line heights.
 pub fn searchable_label(
     ui: &mut Ui,
-    mut job: LayoutJob,
+    job: LayoutJob,
     query: &str,
     active_local: Option<usize>,
     jump: bool,
     sense: Sense,
     wrap: bool,
 ) -> Response {
+    let (response, target) =
+        searchable_label_target(ui, job, query, active_local, jump, sense, wrap);
+    if let Some(target) = target {
+        ui.scroll_to_rect(target, Some(Align::Center));
+    }
+    response
+}
+
+pub fn searchable_label_target(
+    ui: &mut Ui,
+    mut job: LayoutJob,
+    query: &str,
+    active_local: Option<usize>,
+    jump: bool,
+    sense: Sense,
+    wrap: bool,
+) -> (Response, Option<egui::Rect>) {
     job.wrap.max_width = if wrap {
         ui.available_width()
     } else {
         f32::INFINITY
     };
     let galley = ui.fonts(|fonts| fonts.layout_job(job));
-    searchable_galley(ui, galley, query, active_local, jump, sense)
+    searchable_galley_target(ui, galley, query, active_local, jump, sense)
 }
 
-pub fn searchable_galley(
+pub fn searchable_galley_target(
     ui: &mut Ui,
     galley: Arc<egui::Galley>,
     query: &str,
     active_local: Option<usize>,
     jump: bool,
     sense: Sense,
-) -> Response {
+) -> (Response, Option<egui::Rect>) {
     let match_start = if jump {
         active_local.and_then(|index| {
             find_matches(galley.text(), query)
@@ -144,15 +161,14 @@ pub fn searchable_galley(
         None
     };
     let response = ui.add(egui::Label::new(galley.clone()).sense(sense));
-    if let Some(start) = match_start {
+    let target = match_start.map(|start| {
         let chars = galley.text()[..start].chars().count();
         let cursor = galley.from_ccursor(CCursor::new(chars));
-        let rect = galley
+        galley
             .pos_from_cursor(&cursor)
-            .translate(response.rect.min.to_vec2());
-        ui.scroll_to_rect(rect, Some(Align::Center));
-    }
-    response
+            .translate(response.rect.min.to_vec2())
+    });
+    (response, target)
 }
 
 #[cfg(test)]
