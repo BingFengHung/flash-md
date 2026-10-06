@@ -676,9 +676,15 @@ fn virtual_code_search_reveals_a_distant_unicode_match_on_both_axes() {
         );
         assert_eq!(app.search_match_count, 1);
         assert!(app.current_scroll_offset > 90_000.0);
+        let body_count = texts(&output)
+            .iter()
+            .filter(|(text, _, _)| {
+                text.starts_with("let value = 1;") || text.contains("目的NEEDLE")
+            })
+            .count();
         assert!(
-            texts(&output).len() < 140,
-            "offscreen code lines were painted"
+            body_count < 50,
+            "frame {index}: {body_count} offscreen code lines were painted"
         );
         if index > 0 {
             let visible = output.shapes.iter().any(|shape| {
