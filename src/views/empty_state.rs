@@ -1,5 +1,5 @@
-use egui::{Color32, FontId, Frame, Margin, RichText, Rounding, Stroke, Vec2};
 use crate::theme::AppTheme;
+use egui::{Color32, FontId, Frame, Margin, RichText, Rounding, Stroke, Vec2};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 

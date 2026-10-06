@@ -1,13 +1,14 @@
-use egui::{
-    pos2, vec2, Align2, Color32, FontId, Frame, Margin, Pos2, Rect, RichText, Rounding,
-    Sense, Stroke, Vec2,
-};
 use crate::theme::AppTheme;
+use egui::{
+    pos2, vec2, Align2, Color32, FontId, Frame, Margin, Pos2, Rect, RichText, Rounding, Sense,
+    Stroke, Vec2,
+};
 
 #[derive(Debug, Clone)]
 pub struct MindmapNode {
     pub id: usize,
     pub title: String,
+    pub anchor: Option<String>,
     pub level: usize,
     pub children: Vec<MindmapNode>,
     pub collapsed: bool,
@@ -49,6 +50,7 @@ pub fn parse_markdown_to_mindmap(content: &str, fallback_root_title: &str) -> Mi
         } else {
             fallback_root_title.to_string()
         },
+        anchor: None,
         level: 0,
         children: Vec::new(),
         collapsed: false,
@@ -58,9 +60,43 @@ pub fn parse_markdown_to_mindmap(content: &str, fallback_root_title: &str) -> Mi
     };
 
     let mut next_id = 1;
+    let mut promoted_root = false;
     let mut stack: Vec<(usize, MindmapNode)> = Vec::new(); // (level, node)
 
-    for raw_line in content.lines() {
+    let toc = crate::parsers::extract_markdown_toc(content);
+    let headings: std::collections::HashMap<_, _> =
+        toc.iter().map(|item| (item.line_idx, item)).collect();
+    let starts: Vec<_> = std::iter::once(0)
+        .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let line_of = |offset: usize| {
+        starts
+            .partition_point(|start| *start <= offset)
+            .saturating_sub(1)
+    };
+    let mut code_lines = std::collections::HashSet::new();
+    let mut code_start = None;
+    for (event, range) in
+        pulldown_cmark::Parser::new_ext(content, crate::parsers::markdown_options())
+            .into_offset_iter()
+    {
+        match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_)) => {
+                code_start = Some(line_of(range.start))
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::CodeBlock) => {
+                if let Some(first) = code_start.take() {
+                    code_lines.extend(first..=line_of(range.end.saturating_sub(1)));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut heading_anchor = None;
+    for (line_index, raw_line) in content.lines().enumerate() {
+        if code_lines.contains(&line_index) {
+            continue;
+        }
         let line = raw_line.trim();
         if line.is_empty() {
             continue;
@@ -69,15 +105,10 @@ pub fn parse_markdown_to_mindmap(content: &str, fallback_root_title: &str) -> Mi
         let mut node_level = 0;
         let mut title = "";
 
-        if line.starts_with('#') {
-            let hash_count = line.chars().take_while(|&c| c == '#').count();
-            if hash_count > 0 && hash_count <= 6 {
-                let rest = line[hash_count..].trim();
-                if !rest.is_empty() {
-                    node_level = hash_count;
-                    title = rest;
-                }
-            }
+        if let Some(heading) = headings.get(&line_index) {
+            node_level = heading.level as usize;
+            title = &heading.title;
+            heading_anchor = Some(heading.anchor.clone());
         } else if line.starts_with("- ") || line.starts_with("* ") || line.starts_with("+ ") {
             let leading_spaces = raw_line.len() - raw_line.trim_start().len();
             let indent_level = (leading_spaces / 2) + 1;
@@ -96,14 +127,17 @@ pub fn parse_markdown_to_mindmap(content: &str, fallback_root_title: &str) -> Mi
             }
 
             // 如果是第一個 H1 且 root 還是預設名稱，則直接升級 root 標題，後續子標題直接作為主分支
-            if node_level == 1 && root.children.is_empty() && stack.is_empty() {
+            if node_level == 1 && !promoted_root && root.children.is_empty() && stack.is_empty() {
+                promoted_root = true;
                 root.title = clean_title;
+                root.anchor = heading_anchor.clone();
                 continue;
             }
 
             let new_node = MindmapNode {
                 id: next_id,
                 title: clean_title,
+                anchor: heading_anchor.clone(),
                 level: node_level,
                 children: Vec::new(),
                 collapsed: false,
@@ -196,8 +230,15 @@ fn layout_mindmap_tree(
     let text_width = (char_count as f32 * approx_char_width).clamp(40.0_f32, 380.0_f32);
     let text_height = font_size * 1.35_f32;
 
-    let expand_btn_w = if !node.children.is_empty() { 18.0_f32 } else { 0.0_f32 };
-    node.size = vec2(text_width + pad_h * 2.0_f32 + expand_btn_w, text_height + pad_v * 2.0_f32);
+    let expand_btn_w = if !node.children.is_empty() {
+        18.0_f32
+    } else {
+        0.0_f32
+    };
+    node.size = vec2(
+        text_width + pad_h * 2.0_f32 + expand_btn_w,
+        text_height + pad_v * 2.0_f32,
+    );
 
     if node.collapsed || node.children.is_empty() {
         node.subtree_height = node.size.y;
@@ -219,23 +260,14 @@ fn layout_mindmap_tree(
 }
 
 /// 定位每個節點的絕對世界座標
-fn position_mindmap_tree(
-    node: &mut MindmapNode,
-    origin: Pos2,
-    h_spacing: f32,
-    v_spacing: f32,
-) {
+fn position_mindmap_tree(node: &mut MindmapNode, origin: Pos2, h_spacing: f32, v_spacing: f32) {
     node.pos = origin;
 
     if node.collapsed || node.children.is_empty() {
         return;
     }
 
-    let total_children_h: f32 = node
-        .children
-        .iter()
-        .map(|c| c.subtree_height)
-        .sum::<f32>()
+    let total_children_h: f32 = node.children.iter().map(|c| c.subtree_height).sum::<f32>()
         + (node.children.len().saturating_sub(1) as f32) * v_spacing;
 
     let mut current_y = origin.y - total_children_h / 2.0_f32;
@@ -289,13 +321,15 @@ pub fn render_mindmap_view(
     // 滾輪縮放
     let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
     if scroll_delta != 0.0_f32 && response.hovered() {
-        let zoom_factor = if scroll_delta > 0.0_f32 { 1.12_f32 } else { 0.89_f32 };
+        let zoom_factor = if scroll_delta > 0.0_f32 {
+            1.12_f32
+        } else {
+            0.89_f32
+        };
         state.zoom = (state.zoom * zoom_factor).clamp(0.25_f32, 2.5_f32);
     }
 
-    let world_to_screen = |p: Pos2| -> Pos2 {
-        center + state.pan + (p.to_vec2() * state.zoom)
-    };
+    let world_to_screen = |p: Pos2| -> Pos2 { center + state.pan + (p.to_vec2() * state.zoom) };
 
     // 3. 繪製精緻背景網格點陣 (Grid Dots)
     let grid_color = match theme {
@@ -350,7 +384,10 @@ pub fn render_mindmap_view(
 
     // 5. 繪製右上角懸浮工具列 (Zoom & Center Reset & Exit)
     let toolbar_rect = Rect::from_min_size(
-        pos2(available_rect.max.x - 220.0_f32, available_rect.min.y + 14.0_f32),
+        pos2(
+            available_rect.max.x - 220.0_f32,
+            available_rect.min.y + 14.0_f32,
+        ),
         vec2(206.0_f32, 34.0_f32),
     );
 
@@ -362,7 +399,11 @@ pub fn render_mindmap_view(
             .inner_margin(Margin::symmetric(8.0_f32, 4.0_f32))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new("➖").small()).on_hover_text("縮小 (滾輪向下)").clicked() {
+                    if ui
+                        .add(egui::Button::new("➖").small())
+                        .on_hover_text("縮小 (滾輪向下)")
+                        .clicked()
+                    {
                         state.zoom = (state.zoom * 0.88_f32).clamp(0.25_f32, 2.5_f32);
                     }
 
@@ -374,24 +415,37 @@ pub fn render_mindmap_view(
                             .color(theme.accent_color()),
                     );
 
-                    if ui.add(egui::Button::new("➕").small()).on_hover_text("放大 (滾輪向上)").clicked() {
+                    if ui
+                        .add(egui::Button::new("➕").small())
+                        .on_hover_text("放大 (滾輪向上)")
+                        .clicked()
+                    {
                         state.zoom = (state.zoom * 1.14_f32).clamp(0.25_f32, 2.5_f32);
                     }
 
                     ui.separator();
 
-                    if ui.add(egui::Button::new("🎯").small()).on_hover_text("重置視角居中").clicked() {
+                    if ui
+                        .add(egui::Button::new("🎯").small())
+                        .on_hover_text("重置視角居中")
+                        .clicked()
+                    {
                         state.pan = Vec2::ZERO;
                         state.zoom = 1.0_f32;
                     }
 
-                    if ui.add(
-                        egui::Button::new(
-                            RichText::new("📄 正文")
-                                .size(11.5_f32)
-                                .color(theme.text_primary()),
-                        ).small(),
-                    ).on_hover_text("切換回 Markdown 正文閱讀").clicked() {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("📄 正文")
+                                    .size(11.5_f32)
+                                    .color(theme.text_primary()),
+                            )
+                            .small(),
+                        )
+                        .on_hover_text("切換回 Markdown 正文閱讀")
+                        .clicked()
+                    {
                         output.switch_to_markdown = true;
                     }
                 });
@@ -402,6 +456,7 @@ pub fn render_mindmap_view(
 }
 
 /// 遞迴繪製心智圖連線與節點卡片（含視口視錐剔除 Viewport Culling）
+#[allow(clippy::too_many_arguments)]
 fn render_mindmap_node_and_edges<F>(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
@@ -418,7 +473,10 @@ fn render_mindmap_node_and_edges<F>(
 {
     let screen_origin = world_to_screen(node.pos);
     let screen_node_rect = Rect::from_min_size(
-        pos2(screen_origin.x, screen_origin.y - (node.size.y * zoom) / 2.0_f32),
+        pos2(
+            screen_origin.x,
+            screen_origin.y - (node.size.y * zoom) / 2.0_f32,
+        ),
         node.size * zoom,
     );
 
@@ -528,7 +586,9 @@ fn render_mindmap_node_and_edges<F>(
         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
     }
     if node_resp.clicked() {
-        clicked_anchor_title.get_or_insert_with(|| node.title.clone());
+        if let Some(anchor) = &node.anchor {
+            clicked_anchor_title.get_or_insert_with(|| anchor.clone());
+        }
     }
 
     // 4. 繪製節點文字
@@ -552,7 +612,10 @@ fn render_mindmap_node_and_edges<F>(
             screen_node_rect.center().y,
         );
         let badge_radius = (7.0_f32 * zoom).clamp(4.0_f32, 10.0_f32);
-        let badge_rect = Rect::from_center_size(badge_center, vec2(badge_radius * 2.0_f32, badge_radius * 2.0_f32));
+        let badge_rect = Rect::from_center_size(
+            badge_center,
+            vec2(badge_radius * 2.0_f32, badge_radius * 2.0_f32),
+        );
 
         let badge_resp = ui.interact(
             badge_rect,
@@ -586,20 +649,20 @@ fn render_mindmap_node_and_edges<F>(
 fn get_branch_color(level: usize, idx: usize, theme: AppTheme) -> Color32 {
     let colors = match theme {
         AppTheme::Dark => [
-            Color32::from_rgb(56, 189, 248),   // 青天藍
-            Color32::from_rgb(52, 211, 153),   // 翠綠
-            Color32::from_rgb(251, 146, 60),   // 珊瑚橘
-            Color32::from_rgb(192, 132, 252),  // 薰衣草紫
-            Color32::from_rgb(250, 204, 21),   // 琥珀金
-            Color32::from_rgb(244, 114, 182),  // 玫瑰粉
+            Color32::from_rgb(56, 189, 248),  // 青天藍
+            Color32::from_rgb(52, 211, 153),  // 翠綠
+            Color32::from_rgb(251, 146, 60),  // 珊瑚橘
+            Color32::from_rgb(192, 132, 252), // 薰衣草紫
+            Color32::from_rgb(250, 204, 21),  // 琥珀金
+            Color32::from_rgb(244, 114, 182), // 玫瑰粉
         ],
         AppTheme::Light => [
-            Color32::from_rgb(2, 132, 199),    // 海軍深藍
-            Color32::from_rgb(5, 150, 105),    // 翡翠綠
-            Color32::from_rgb(217, 119, 6),    // 暖橘
-            Color32::from_rgb(147, 51, 234),   // 紫羅蘭
-            Color32::from_rgb(202, 138, 4),    // 典雅金
-            Color32::from_rgb(219, 39, 119),   // 洋紅
+            Color32::from_rgb(2, 132, 199),  // 海軍深藍
+            Color32::from_rgb(5, 150, 105),  // 翡翠綠
+            Color32::from_rgb(217, 119, 6),  // 暖橘
+            Color32::from_rgb(147, 51, 234), // 紫羅蘭
+            Color32::from_rgb(202, 138, 4),  // 典雅金
+            Color32::from_rgb(219, 39, 119), // 洋紅
         ],
     };
 
@@ -615,6 +678,18 @@ fn get_branch_color(level: usize, idx: usize, theme: AppTheme) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mindmap_ignores_code_headings_and_preserves_duplicate_and_setext_anchors() {
+        let root = super::parse_markdown_to_mindmap(
+            "# Root\n\n## Intro\n\n## Intro\n\nSetext\n------\n\n```\n# Fake\n- Fake list\n```",
+            "file",
+        );
+        assert_eq!(root.children.len(), 3);
+        assert_eq!(root.children[0].anchor.as_deref(), Some("intro"));
+        assert_eq!(root.children[1].anchor.as_deref(), Some("intro-1"));
+        assert_eq!(root.children[2].anchor.as_deref(), Some("setext"));
+    }
+
     use super::*;
 
     #[test]
@@ -622,8 +697,14 @@ mod tests {
         assert_eq!(clean_markdown_inline("**Bold Text**"), "Bold Text");
         assert_eq!(clean_markdown_inline("*Italic Text*"), "Italic Text");
         assert_eq!(clean_markdown_inline("`Code Block`"), "Code Block");
-        assert_eq!(clean_markdown_inline("[Link Title](https://example.com)"), "Link Title");
-        assert_eq!(clean_markdown_inline("Normal **Mixed** `Title`"), "Normal Mixed Title");
+        assert_eq!(
+            clean_markdown_inline("[Link Title](https://example.com)"),
+            "Link Title"
+        );
+        assert_eq!(
+            clean_markdown_inline("Normal **Mixed** `Title`"),
+            "Normal Mixed Title"
+        );
     }
 
     #[test]

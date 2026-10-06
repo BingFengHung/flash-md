@@ -1,6 +1,6 @@
-use std::path::Path;
-use egui::{Color32, Frame, Margin, RichText, Rounding, ScrollArea, Stroke};
 use crate::theme::AppTheme;
+use egui::{Color32, Frame, Margin, RichText, Rounding, ScrollArea, Stroke};
+use std::path::Path;
 
 pub struct PresentationOutput {
     pub toggle_fullscreen: bool,
@@ -17,7 +17,7 @@ pub fn render_slides_mode(
     current_slide_index: &mut usize,
     is_slides_fullscreen: bool,
 ) -> PresentationOutput {
-    let slides = crate::markdown::extract_slides(content);
+    let slides = crate::parsers::cached_slides(ui.ctx(), content);
     let total = slides.len();
     if *current_slide_index >= total {
         *current_slide_index = total.saturating_sub(1);
@@ -33,14 +33,29 @@ pub fn render_slides_mode(
     let center_pos = available_rect.center();
 
     // 幻燈片主卡片：若全螢幕則填滿整個螢幕，若視窗模式則自適應填滿視窗
-    let margin_x = if is_slides_fullscreen { 28.0_f32 } else { 20.0_f32 };
-    let margin_top = if is_slides_fullscreen { 24.0_f32 } else { 16.0_f32 };
-    let margin_bottom = if is_slides_fullscreen { 76.0_f32 } else { 62.0_f32 };
+    let margin_x = if is_slides_fullscreen {
+        28.0_f32
+    } else {
+        20.0_f32
+    };
+    let margin_top = if is_slides_fullscreen {
+        24.0_f32
+    } else {
+        16.0_f32
+    };
+    let margin_bottom = if is_slides_fullscreen {
+        76.0_f32
+    } else {
+        62.0_f32
+    };
 
     let card_w = (available_rect.width() - margin_x * 2.0_f32).max(200.0_f32);
     let card_h = (available_rect.height() - margin_top - margin_bottom).max(150.0_f32);
     let card_rect = egui::Rect::from_min_size(
-        egui::pos2(available_rect.min.x + margin_x, available_rect.min.y + margin_top),
+        egui::pos2(
+            available_rect.min.x + margin_x,
+            available_rect.min.y + margin_top,
+        ),
         egui::vec2(card_w, card_h),
     );
 
@@ -50,17 +65,21 @@ pub fn render_slides_mode(
     };
     let card_stroke = Stroke::new(1.0_f32, theme.border_color());
 
-    ui.painter().rect(
-        card_rect,
-        Rounding::same(12.0_f32),
-        card_bg,
-        card_stroke,
-    );
+    ui.painter()
+        .rect(card_rect, Rounding::same(12.0_f32), card_bg, card_stroke);
 
     // 卡片內部渲染 Markdown 投影片
     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(card_rect), |ui| {
-        let pad_h = if is_slides_fullscreen { 44.0_f32 } else { 28.0_f32 };
-        let pad_v = if is_slides_fullscreen { 32.0_f32 } else { 20.0_f32 };
+        let pad_h = if is_slides_fullscreen {
+            44.0_f32
+        } else {
+            28.0_f32
+        };
+        let pad_v = if is_slides_fullscreen {
+            32.0_f32
+        } else {
+            20.0_f32
+        };
         Frame::none()
             .inner_margin(Margin::symmetric(pad_h, pad_v))
             .show(ui, |ui| {
@@ -74,9 +93,13 @@ pub fn render_slides_mode(
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            RichText::new(format!("第 {} / {} 頁", *current_slide_index + 1, total))
-                                .size(12.0_f32)
-                                .color(theme.text_secondary()),
+                            RichText::new(format!(
+                                "第 {} / {} 頁",
+                                *current_slide_index + 1,
+                                total
+                            ))
+                            .size(12.0_f32)
+                            .color(theme.text_secondary()),
                         );
                     });
                 });
@@ -86,7 +109,11 @@ pub fn render_slides_mode(
                 ui.add_space(10.0_f32);
 
                 // 簡報內容 Markdown 渲染 (全螢幕使用 1.5x 字級，視窗模式使用 1.35x 字級)
-                let scale_mult = if is_slides_fullscreen { 1.5_f32 } else { 1.35_f32 };
+                let scale_mult = if is_slides_fullscreen {
+                    1.5_f32
+                } else {
+                    1.35_f32
+                };
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -107,7 +134,10 @@ pub fn render_slides_mode(
     let pill_height = 42.0_f32;
     let pill_width = 350.0_f32;
     let pill_rect = egui::Rect::from_min_size(
-        egui::pos2(center_pos.x - pill_width / 2.0_f32, available_rect.max.y - pill_height - 14.0_f32),
+        egui::pos2(
+            center_pos.x - pill_width / 2.0_f32,
+            available_rect.max.y - pill_height - 14.0_f32,
+        ),
         egui::vec2(pill_width, pill_height),
     );
 
@@ -137,11 +167,18 @@ pub fn render_slides_mode(
                     let can_prev = *current_slide_index > 0;
                     let prev_btn = ui.add_enabled(
                         can_prev,
-                        egui::Button::new(RichText::new("◀").size(13.0_f32).color(if can_prev { theme.text_primary() } else { theme.text_secondary() }))
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE),
+                        egui::Button::new(RichText::new("◀").size(13.0_f32).color(if can_prev {
+                            theme.text_primary()
+                        } else {
+                            theme.text_secondary()
+                        }))
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE),
                     );
-                    if prev_btn.on_hover_text("上一頁 (← / PageUp / Backspace)").clicked() {
+                    if prev_btn
+                        .on_hover_text("上一頁 (← / PageUp / Backspace)")
+                        .clicked()
+                    {
                         prev_slide = true;
                     }
 
@@ -155,30 +192,49 @@ pub fn render_slides_mode(
                     let can_next = *current_slide_index + 1 < total;
                     let next_btn = ui.add_enabled(
                         can_next,
-                        egui::Button::new(RichText::new("▶").size(13.0_f32).color(if can_next { theme.text_primary() } else { theme.text_secondary() }))
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE),
+                        egui::Button::new(RichText::new("▶").size(13.0_f32).color(if can_next {
+                            theme.text_primary()
+                        } else {
+                            theme.text_secondary()
+                        }))
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE),
                     );
-                    if next_btn.on_hover_text("下一頁 (→ / Space / PageDown)").clicked() {
+                    if next_btn
+                        .on_hover_text("下一頁 (→ / Space / PageDown)")
+                        .clicked()
+                    {
                         next_slide = true;
                     }
 
                     ui.separator();
 
-                    let fs_icon = if is_slides_fullscreen { "🗗 視窗" } else { "⛶ 全螢幕" };
+                    let fs_icon = if is_slides_fullscreen {
+                        "🗗 視窗"
+                    } else {
+                        "⛶ 全螢幕"
+                    };
                     let fs_btn = ui.add(
-                        egui::Button::new(RichText::new(fs_icon).size(12.0_f32).color(theme.text_primary()))
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE),
+                        egui::Button::new(
+                            RichText::new(fs_icon)
+                                .size(12.0_f32)
+                                .color(theme.text_primary()),
+                        )
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE),
                     );
                     if fs_btn.on_hover_text("切換全螢幕 (F / F11)").clicked() {
                         toggle_fullscreen = true;
                     }
 
                     let exit_btn = ui.add(
-                        egui::Button::new(RichText::new("✕ 退出").size(12.0_f32).color(theme.text_primary()))
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE),
+                        egui::Button::new(
+                            RichText::new("✕ 退出")
+                                .size(12.0_f32)
+                                .color(theme.text_primary()),
+                        )
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE),
                     );
                     if exit_btn.on_hover_text("退出簡報模式 (Esc / F5)").clicked() {
                         exit_slides = true;

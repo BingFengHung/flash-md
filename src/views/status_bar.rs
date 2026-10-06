@@ -1,6 +1,6 @@
-use egui::{RichText, Rounding, Stroke};
 use crate::theme::AppTheme;
 use crate::views::empty_state::CURRENT_VERSION;
+use egui::{RichText, Rounding, Stroke};
 
 /// 繪製導覽列現代按鈕元件
 pub fn render_nav_button(
@@ -26,15 +26,11 @@ pub fn render_nav_button(
         theme.text_secondary()
     };
 
-    let btn = egui::Button::new(
-        RichText::new(label)
-            .size(12.0_f32)
-            .color(text_color),
-    )
-    .min_size(egui::vec2(0.0_f32, 24.0_f32))
-    .fill(bg)
-    .stroke(Stroke::new(1.0_f32, border))
-    .rounding(Rounding::same(5.0_f32));
+    let btn = egui::Button::new(RichText::new(label).size(12.0_f32).color(text_color))
+        .min_size(egui::vec2(0.0_f32, 24.0_f32))
+        .fill(bg)
+        .stroke(Stroke::new(1.0_f32, border))
+        .rounding(Rounding::same(5.0_f32));
 
     ui.add(btn).on_hover_text(tooltip)
 }

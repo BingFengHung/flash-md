@@ -9,6 +9,7 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub enum WatcherEvent {
     FileChanged(PathBuf),
+    DirectoryChanged,
 }
 
 pub struct FileWatcher {
@@ -47,7 +48,8 @@ impl FileWatcher {
             move |res: Result<Event, notify::Error>| {
                 if let Ok(event) = res {
                     match event.kind {
-                        EventKind::Modify(_) | EventKind::Create(_) => {
+                        EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
+                            let _ = sender.send(WatcherEvent::DirectoryChanged);
                             if event.paths.iter().any(|p| p == &target_path) {
                                 debug!("檔案變更通知: {:?}", target_path);
                                 let _ = sender.send(WatcherEvent::FileChanged(target_path.clone()));

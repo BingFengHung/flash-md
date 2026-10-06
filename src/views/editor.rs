@@ -1,5 +1,5 @@
-use egui::{text::LayoutJob, FontId, Frame, Margin, Rounding, ScrollArea, Stroke, Vec2};
 use crate::theme::AppTheme;
+use egui::{text::LayoutJob, FontId, Frame, Margin, Rounding, ScrollArea, Stroke, Vec2};
 
 pub struct EditorOutput {
     pub changed: bool,
@@ -85,7 +85,10 @@ pub fn highlight_markdown_for_editor(
                     ..Default::default()
                 },
             );
-        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+        } else if trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+        {
             // 清單項目符號
             let bullet_len = line.len() - trimmed.len() + 2;
             let (bullet_part, rest) = line.split_at(bullet_len.min(line.len()));
@@ -169,11 +172,7 @@ pub fn render_editor(
             });
         });
 
-    let new_line_count = if changed {
-        content.lines().count()
-    } else {
-        0
-    };
+    let new_line_count = if changed { content.lines().count() } else { 0 };
 
     EditorOutput {
         changed,
@@ -200,4 +199,3 @@ mod tests {
         assert_eq!(job.text, "");
     }
 }
-

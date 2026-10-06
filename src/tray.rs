@@ -123,12 +123,12 @@ fn create_default_tray_icon() -> Icon {
 
     // 向量黃金比例閃電多邊形 (32x32 像素精確座標)
     let lightning_poly: [(f32, f32); 6] = [
-        (18.0, 3.5),   // 頂端銳利尖點
-        (9.5, 15.5),   // 中左外折角
-        (15.2, 15.5),  // 中左內凹折
-        (13.2, 28.5),  // 底部銳利尖點
-        (22.5, 13.5),  // 中右外折角
-        (16.8, 13.5),  // 中右內凹折
+        (18.0, 3.5),  // 頂端銳利尖點
+        (9.5, 15.5),  // 中左外折角
+        (15.2, 15.5), // 中左內凹折
+        (13.2, 28.5), // 底部銳利尖點
+        (22.5, 13.5), // 中右外折角
+        (16.8, 13.5), // 中右內凹折
     ];
 
     let squircle_radius = 6.5_f32;
@@ -151,7 +151,15 @@ fn create_default_tray_icon() -> Icon {
                     let py = y as f32 + sy;
 
                     // 1. 檢驗是否位於超橢圓圓角矩形 (Squircle) 內
-                    let in_squircle = is_inside_rounded_rect(px, py, min_xy, min_xy, max_xy, max_xy, squircle_radius);
+                    let in_squircle = is_inside_rounded_rect(
+                        px,
+                        py,
+                        min_xy,
+                        min_xy,
+                        max_xy,
+                        max_xy,
+                        squircle_radius,
+                    );
 
                     if in_squircle {
                         // 2. 檢驗是否位於向量閃電圖形內
@@ -192,9 +200,8 @@ fn create_default_tray_icon() -> Icon {
         }
     }
 
-    Icon::from_rgba(rgba, 32, 32).unwrap_or_else(|_| {
-        Icon::from_rgba(vec![255; 32 * 32 * 4], 32, 32).unwrap()
-    })
+    Icon::from_rgba(rgba, 32, 32)
+        .unwrap_or_else(|_| Icon::from_rgba(vec![255; 32 * 32 * 4], 32, 32).unwrap())
 }
 
 fn is_inside_rounded_rect(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> bool {
@@ -237,8 +244,7 @@ fn point_in_polygon(px: f32, py: f32, poly: &[(f32, f32)]) -> bool {
         let (xi, yi) = poly[i];
         let (xj, yj) = poly[j];
 
-        let intersect = ((yi > py) != (yj > py))
-            && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+        let intersect = ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
         if intersect {
             inside = !inside;
         }
@@ -254,12 +260,12 @@ pub fn create_app_icon_data() -> egui::IconData {
     let mut rgba = Vec::with_capacity(width * height * 4);
 
     let lightning_poly: [(f32, f32); 6] = [
-        (36.5, 9.0),   // 頂端銳利尖點
-        (19.5, 31.0),  // 中左外折角
-        (30.8, 31.0),  // 中左內凹折
-        (26.8, 55.0),  // 底部銳利尖點
-        (44.5, 27.0),  // 中右外折角
-        (33.2, 27.0),  // 中右內凹折
+        (36.5, 9.0),  // 頂端銳利尖點
+        (19.5, 31.0), // 中左外折角
+        (30.8, 31.0), // 中左內凹折
+        (26.8, 55.0), // 底部銳利尖點
+        (44.5, 27.0), // 中右外折角
+        (33.2, 27.0), // 中右內凹折
     ];
 
     let squircle_radius = 13.0_f32;
@@ -279,7 +285,15 @@ pub fn create_app_icon_data() -> egui::IconData {
                     let px = x as f32 + sx;
                     let py = y as f32 + sy;
 
-                    let in_squircle = is_inside_rounded_rect(px, py, min_xy, min_xy, max_xy, max_xy, squircle_radius);
+                    let in_squircle = is_inside_rounded_rect(
+                        px,
+                        py,
+                        min_xy,
+                        min_xy,
+                        max_xy,
+                        max_xy,
+                        squircle_radius,
+                    );
 
                     if in_squircle {
                         let in_lightning = point_in_polygon(px, py, &lightning_poly);

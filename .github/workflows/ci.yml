@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - '**'
-      - '!main'
   pull_request:
     branches:
       - '**'
@@ -14,6 +13,10 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    name: Dependency audit
+    uses: ./.github/workflows/security-audit.yml
+
   build:
     name: Build & Package (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -38,24 +41,33 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: rustfmt, clippy
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
+      - name: Check Formatting
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo clippy --all-targets --target ${{ matrix.target }} --locked -- -D warnings
+
       - name: Run Unit Tests
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo test --verbose
+        run: cargo test --verbose --locked
 
       - name: Build Release Binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --locked
 
       - name: Package Binary (Windows)
         shell: pwsh
         run: |
           $bin_path = "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
-          Compress-Archive -Path $bin_path, "README.md", "README.zh-TW.md" -DestinationPath "${{ matrix.archive_name }}"
+          Compress-Archive -Path $bin_path, "README.md", "README.zh-TW.md", "LICENSE-MIT" -DestinationPath "${{ matrix.archive_name }}"
 
       - name: Upload Test Artifact
         uses: actions/upload-artifact@v4

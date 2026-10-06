@@ -10,6 +10,16 @@
 
 ---
 
+## v1.0.104 修正
+
+- 圖片、PDF 與 ZIP 內的檔案為唯讀預覽；只有文字與 SVG 原始碼可儲存。切換檔案、關閉、退出或更新前，可選擇儲存、捨棄或取消未儲存修改。外部修改衝突會保留編輯內容並停止覆寫。
+- 更新器依 x86_64 / ARM64 選擇套件，檢查下載、解壓縮與執行檔格式；替換失敗會回復原檔，下載或安裝失敗後可重試。
+- 只讀取前景檔案總管或桌面的選取項目；獨立視窗不再建立全域快捷鍵掛鉤。內容、圖片紋理、目錄、表格與語法高亮使用快取，修改與重載後同步更新。
+- 搜尋依實際排版定位，CSV 支援引號內換行，JSON 拒絕無效輸入，簡報分頁避開程式碼區塊，目錄與心智圖使用一致的唯一錨點。
+- 更新 rustls 安全修補版本；分支與主分支 CI 執行格式、Clippy、單元測試、雙架構建置與相依稽核，發布前通過相同檢查。
+
+---
+
 ## ✨ 核心特色 (Features)
 
 - ⚡ **原生極速渲染**：基於 `egui` 與 `pulldown-cmark` 純 Rust 打造，無 Electron / Chromium 肥大負擔，開檔即顯。
@@ -31,9 +41,9 @@
 - ⚡ **Vim 風格導航**：支援 `/` 快速搜尋、`n` / `N` 搜尋跳轉、`h` / `l` 切換同目錄檔案、`j` / `k` 上下平滑捲動瀏覽、`g` / `G` 快速置頂置底！
 - 📑 **Markdown TOC 目錄大綱側邊欄 (Ctrl + T)**：一鍵開啟/收起章節大綱，點擊標題直接平滑跳轉至該章節！
 - 📊 **CSV / TSV 斑馬紋互動表格**：自動解析為現代斑馬紋資料表格，支援欄位自動對齊、搜尋高亮與平滑滾動！
-- ⚡ **JSON 零依賴極速格式化與壓縮**：提供「⚡ 格式化 (Format)」與「📦 壓縮 (Minify)」按鈕，混亂的單行 JSON 瞬間排版工整！
+- ⚡ **JSON 驗證、格式化與壓縮**：提供「⚡ 格式化 (Format)」與「📦 壓縮 (Minify)」按鈕，混亂的單行 JSON 瞬間排版工整！
 - 📁 **檔案總管高亮定位 (Ctrl + Shift + O)**：一鍵呼叫 Windows 檔案總管並直接高亮選取目前正在預覽的實體檔案。
-- 🖼️ **圖片與 SVG 向量圖秒開**：支援 PNG, JPG, JPEG, GIF, WEBP, BMP, ICO, SVG, AVIF 等格式，支援滑鼠滾輪縮放、平移與適應視窗！
+- 🖼️ **圖片與 SVG 向量圖秒開**：支援 PNG, JPG, JPEG, GIF, WEBP, BMP, ICO 與 SVG 等格式，支援滑鼠滾輪縮放、平移與適應視窗！
 - 💻 **全語言多格式支援**：支援 Markdown, Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, CSV, SQL, Dockerfile 等 100+ 種檔案格式，內建專業行號欄與語法著色！
 - 📝 **多模式自由切換**：依檔案類型自動選用最佳渲染器，並可隨時按 `Ctrl + M` 一鍵循環切換。
 - 🎨 **現代深淺色主題**：支援深色 (Dark) 與淺色 (Light) 主題一鍵切換，內建 GitHub 風格精緻排版與語法邊框。
@@ -76,7 +86,7 @@
 ## 📦 安裝與使用方式 (Installation & Usage)
 
 ### 方式 1：直接下載發布執行檔 (推薦)
-前往 [GitHub Releases](https://github.com/BingFengHung/flash-md/releases) 頁面下載最新版 `flash-md-windows-x86_64.zip`，解壓縮後執行 `flash-md.exe` 即可常駐於系統匣中。
+前往 [GitHub Releases](https://github.com/BingFengHung/flash-md/releases) 頁面依電腦架構下載最新版 `flash-md-windows-x86_64.zip` 或 `flash-md-windows-aarch64.zip`，解壓縮後執行 `flash-md.exe` 即可常駐於系統匣中。
 
 ### 方式 2：透過命令列執行或自動更新
 ```powershell
@@ -109,9 +119,16 @@ flash-md/
 │   └── release.yml     # 雲端 CI/CD 自動編譯與 Release 發布工作流
 ├── src/
 │   ├── main.rs         # 程式進入點、CLI 參數處理、執行緒協調
+│   ├── app/            # 文件狀態、未儲存確認、快捷鍵與更新協調
+│   ├── document.rs     # 原始檔案類型與原子儲存
+│   ├── files.rs        # 檔案與 ZIP 內容讀取
+│   ├── parsers.rs      # Markdown、CSV、JSON 與簡報解析
+│   ├── search.rs       # Unicode 搜尋與排版定位
+│   ├── textures.rs     # 圖片解碼與紋理快取
 │   ├── app.rs          # egui 預覽視窗 UI、工具列、操作邏輯
 │   ├── explorer.rs     # Windows Shell COM API 檔案總管選取偵測
-│   ├── hotkey.rs       # Win32 RegisterHotKey 全域快捷鍵監聽執行緒
+│   ├── hotkey.rs       # Win32 WH_KEYBOARD_LL 全域快捷鍵監聽執行緒
+│   ├── markdown/       # Code, PDF and Mermaid renderers
 │   ├── markdown.rs     # pulldown-cmark 解析與 syntect 語法高亮渲染引擎
 │   ├── theme.rs        # 深色/淺色主題調色盤與設計系統
 │   ├── tray.rs         # Windows 系統匣常駐圖示與右鍵功能選單
@@ -126,4 +143,4 @@ flash-md/
 
 ## 📄 授權條款 (License)
 
-本專案採用 [MIT OR Apache-2.0](LICENSE) 雙重授權。
+本專案採用 [MIT](LICENSE-MIT) 授權。

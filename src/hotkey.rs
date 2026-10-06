@@ -21,6 +21,7 @@ pub enum HotkeyEvent {
 
 static GLOBAL_HOTKEY_SENDER: Mutex<Option<Sender<HotkeyEvent>>> = Mutex::new(None);
 static GLOBAL_CTX_HOLDER: Mutex<Option<Arc<Mutex<Option<Context>>>>> = Mutex::new(None);
+static SPACE_PRESSED: AtomicBool = AtomicBool::new(false);
 static GLOBAL_HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
 /// 全域低階鍵盤掛鉤 (WH_KEYBOARD_LL) 回呼函式
@@ -44,8 +45,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 let alt_pressed = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0
                     || (kbd.flags.0 & 0x20) != 0;
 
+                if is_key_up && SPACE_PRESSED.swap(false, Ordering::Relaxed) {
+                    return LRESULT(1);
+                }
                 if alt_pressed {
-                    if is_key_down {
+                    if is_key_down && !SPACE_PRESSED.swap(true, Ordering::Relaxed) {
                         debug!("⚡ 成功攔截 Alt + Space！");
 
                         // ⚠️ 關鍵修正：低階鍵盤掛鉤回呼 (WH_KEYBOARD_LL) 是在 GetMessageW 內部
@@ -68,7 +72,8 @@ unsafe extern "system" fn low_level_keyboard_proc(
 
                             // 3. 發送帶有檔案路徑的預覽事件至主佇列
                             if let Some(sender) = sender_clone {
-                                let _ = sender.send(HotkeyEvent::TriggerPreviewWithFile(selected_file));
+                                let _ =
+                                    sender.send(HotkeyEvent::TriggerPreviewWithFile(selected_file));
                             }
 
                             // 4. 喚醒 egui 繪製迴圈
@@ -127,7 +132,9 @@ pub fn start_hotkey_listener(
                 };
 
                 GLOBAL_HOOK_HANDLE.store(hook.0 as isize, Ordering::Relaxed);
-                info!("✅ 成功啟用 WH_KEYBOARD_LL 全域鍵盤攔截器 (已攔截並吞噬 Alt+Space 系統選單)");
+                info!(
+                    "✅ 成功啟用 WH_KEYBOARD_LL 全域鍵盤攔截器 (已攔截並吞噬 Alt+Space 系統選單)"
+                );
 
                 let mut msg = MSG::default();
                 // Win32 Message Loop 維持掛鉤運作

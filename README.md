@@ -10,6 +10,16 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 ---
 
+## v1.0.104 fixes
+
+- Images, PDFs and files inside ZIP archives are read-only previews. Only text and SVG source can be saved. Unsaved changes prompt for Save, Discard or Cancel before switching files, closing, exiting or updating. Conflicting external edits keep your draft and stop the overwrite.
+- Updates select the matching x86_64 / ARM64 package, check download/extraction and executable format, and restore the original executable if replacement fails. Failed downloads or installations allow retry.
+- Selection detection is restricted to the foreground Explorer window or desktop. Standalone windows do not install global keyboard hooks. Parsed content, image textures, outlines, tables and syntax layouts are cached and refreshed after edits or reloads.
+- Search navigates using actual text layout. CSV supports quoted newlines, JSON rejects invalid input, slides preserve code blocks, and outlines and mindmaps share unique heading anchors.
+- The rustls security fix is locked. Branch and main CI run formatting, Clippy, regression tests, both architecture builds and dependency audits; the release uses the same checks.
+
+---
+
 ## ✨ Features
 
 - ⚡ **Native Blazing-Fast Rendering**: Built with pure Rust, `egui`, and `pulldown-cmark`. Zero Electron/Chromium overhead for instant startup times.
@@ -31,9 +41,9 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - ⚡ **Vim-Style Navigation**: Supports `/` to search, `n` / `N` to navigate matches, `h` / `l` for sibling files, `j` / `k` for smooth scrolling, and `g` / `G` to jump to top/bottom!
 - 📑 **Markdown TOC Outline Sidebar (Ctrl + T)**: Toggle document table of contents outline to jump instantly to any heading!
 - 📊 **CSV / TSV Zebra-Striped Data Tables**: Automatically renders structured tabular data with zebra striping, search highlighting, and smooth scrolling!
-- ⚡ **Zero-Dependency JSON Format & Minify**: One-click beautify (2-space indent) or compress minified JSON files directly in the toolbar.
+- ⚡ **Validated JSON Format & Minify**: One-click beautify (2-space indent) or compress minified JSON files directly in the toolbar.
 - 📁 **Locate in Windows File Explorer (Ctrl + Shift + O)**: Instantly reveals and highlights the currently previewed file in Windows File Explorer.
-- 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO, SVG, AVIF formats with smooth mouse wheel zooming, panning, and auto-fit to window!
+- 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO and SVG formats with smooth mouse wheel zooming, panning, and auto-fit to window!
 - 💻 **100+ Formats & Syntax Highlighting**: Supports Markdown, Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, CSV, SQL, Dockerfile, and more!
 - 📝 **Multi-Track Mode Switching**: Automatically routes Markdown, Source Code, Plain Text, and Images to their optimal viewers, with instant cycling via `Ctrl + M`.
 - 🎨 **Modern Dark & Light Themes**: Seamlessly toggle between dark and light modes with GitHub-style typography and clean borders.
@@ -76,7 +86,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 ## 📦 Installation & Usage
 
 ### Option 1: Download Pre-built Binary (Recommended)
-Download the latest `flash-md-windows-x86_64.zip` from [GitHub Releases](https://github.com/BingFengHung/flash-md/releases), extract it, and run `flash-md.exe`.
+Download the latest `flash-md-windows-x86_64.zip` or `flash-md-windows-aarch64.zip` for your architecture from [GitHub Releases](https://github.com/BingFengHung/flash-md/releases), extract it, and run `flash-md.exe`.
 
 ### Option 2: CLI Usage & Auto-Update
 ```powershell
@@ -94,7 +104,7 @@ flash-md.exe path/to/document.md
 - **Background Checks**: Automatically checks for new GitHub Releases on startup and displays an upgrade banner.
 - **System Tray**: Right-click the system tray icon and select **"🔄 Check Update..."** to check and update anytime.
 
-### Option 3: Run on Windows Startup (Optional)
+### Option 4: Run on Windows Startup (Optional)
 To launch `flash-md` automatically when Windows starts:
 1. Press `Win + R`, type `shell:startup`, and press Enter.
 2. Place a shortcut to `flash-md.exe` into that folder.
@@ -109,9 +119,16 @@ flash-md/
 │   └── release.yml     # Cloud CI/CD matrix build & GitHub release workflow
 ├── src/
 │   ├── main.rs         # Entry point, CLI parsing, event coordination
+│   ├── app/            # Document state, unsaved prompts, shortcuts and updates
+│   ├── document.rs     # Source types and atomic saves
+│   ├── files.rs        # File and ZIP content loading
+│   ├── parsers.rs      # Markdown, CSV, JSON and slide parsing
+│   ├── search.rs       # Unicode search and layout-based navigation
+│   ├── textures.rs     # Image decoding and texture caches
 │   ├── app.rs          # egui preview UI, toolbar, interactive logic
 │   ├── explorer.rs     # Windows Shell COM API file detection
-│   ├── hotkey.rs       # Win32 RegisterHotKey global hotkey thread
+│   ├── hotkey.rs       # Win32 WH_KEYBOARD_LL global hotkey thread
+│   ├── markdown/       # Code, PDF and Mermaid renderers
 │   ├── markdown.rs     # pulldown-cmark parser & syntect syntax highlighter
 │   ├── theme.rs        # Design tokens and Dark/Light palette
 │   ├── tray.rs         # Windows system tray icon and context menu
@@ -126,4 +143,4 @@ flash-md/
 
 ## 📄 License
 
-This project is licensed under the terms of the [MIT OR Apache-2.0](LICENSE) dual license.
+This project is licensed under the [MIT](LICENSE-MIT) license.
