@@ -76,6 +76,7 @@ pub fn get_or_render_mermaid_diagram(code: &str) -> Option<MermaidDiagramData> {
     if let Some(cached) = map.get(&key) {
         return cached.clone();
     }
+    drop(guard);
 
     let parsed = (|| -> Option<MermaidDiagramData> {
         let svg_str = mermaid_rs_renderer::render(code).ok()?;
@@ -183,6 +184,11 @@ pub fn get_or_render_mermaid_diagram(code: &str) -> Option<MermaidDiagramData> {
         })
     })();
 
+    let mut guard = CACHE.lock().ok()?;
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.len() >= 64 {
+        map.clear();
+    }
     map.insert(key, parsed.clone());
     parsed
 }

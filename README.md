@@ -12,7 +12,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 ## v1.0.106 Responsiveness and verification
 
-- Read files, extract PDF/ZIP content, decode images and scan new directories on one background worker. Rapid navigation keeps only the latest request; cancelling, closing or editing prevents late results from replacing the current document.
+- Read files, extract PDF/ZIP content, decode images, initialize syntax/Mermaid resources and scan new directories on one background worker. Rapid navigation keeps only the latest request; cancelling, closing or editing prevents late results from replacing the current document. Navigation can advance past unreadable files, and native window lookup verifies the process ID even when the caption changes.
 - CSV/TSV tables cache stable column widths and multiline row heights, paint only visible rows/columns, and locate search matches outside the viewport. Markdown search navigation is deferred until nested tables finish rendering.
 - Keyboard scrolling uses elapsed frame time. `Ctrl+P` only pins the window, preview modes complete their cycle, image zoom shortcuts affect images, and settings/input fields prevent accidental file navigation. Slides and editors keep separate document state.
 - Auto-save always reschedules the remaining debounce time; JSON formatting participates in auto-save. Real IME events consume confirmation Enter once while normal Chinese text/paste keep intentional newlines. Editor layouts are cached and preference changes are persisted.

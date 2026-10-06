@@ -480,6 +480,12 @@ fn performance_preview_frames() {
         ),
     ];
     for (name, path, value, mode, editing, slides) in cases {
+        let start = std::time::Instant::now();
+        crate::markdown::prepare_document_rendering(&value);
+        println!(
+            "PERF {name} background_prepare_ms={:.2}",
+            start.elapsed().as_secs_f64() * 1000.0_f64
+        );
         let (mut app, ctx) = model();
         setup_system_cjk_fonts(&ctx);
         content(&mut app, value, path, mode);

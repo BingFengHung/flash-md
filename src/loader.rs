@@ -28,7 +28,11 @@ pub struct DocumentLoader {
 
 impl DocumentLoader {
     pub fn new(holder: Arc<Mutex<Option<Context>>>) -> Self {
-        Self::spawn(holder, |request| load_document(&request.path))
+        Self::spawn(holder, |request| {
+            let document = load_document(&request.path)?;
+            crate::markdown::prepare_document_rendering(&document.content);
+            Ok(document)
+        })
     }
 
     fn spawn(

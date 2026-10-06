@@ -24,6 +24,9 @@ impl MdPreviewApp {
             .as_ref()
             .is_none_or(|previous| previous.parent() != path.parent())
             || !self.siblings.contains(&path);
+        if reset_view {
+            self.navigation_cursor = self.siblings.contains(&path).then(|| path.clone());
+        }
         self.loading_request = Some(self.loader.request(LoadRequest {
             id: 0,
             path,
@@ -36,6 +39,7 @@ impl MdPreviewApp {
     pub(super) fn cancel_document_load(&mut self) {
         self.loader.cancel();
         self.loading_request = None;
+        self.navigation_cursor = None;
     }
 
     pub(super) fn poll_document_loads(&mut self) {
@@ -103,6 +107,7 @@ impl MdPreviewApp {
 
     pub(super) fn apply_document(&mut self, loaded: LoadedDocument, reset_view: bool) {
         if reset_view {
+            self.navigation_cursor = None;
             self.preview_generation = self.preview_generation.wrapping_add(1);
             self.view_mode = if loaded.image_bytes.is_some() {
                 ViewMode::Image {
@@ -470,6 +475,7 @@ impl MdPreviewApp {
             .as_ref()
             .filter(|request| request.reset_view)
             .map(|request| &request.path)
+            .or(self.navigation_cursor.as_ref())
             .or(self.current_file.as_ref())
         else {
             return;

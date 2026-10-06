@@ -1,23 +1,26 @@
 use log::{debug, info, warn};
 use std::path::PathBuf;
 use windows::core::{PCWSTR, VARIANT};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IDispatch, IServiceProvider,
     CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED,
 };
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+use windows::Win32::System::Threading::{
+    AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
+};
 use windows::Win32::UI::Shell::{
     IFolderView, IShellBrowser, IShellFolderViewDual, IShellItemArray, IShellWindows,
     SHGetPathFromIDListW, ShellWindows, SIGDN_FILESYSPATH, SVGIO_CHECKED, SVGIO_SELECTION,
     SWC_DESKTOP, SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow,
-    GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT,
-    GUITHREADINFO, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WS_EX_TOPMOST,
+    BringWindowToTop, EnumWindows, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow,
+    GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowLongPtrW, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SetForegroundWindow,
+    SetWindowPos, ShowWindow, GA_ROOT, GUITHREADINFO, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE,
+    WS_EX_TOPMOST,
 };
 use windows_core::Interface;
 
@@ -43,21 +46,60 @@ pub fn set_app_hwnd(hwnd: HWND) {
 }
 
 pub fn get_app_hwnd() -> Option<HWND> {
+    let title = APP_WINDOW_TITLE.get()?;
     let val = APP_HWND.load(std::sync::atomic::Ordering::Relaxed);
-    if val != 0 {
-        Some(HWND(val as *mut std::ffi::c_void))
-    } else {
-        // 嘗試以視窗標題尋找 flash-md HWND
-        unsafe {
-            if let Ok(hwnd) = FindWindowW(None, PCWSTR(APP_WINDOW_TITLE.get()?.as_ptr())) {
-                if hwnd.0 != 0 as _ {
-                    APP_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
-                    return Some(hwnd);
-                }
+    unsafe {
+        let mut pid = 0;
+        let cached = HWND(val as *mut std::ffi::c_void);
+        if val != 0 && IsWindow(cached).as_bool() {
+            GetWindowThreadProcessId(cached, Some(&mut pid));
+            if pid == GetCurrentProcessId() {
+                return Some(cached);
             }
-            None
+        }
+        if let Ok(hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) {
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if hwnd.0 != 0 as _ && pid == GetCurrentProcessId() {
+                set_app_hwnd(hwnd);
+                return Some(hwnd);
+            }
+        }
+        let mut search = AppWindowSearch {
+            pid: GetCurrentProcessId(),
+            hwnd: HWND::default(),
+        };
+        let _ = EnumWindows(
+            Some(find_app_window),
+            LPARAM(&mut search as *mut AppWindowSearch as isize),
+        );
+        if search.hwnd.0 != 0 as _ {
+            set_app_hwnd(search.hwnd);
+            return Some(search.hwnd);
+        }
+        APP_HWND.store(0, std::sync::atomic::Ordering::Relaxed);
+        None
+    }
+}
+
+struct AppWindowSearch {
+    pid: u32,
+    hwnd: HWND,
+}
+
+unsafe extern "system" fn find_app_window(hwnd: HWND, parameter: LPARAM) -> BOOL {
+    let search = &mut *(parameter.0 as *mut AppWindowSearch);
+    let mut pid = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == search.pid {
+        let mut title = [0_u16; 256];
+        let length = GetWindowTextW(hwnd, &mut title);
+        if length > 0 && String::from_utf16_lossy(&title[..length as usize]).starts_with("flash-md")
+        {
+            search.hwnd = hwnd;
+            return BOOL(0);
         }
     }
+    BOOL(1)
 }
 
 /// 透過 Win32 原生 API 強制將 flash-md 視窗跳至最上層並取得焦點 (破除 Windows 前景鎖定限制)

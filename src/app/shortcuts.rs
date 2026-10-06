@@ -32,9 +32,13 @@ impl MdPreviewApp {
             if input.key_pressed(egui::Key::Escape) {
                 self.cancel_document_load();
                 self.set_toast("已取消載入".to_string());
-            } else if plain && input.key_pressed(egui::Key::ArrowRight) {
+            } else if plain
+                && (input.key_pressed(egui::Key::ArrowRight) || input.key_pressed(egui::Key::L))
+            {
                 self.navigate_sibling_file(true);
-            } else if plain && input.key_pressed(egui::Key::ArrowLeft) {
+            } else if plain
+                && (input.key_pressed(egui::Key::ArrowLeft) || input.key_pressed(egui::Key::H))
+            {
                 self.navigate_sibling_file(false);
             }
             return;

@@ -26,7 +26,20 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativeSmoke {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+    private delegate bool EnumCallback(IntPtr hwnd, IntPtr data);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumCallback callback, IntPtr data);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, System.Text.StringBuilder title, int count);
+    public static string Title(IntPtr hwnd) { var title = new System.Text.StringBuilder(256); GetWindowText(hwnd, title, title.Capacity); return title.ToString(); }
+    public static IntPtr FindProcessWindow(uint processId) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((hwnd, _) => {
+            uint pid; GetWindowThreadProcessId(hwnd, out pid);
+            if (pid == processId && Title(hwnd).StartsWith("flash-md")) { found = hwnd; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr wp, IntPtr lp, uint flags, uint timeout, out UIntPtr result);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wp, IntPtr lp);
@@ -60,7 +73,7 @@ function Start-Preview([string]$file, [bool]$visible = $true) {
         while ($timer.Elapsed.TotalSeconds -lt 30) {
             $process.Refresh()
             if ($process.HasExited) { throw "Preview exited during startup: $($process.ExitCode)" }
-            $hwnd = [NativeSmoke]::FindWindow($null, "flash-md - 快捷鍵 Markdown 預覽 ($($process.Id))")
+            $hwnd = [NativeSmoke]::FindProcessWindow($process.Id)
             if ($hwnd -ne [IntPtr]::Zero) { break }
             Start-Sleep -Milliseconds 100
         }
@@ -78,7 +91,7 @@ function Start-Preview([string]$file, [bool]$visible = $true) {
         Assert-Responsive $hwnd
         if ([NativeSmoke]::IsWindowVisible($hwnd) -ne $visible) { throw 'Unexpected native window visibility' }
         $startup = [math]::Round($timer.Elapsed.TotalMilliseconds, 2)
-        Write-Output "SMOKE opened=$([IO.Path]::GetFileName($file)) visible=$visible startup_ms=$startup"
+        Write-Output "SMOKE opened=$([IO.Path]::GetFileName($file)) visible=$visible startup_ms=$startup title=$([NativeSmoke]::Title($hwnd))"
         if ($visible) {
             if ($file.EndsWith('.md')) {
                 Send-Key $hwnd 0x75 # F6: mindmap

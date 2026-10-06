@@ -190,3 +190,25 @@ pub(super) fn settle(app: &mut MdPreviewApp) {
         }
     }
 }
+
+#[test]
+fn navigation_continues_past_unreadable_files_without_replacing_the_previous_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("a.md");
+    let bad = directory.path().join("b.bin");
+    let last = directory.path().join("c.md");
+    fs::write(&first, "first").unwrap();
+    fs::write(&bad, [0xff, 0xfe, 0xff]).unwrap();
+    fs::write(&last, "last").unwrap();
+    let mut app = app();
+    app.open_document(&first);
+    settle(&mut app);
+    app.navigate_sibling_file(true);
+    settle(&mut app);
+    assert_eq!(app.current_file.as_deref(), Some(first.as_path()));
+    assert_eq!(app.content, "first");
+    app.navigate_sibling_file(true);
+    settle(&mut app);
+    assert_eq!(app.current_file.as_deref(), Some(last.as_path()));
+    assert_eq!(app.content, "last");
+}

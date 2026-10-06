@@ -35,6 +35,47 @@ fn get_theme_set() -> &'static ThemeSet {
     THEME_SET.get_or_init(ThemeSet::load_defaults)
 }
 
+/// Initialize syntax resources and diagram geometry before displaying a
+/// newly loaded document, keeping cold rendering work off the UI thread.
+pub fn prepare_document_rendering(content: &str) {
+    if content.is_empty() {
+        return;
+    }
+    let _ = get_syntax_set();
+    let _ = get_theme_set();
+    if !content
+        .as_bytes()
+        .windows(7)
+        .any(|word| word.eq_ignore_ascii_case(b"mermaid"))
+    {
+        return;
+    }
+    let mut diagram = None::<String>;
+    for event in pulldown_cmark::Parser::new_ext(content, crate::parsers::markdown_options()) {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
+                if info
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|language| language.eq_ignore_ascii_case("mermaid")) =>
+            {
+                diagram = Some(String::new())
+            }
+            Event::Text(text) => {
+                if let Some(code) = diagram.as_mut() {
+                    code.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(code) = diagram.take() {
+                    let _ = get_or_render_mermaid_diagram(&code);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// 依搜尋關鍵字即時進行高亮分段附加 (全 Unicode 安全切片，支援中英文與特殊字元，區分當前聚焦與一般相符)
 #[allow(clippy::too_many_arguments)]
 pub fn append_highlighted_text(
