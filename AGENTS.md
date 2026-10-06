@@ -233,7 +233,7 @@
 - 開新檔必須完整讀取成功後才替換目前狀態；未儲存修改經儲存、捨棄或取消流程後才可切換、退出與更新。
 - 更新器必須確認程序退出狀態、正確架構的 PE 格式，替換失敗回復備份；錯誤與「已是最新版本」分開回報。
 - 快取必須以內容或修改版本區分；修改、重載後同步更新心智圖、圖片與搜尋。搜尋定位依實際文字排版，不得估算原始 Markdown 行高。
-- CI 同時覆蓋 main 與其他分支，執行 `cargo fmt --all -- --check`、Clippy、`cargo test --verbose --locked` 與雙架構建置；Release 必須等待相依安全稽核通過。
+- CI 同時覆蓋 main 與其他分支，執行 `cargo fmt --all -- --check`、Clippy、`cargo test --verbose --locked` 與雙架構建置；Release 必須等待相依安全稽核通過。main 的新版本通過全部檢查後，由 CI 自動建立版本標籤並發布兩個架構的已驗證產物；已發布版本不重複發布。
 
 ---
 
@@ -251,7 +251,8 @@ git commit -m "更新說明與新功能描述..."
 # 3. 推送主分支
 git push origin main
 
-# 4. 建立對應版本的 Release Tag 並推送 (觸發 GitHub Actions 雲端自動編譯與發布)
+# 4. main 的 CI 通過後會自動建立標籤與發布；手動發布時才執行以下指令
+# 建立對應版本的 Release Tag 並推送 (觸發 GitHub Actions 雲端自動編譯與發布)
 git tag vX.Y.Z
 git push origin vX.Y.Z
 

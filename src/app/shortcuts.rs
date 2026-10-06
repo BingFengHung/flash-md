@@ -135,7 +135,7 @@ impl MdPreviewApp {
                 || (input.modifiers.command && input.key_pressed(egui::Key::D));
             let mut is_page_up = input.key_pressed(egui::Key::PageUp)
                 || (input.modifiers.command && input.key_pressed(egui::Key::U));
-            let mut is_space = input.key_pressed(egui::Key::Space)
+            let is_space = input.key_pressed(egui::Key::Space)
                 && !input.modifiers.alt
                 && !input.modifiers.command;
             let is_shift = input.modifiers.shift;
@@ -182,20 +182,18 @@ impl MdPreviewApp {
                             }
                         }
                     }
-                    egui::Event::Text(s) => {
-                        if !input.modifiers.command && !input.modifiers.alt {
-                            if s == "j" {
-                                is_j = true;
-                            }
-                            if s == "k" {
-                                is_k = true;
-                            }
-                            if s == "g" {
-                                is_g = true;
-                            }
-                            if s == "G" {
-                                is_big_g = true;
-                            }
+                    egui::Event::Text(s) if !input.modifiers.command && !input.modifiers.alt => {
+                        if s == "j" {
+                            is_j = true;
+                        }
+                        if s == "k" {
+                            is_k = true;
+                        }
+                        if s == "g" {
+                            is_g = true;
+                        }
+                        if s == "G" {
+                            is_big_g = true;
                         }
                     }
                     _ => {}
@@ -257,59 +255,56 @@ impl MdPreviewApp {
         }
 
         // F5 或 P: 切換全螢幕簡報投影模式 (非編輯/搜尋輸入狀態下)
-        if !self.is_editing && !self.search_open && matches!(self.view_mode, ViewMode::Markdown) {
-            if input.key_pressed(egui::Key::F5)
+        if !self.is_editing
+            && !self.search_open
+            && matches!(self.view_mode, ViewMode::Markdown)
+            && (input.key_pressed(egui::Key::F5)
                 || (input.key_pressed(egui::Key::P)
                     && !input.modifiers.command
                     && !input.modifiers.alt
                     && !ctx.wants_keyboard_input())
-                || (input.modifiers.command && input.key_pressed(egui::Key::P))
-            {
-                self.is_slides_mode = !self.is_slides_mode;
-                if self.is_slides_mode {
-                    self.current_slide_index = 0;
-                    self.is_slides_fullscreen = true;
-                    self.set_fullscreen_state(ctx, true);
-                    self.set_toast(
-                        "📽 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string(),
-                    );
-                } else {
-                    if self.is_slides_fullscreen {
-                        self.is_slides_fullscreen = false;
-                        self.set_fullscreen_state(ctx, false);
-                    }
-                    self.set_toast("👁 已退出簡報投影模式".to_string());
+                || (input.modifiers.command && input.key_pressed(egui::Key::P)))
+        {
+            self.is_slides_mode = !self.is_slides_mode;
+            if self.is_slides_mode {
+                self.current_slide_index = 0;
+                self.is_slides_fullscreen = true;
+                self.set_fullscreen_state(ctx, true);
+                self.set_toast("📽 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
+            } else {
+                if self.is_slides_fullscreen {
+                    self.is_slides_fullscreen = false;
+                    self.set_fullscreen_state(ctx, false);
                 }
+                self.set_toast("👁 已退出簡報投影模式".to_string());
             }
         }
 
         // 簡報投影模式專屬鍵盤導航 (左右/Page/Space/Enter/翻頁/全螢幕)
         if self.is_slides_mode {
             let total_slides = crate::parsers::cached_slides(ctx, &self.content).len();
-            if input.key_pressed(egui::Key::ArrowRight)
+            if (input.key_pressed(egui::Key::ArrowRight)
                 || input.key_pressed(egui::Key::PageDown)
                 || input.key_pressed(egui::Key::Space)
                 || input.key_pressed(egui::Key::Enter)
                 || (input.key_pressed(egui::Key::L)
                     && !input.modifiers.command
-                    && !input.modifiers.alt)
+                    && !input.modifiers.alt))
+                && self.current_slide_index + 1 < total_slides
             {
-                if self.current_slide_index + 1 < total_slides {
-                    self.current_slide_index += 1;
-                    ctx.request_repaint();
-                }
+                self.current_slide_index += 1;
+                ctx.request_repaint();
             }
-            if input.key_pressed(egui::Key::ArrowLeft)
+            if (input.key_pressed(egui::Key::ArrowLeft)
                 || input.key_pressed(egui::Key::PageUp)
                 || input.key_pressed(egui::Key::Backspace)
                 || (input.key_pressed(egui::Key::H)
                     && !input.modifiers.command
-                    && !input.modifiers.alt)
+                    && !input.modifiers.alt))
+                && self.current_slide_index > 0
             {
-                if self.current_slide_index > 0 {
-                    self.current_slide_index -= 1;
-                    ctx.request_repaint();
-                }
+                self.current_slide_index -= 1;
+                ctx.request_repaint();
             }
             if input.key_pressed(egui::Key::Home) {
                 self.current_slide_index = 0;
@@ -351,15 +346,16 @@ impl MdPreviewApp {
         }
 
         // Ctrl + T: 開啟/收起 Markdown 目錄大綱側邊欄
-        if input.modifiers.command && input.key_pressed(egui::Key::T) {
-            if matches!(self.view_mode, ViewMode::Markdown) {
-                self.toc_open = !self.toc_open;
-                self.set_toast(if self.toc_open {
-                    "已開啟目錄大綱 📑".to_string()
-                } else {
-                    "已收起目錄大綱".to_string()
-                });
-            }
+        if input.modifiers.command
+            && input.key_pressed(egui::Key::T)
+            && matches!(self.view_mode, ViewMode::Markdown)
+        {
+            self.toc_open = !self.toc_open;
+            self.set_toast(if self.toc_open {
+                "已開啟目錄大綱 📑".to_string()
+            } else {
+                "已收起目錄大綱".to_string()
+            });
         }
 
         // F6: 快速切換 Markdown 與 互動心智圖模式

@@ -435,11 +435,9 @@ impl eframe::App for MdPreviewApp {
                     egui::Event::Ime(egui::ImeEvent::Disabled) => {
                         self.is_ime_composing = false;
                     }
-                    egui::Event::Text(ref s) => {
-                        // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
-                        if s.chars().any(|c| c >= '\u{2E80}') {
-                            ime_event_this_frame = true;
-                        }
+                    // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
+                    egui::Event::Text(ref s) if s.chars().any(|c| c >= '\u{2E80}') => {
+                        ime_event_this_frame = true;
                     }
                     _ => {}
                 }
@@ -907,25 +905,20 @@ impl eframe::App for MdPreviewApp {
                     }
 
                     // 搜尋按鈕 (僅文字/程式碼模式可用)
-                    if !matches!(self.view_mode, ViewMode::Image { .. }) {
-                        if render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F 或 /)").clicked() {
+                    if !matches!(self.view_mode, ViewMode::Image { .. }) && render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F 或 /)").clicked() {
                             self.search_open = !self.search_open;
                             if self.search_open {
                                 self.search_focus_requested = true;
                             }
-                        }
                     }
 
                     // Markdown 大綱側邊欄開關按鈕
-                    if matches!(self.view_mode, ViewMode::Markdown) {
-                        if render_nav_button(ui, self.theme, "📑 大綱", self.toc_open, "開啟/收起章節目錄大綱 (Ctrl + T)").clicked() {
+                    if matches!(self.view_mode, ViewMode::Markdown) && render_nav_button(ui, self.theme, "📑 大綱", self.toc_open, "開啟/收起章節目錄大綱 (Ctrl + T)").clicked() {
                             self.toc_open = !self.toc_open;
-                        }
                     }
 
                     // Markdown 簡報投影模式切換按鈕
-                    if matches!(self.view_mode, ViewMode::Markdown) && !self.is_editing {
-                        if render_nav_button(ui, self.theme, "📽 簡報", self.is_slides_mode, "切換全螢幕簡報投影模式 (F5 或 P)").clicked() {
+                    if matches!(self.view_mode, ViewMode::Markdown) && !self.is_editing && render_nav_button(ui, self.theme, "📽 簡報", self.is_slides_mode, "切換全螢幕簡報投影模式 (F5 或 P)").clicked() {
                             self.is_slides_mode = !self.is_slides_mode;
                             if self.is_slides_mode {
                                 self.current_slide_index = 0;
@@ -939,7 +932,6 @@ impl eframe::App for MdPreviewApp {
                                 }
                                 self.set_toast("👁 已退出簡報投影模式".to_string());
                             }
-                        }
                     }
 
                     // Markdown 互動心智圖切換按鈕
@@ -1659,7 +1651,7 @@ fn rfd_open_file() -> Option<PathBuf> {
     {
         use std::process::Command;
         let output = Command::new("powershell")
-            .args(&[
+            .args([
                 "-NoProfile",
                 "-Command",
                 r#"[System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = "Markdown & Code Files (*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt)|*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt|All files (*.*)|*.*"; if($d.ShowDialog() -eq "OK"){ Write-Output $d.FileName }"#,

@@ -16,7 +16,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - Updates select the matching x86_64 / ARM64 package, check download/extraction and executable format, and restore the original executable if replacement fails. Failed downloads or installations allow retry.
 - Selection detection is restricted to the foreground Explorer window or desktop. Standalone windows do not install global keyboard hooks. Parsed content, image textures, outlines, tables and syntax layouts are cached and refreshed after edits or reloads.
 - Search navigates using actual text layout. CSV supports quoted newlines, JSON rejects invalid input, slides preserve code blocks, and outlines and mindmaps share unique heading anchors.
-- The rustls security fix is locked. Branch and main CI run formatting, Clippy, regression tests, both architecture builds and dependency audits; the release uses the same checks.
+- The rustls security fix is locked. Branch and main CI run formatting, Clippy, regression tests, both architecture builds and dependency audits; the release uses the same checks. A new version merged into main is tagged and published automatically after all checks pass.
 
 ---
 

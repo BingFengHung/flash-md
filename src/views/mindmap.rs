@@ -187,9 +187,7 @@ fn clean_markdown_inline(text: &str) -> String {
     s = s
         .replace("**", "")
         .replace("__", "")
-        .replace('*', "")
-        .replace('_', "")
-        .replace('`', "")
+        .replace(['*', '_', '`'], "")
         .replace("~~", "");
     // 移除連結格式 [text](url) -> text
     while let Some(start_bracket) = s.find('[') {

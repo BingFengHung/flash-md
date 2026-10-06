@@ -74,3 +74,54 @@ jobs:
         with:
           name: ${{ matrix.archive_name }}
           path: ${{ matrix.archive_name }}
+
+  release:
+    name: Publish validated version
+    needs: [build, audit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        run: |
+          python - <<'PYTHON'
+          import os, tomllib
+          with open('Cargo.toml', 'rb') as source:
+              version = tomllib.load(source)['package']['version']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'tag=v{version}', file=output)
+          PYTHON
+      - name: Download validated packages
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          pattern: flash-md-windows-*.zip
+          merge-multiple: true
+      - name: Publish new version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Version already published: $RELEASE_TAG"
+            exit 0
+          fi
+          test -s artifacts/flash-md-windows-x86_64.zip
+          test -s artifacts/flash-md-windows-aarch64.zip
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG"; then
+            git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
+          else
+            tag_status=$?
+            test "$tag_status" -eq 2
+            git tag "$RELEASE_TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+          gh release create "$RELEASE_TAG" artifacts/flash-md-windows-x86_64.zip artifacts/flash-md-windows-aarch64.zip --verify-tag --target "$GITHUB_SHA" --title "$RELEASE_TAG" --generate-notes

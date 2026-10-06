@@ -293,7 +293,7 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     }
 
     // 依權重降冪排序，最符合前景焦點的視窗排在最前面
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     for (score, item_disp) in &candidates {
         debug!("嘗試查詢候選視窗 (評分: {})...", score);
