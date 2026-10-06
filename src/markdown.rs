@@ -4,6 +4,7 @@ mod mermaid;
 mod navigation_tests;
 mod pdf;
 mod table;
+mod typography;
 
 #[cfg(test)]
 pub(crate) use code::code_highlighting_ready;
@@ -873,128 +874,46 @@ impl<'a> RenderContext<'a> {
             return;
         }
 
-        let has_hyperlinks = spans.iter().any(|s| s.link_url.is_some());
-        let has_emojis = spans.iter().any(|s| {
-            crate::emoji::split_text_emojis(&s.text)
-                .iter()
-                .any(|seg| matches!(seg, crate::emoji::TextOrEmoji::Emoji(..)))
-        });
-
-        if !has_hyperlinks && !has_emojis {
-            let mut job = LayoutJob::default();
-            for (idx, span) in spans.into_iter().enumerate() {
-                let color = if (is_list_item && idx == 0) || span.code {
-                    self.theme.accent_color()
+        let mut job = LayoutJob::default();
+        let mut decorations = Vec::new();
+        for (index, span) in spans.into_iter().enumerate() {
+            let is_link = span.link_url.is_some();
+            let color = if (is_list_item && index == 0) || span.code || is_link {
+                self.theme.accent_color()
+            } else {
+                self.theme.text_primary()
+            };
+            let format = egui::TextFormat {
+                font_id: FontId::proportional(14.5_f32 * self.font_scale),
+                color,
+                italics: span.italic,
+                underline: if is_link {
+                    Stroke::new(1.0_f32, self.theme.accent_color())
                 } else {
-                    self.theme.text_primary()
-                };
-
-                let base_fmt = egui::TextFormat {
-                    font_id: FontId::proportional(14.5_f32 * self.font_scale),
+                    Stroke::NONE
+                },
+                strikethrough: Stroke::new(
+                    if span.strikethrough { 1.5_f32 } else { 0.0_f32 },
                     color,
-                    italics: span.italic,
-                    strikethrough: Stroke::new(
-                        if span.strikethrough { 1.5_f32 } else { 0.0_f32 },
-                        color,
-                    ),
-                    line_height: Some(22.0_f32 * self.font_scale),
-                    valign: egui::Align::BOTTOM,
-                    background: if span.code {
-                        self.theme.code_bg_color()
-                    } else {
-                        Color32::TRANSPARENT
-                    },
-                    ..Default::default()
-                };
-
-                job.append(&span.text, 0.0, base_fmt);
-            }
-            self.label_job(ui, job, Sense::hover());
-        } else {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0_f32;
-
-                for (idx, span) in spans.into_iter().enumerate() {
-                    let is_link = span.link_url.is_some();
-
-                    let color = if (is_list_item && idx == 0) || span.code || is_link {
-                        self.theme.accent_color()
-                    } else {
-                        self.theme.text_primary()
-                    };
-
-                    let underline = if is_link {
-                        Stroke::new(1.0_f32, self.theme.accent_color())
-                    } else {
-                        Stroke::NONE
-                    };
-
-                    let background = if span.code {
-                        self.theme.code_bg_color()
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-
-                    let base_fmt = egui::TextFormat {
-                        font_id: FontId::proportional(14.5_f32 * self.font_scale),
-                        color,
-                        italics: span.italic,
-                        underline,
-                        strikethrough: Stroke::new(
-                            if span.strikethrough { 1.5_f32 } else { 0.0_f32 },
-                            color,
-                        ),
-                        line_height: Some(22.0_f32 * self.font_scale),
-                        valign: egui::Align::BOTTOM,
-                        background,
-                        ..Default::default()
-                    };
-
-                    let segments = crate::emoji::split_text_emojis(&span.text);
-                    for seg in segments {
-                        match seg {
-                            crate::emoji::TextOrEmoji::Emoji(em, svg_str) => {
-                                let img_uri = format!("bytes://emoji_{}.svg", em);
-                                let img_size = 17.0_f32 * self.font_scale;
-                                ui.add_space(2.0_f32);
-                                ui.add(
-                                    egui::Image::from_bytes(img_uri, svg_str.as_bytes())
-                                        .fit_to_exact_size(Vec2::splat(img_size)),
-                                );
-                                ui.add_space(3.0_f32);
-                            }
-                            crate::emoji::TextOrEmoji::Text(t) => {
-                                if t.is_empty() {
-                                    continue;
-                                }
-                                let mut span_job = LayoutJob::default();
-                                span_job.append(t, 0.0, base_fmt.clone());
-
-                                if let Some(ref url) = span.link_url {
-                                    let resp = self.label_job(ui, span_job, Sense::click());
-                                    if resp.hovered() {
-                                        ui.output_mut(|o| {
-                                            o.cursor_icon = egui::CursorIcon::PointingHand
-                                        });
-                                    }
-                                    if resp.clicked() {
-                                        if url.starts_with('#') {
-                                            self.clicked_anchor =
-                                                Some(url.trim_start_matches('#').to_string());
-                                        } else {
-                                            let _ = open::that(url);
-                                        }
-                                    }
-                                    resp.on_hover_text(url);
-                                } else {
-                                    self.label_job(ui, span_job, Sense::hover());
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+                ),
+                line_height: Some(22.0_f32 * self.font_scale),
+                background: if span.code {
+                    self.theme.code_bg_color()
+                } else {
+                    Color32::TRANSPARENT
+                },
+                ..Default::default()
+            };
+            typography::append_inline(
+                &mut job,
+                &mut decorations,
+                &span.text,
+                &format,
+                span.link_url.as_deref(),
+                17.0 * self.font_scale,
+            );
         }
+        self.label_inline(ui, job, decorations);
     }
 
     fn render_heading(&mut self, ui: &mut Ui, level: HeadingLevel) {
@@ -1024,39 +943,17 @@ impl<'a> RenderContext<'a> {
             ..Default::default()
         };
 
-        let segments = crate::emoji::split_text_emojis(&clean_heading);
-        let has_emojis = segments
-            .iter()
-            .any(|s| matches!(s, crate::emoji::TextOrEmoji::Emoji(..)));
-
-        let heading_resp = if has_emojis {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0_f32;
-                for seg in segments {
-                    match seg {
-                        crate::emoji::TextOrEmoji::Emoji(em, svg_str) => {
-                            let img_uri = format!("bytes://emoji_{}.svg", em);
-                            let em_size = size * 0.92_f32;
-                            ui.add(
-                                egui::Image::from_bytes(img_uri, svg_str.as_bytes())
-                                    .fit_to_exact_size(Vec2::splat(em_size)),
-                            );
-                            ui.add_space(3.0_f32);
-                        }
-                        crate::emoji::TextOrEmoji::Text(t) => {
-                            let mut job = LayoutJob::default();
-                            job.append(t, 0.0, base_fmt.clone());
-                            self.label_job(ui, job, Sense::hover());
-                        }
-                    }
-                }
-            })
-            .response
-        } else {
-            let mut job = LayoutJob::default();
-            job.append(&clean_heading, 0.0, base_fmt);
-            self.label_job(ui, job, Sense::hover())
-        };
+        let mut job = LayoutJob::default();
+        let mut decorations = Vec::new();
+        typography::append_inline(
+            &mut job,
+            &mut decorations,
+            &clean_heading,
+            &base_fmt,
+            None,
+            size * 0.92,
+        );
+        let heading_resp = self.label_inline(ui, job, decorations);
 
         let slug = self
             .heading_id

@@ -69,6 +69,10 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: cargo test --verbose --locked
 
+      - name: Verify real glyph baselines
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo test --locked typography_ -- --nocapture --test-threads=1
+
       - name: Build Release Binary
         run: cargo build --release --target ${{ matrix.target }} --locked
 
@@ -80,6 +84,14 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: ./.github/scripts/windows-smoke.ps1 -BinaryPath "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+
+      - name: Upload typography screenshots
+        if: always() && matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: typography-preview
+          path: ${{ runner.temp }}/flash-md-native-smoke/typography.*.png
+          if-no-files-found: ignore
 
       - name: Package Binary (Windows)
         shell: pwsh

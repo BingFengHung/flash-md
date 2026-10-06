@@ -26,6 +26,10 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativeSmoke {
+    [StructLayout(LayoutKind.Sequential)] public struct WindowRect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out WindowRect rect);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     private delegate bool EnumCallback(IntPtr hwnd, IntPtr data);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumCallback callback, IntPtr data);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
@@ -62,6 +66,25 @@ function Send-Key([IntPtr]$hwnd, [uint32]$key) {
     Assert-Responsive $hwnd
 }
 
+function Save-TypographyCapture([IntPtr]$hwnd, [string]$file) {
+    if (-not [NativeSmoke]::SetWindowPos($hwnd, [IntPtr]::Zero, 20, 20, 900, 650, 0x40)) { throw 'Typography window positioning failed' }
+    [void][NativeSmoke]::SetForegroundWindow($hwnd)
+    Start-Sleep -Milliseconds 500
+    Assert-Responsive $hwnd
+    $rect = New-Object NativeSmoke+WindowRect
+    if (-not [NativeSmoke]::GetWindowRect($hwnd, [ref]$rect)) { throw 'Typography window bounds unavailable' }
+    $capture = New-Object Drawing.Bitmap ($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top)
+    $graphics = [Drawing.Graphics]::FromImage($capture)
+    try {
+        $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $capture.Size)
+        $capture.Save((Join-Path $work ([IO.Path]::GetFileName($file) + '.png')), [Drawing.Imaging.ImageFormat]::Png)
+    } finally {
+        $graphics.Dispose()
+        $capture.Dispose()
+    }
+    Write-Output "TYPOGRAPHY native screenshot=$([IO.Path]::GetFileName($file)).png"
+}
+
 function Start-Preview([string]$file, [bool]$visible = $true) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $stderr = Join-Path $work (([Guid]::NewGuid().ToString('N')) + '.log')
@@ -92,6 +115,7 @@ function Start-Preview([string]$file, [bool]$visible = $true) {
         if ([NativeSmoke]::IsWindowVisible($hwnd) -ne $visible) { throw 'Unexpected native window visibility' }
         $startup = [math]::Round($timer.Elapsed.TotalMilliseconds, 2)
         Write-Output "SMOKE opened=$([IO.Path]::GetFileName($file)) visible=$visible startup_ms=$startup title=$([NativeSmoke]::Title($hwnd))"
+        if ([IO.Path]::GetFileName($file).StartsWith('typography.')) { Save-TypographyCapture $hwnd $file }
         if ($visible) {
             if ($file.EndsWith('.md')) {
                 Send-Key $hwnd 0x75 # F6: mindmap
@@ -148,6 +172,29 @@ $fixtures = @{
     'sample.svg' = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="blue"/></svg>'
 }
 foreach ($entry in $fixtures.GetEnumerator()) { [IO.File]::WriteAllText((Join-Path $work $entry.Key), $entry.Value) }
+[IO.File]::WriteAllText((Join-Path $work 'typography.md'), @'
+# 中文 Title 123 ⚡ 字體基準線
+
+中文 ABC 0123，括號 (ABC) [123]，全形（測試）。🙂🚀
+
+中文 [連結 ABC 123](#wrapped) ⚡ 後文保持同一行。這段文字用來確認連結與 Emoji 換行後仍在同一個基準線上，English words 123。
+
+| 中文欄位 | English | 1234 | Emoji |
+| :--- | :---: | ---: | --- |
+| 中文 ABC | English | 1234 | 🙂🚀 |
+| 多行中文內容及 English words 123 要維持每一列的第一行對齊，多行中文內容及 English words 123 要維持每一列的第一行對齊 | short | 5678 | ⚡ |
+
+```rust
+let 中文_123 = "ABC🙂🚀";
+// comment 註解 0123
+```
+
+## Wrapped {#wrapped}
+
+中文 **粗體** *斜體* `程式碼 ABC 123` ~~刪除線~~ 維持同一基準線。
+'@)
+[IO.File]::WriteAllText((Join-Path $work 'typography.csv'), "CJK,English,1234,Emoji`n中文 ABC,English,1234,🙂🚀`n`"多行中文 ABC`n第二行 xyz 5678`",short,5678,⚡")
+[IO.File]::WriteAllText((Join-Path $work 'typography.rs'), "let 中文_123 = `"ABC🙂🚀`";`n// 中文 comment 0123`nfn main() { println!(`"Hello 中文⚡`"); }")
 Add-Type -AssemblyName System.Drawing
 $image = New-Object Drawing.Bitmap 100, 100
 try {
@@ -184,6 +231,7 @@ if (-not $expectedVersion -or (Get-Content (Join-Path $work 'version.txt') -Raw)
 Write-Output 'SMOKE CLI version passed'
 Start-Preview $md
 foreach ($name in @('sample.csv','sample.tsv','sample.json','sample.rs','sample.txt','sample.svg','sample.png','sample.jpeg','sample.gif','sample.bmp','sample.tiff','sample.pdf','bom.md')) { Start-Preview (Join-Path $work $name) }
+foreach ($name in @('typography.md','typography.csv','typography.rs')) { Start-Preview (Join-Path $work $name) }
 Start-Preview (Join-Path $archivePreview ([IO.Path]::GetFileName($md)))
 Start-Preview '' $false
 Write-Output 'SMOKE all native startup and responsiveness checks passed'

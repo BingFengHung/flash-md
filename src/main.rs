@@ -16,6 +16,8 @@ mod text_metrics;
 mod textures;
 mod theme;
 mod tray;
+#[cfg(test)]
+mod typography_tests;
 mod updater;
 mod views;
 mod watcher;

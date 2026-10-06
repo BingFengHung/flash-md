@@ -10,6 +10,13 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 ---
 
+## v1.0.109 font baseline and inline layout fixes
+
+- Align font baselines using actual ascent, descent and line-gap metrics so Chinese, Latin, digits and fallback Emoji share a baseline. Preserve each font's glyph size, advances and monospace spacing.
+- Code line numbers and source text use the same font and line-height format, preventing drift after font scaling or DPI rounding.
+- Paragraphs and headings containing links, inline styles and color Emoji use one text layout. Wrapped spans no longer center short text beside taller spans. Links remain clickable and search can cross inline styles and link text.
+- Windows CI compares real glyph baselines and painted coordinates across 70%–180% font scales, 100%/125%/150%/200% DPI, Markdown/CSV multiline cells, editing and narrow windows. Native Markdown, CSV and code screenshots support visual inspection. Fallback rounding permits at most one physical pixel; code gutters and source text must have exactly equal baselines.
+
 ## v1.0.108 cold preview improvements
 
 - CSV/TSV reuse actual font advances and kerning to measure short cells without generating every text mesh twice. Wrapped and multiline cells keep their real layout heights, and visible cells plus search targets are laid out on demand. DPI and font scale participate in the geometry cache key.

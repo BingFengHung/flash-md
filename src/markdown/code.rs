@@ -161,15 +161,7 @@ fn code_layout(ui: &Ui, hash: u64, code: &str, scale: f32, expanded: bool) -> Ar
         .max(metrics.width("00", true))
         .ceil();
     let mut sample = LayoutJob::default();
-    sample.append(
-        "X",
-        0.0,
-        egui::TextFormat {
-            font_id: font,
-            line_height: Some(21.0 * scale),
-            ..Default::default()
-        },
-    );
+    sample.append("X", 0.0, code_text_format(scale, Color32::WHITE));
     let row_height = ui.fonts(|fonts| fonts.layout_job(sample)).size().y;
     let value = Arc::new(CodeLayout {
         lines,
@@ -183,6 +175,15 @@ fn code_layout(ui: &Ui, hash: u64, code: &str, scale: f32, expanded: bool) -> Ar
     ui.ctx()
         .data_mut(|store| store.insert_temp(id, (key, value.clone())));
     value
+}
+
+fn code_text_format(scale: f32, color: Color32) -> egui::TextFormat {
+    egui::TextFormat {
+        font_id: FontId::monospace(13.5 * scale),
+        color,
+        line_height: Some(21.0 * scale),
+        ..Default::default()
+    }
 }
 
 struct CodePainter<'a> {
@@ -208,12 +209,7 @@ impl CodePainter<'_> {
                 .map_or(full_text.len(), |(index, _)| index)
         };
         let text = &full_text[..end];
-        let format = egui::TextFormat {
-            font_id: FontId::monospace(13.5 * self.scale),
-            color: self.theme.text_primary(),
-            line_height: Some(21.0 * self.scale),
-            ..Default::default()
-        };
+        let format = code_text_format(self.scale, self.theme.text_primary());
         let mut job = LayoutJob::default();
         let mut position = 0;
         if let Some(spans) = self.colors.get(line) {
@@ -321,7 +317,6 @@ pub fn render_code_viewer(
         theme,
         scale: font_scale,
     };
-    let font = FontId::monospace(13.5 * font_scale);
     Frame::none()
         .fill(theme.card_bg_color())
         .rounding(Rounding::same(8.0))
@@ -390,13 +385,13 @@ pub fn render_code_viewer(
             let code_x = rect.left() + layout.gutter_width + 18.0;
             for line in first..end {
                 let y = rect.top() + line as f32 * layout.row_height;
-                let number = ui.fonts(|fonts| {
-                    fonts.layout_no_wrap(
-                        (line + 1).to_string(),
-                        font.clone(),
-                        theme.text_secondary().gamma_multiply(0.6),
-                    )
-                });
+                let mut number_job = LayoutJob::default();
+                number_job.append(
+                    &(line + 1).to_string(),
+                    0.0,
+                    code_text_format(font_scale, theme.text_secondary().gamma_multiply(0.6)),
+                );
+                let number = ui.fonts(|fonts| fonts.layout_job(number_job));
                 ui.painter().galley(
                     egui::pos2(rect.left() + layout.gutter_width - number.size().x, y),
                     number,

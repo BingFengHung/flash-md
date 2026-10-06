@@ -6,7 +6,7 @@ pub struct EditorOutput {
     pub new_line_count: usize,
 }
 
-/// 針對編輯器進行 Markdown 輕量語法著色與寬敞行距優化 (徹底解決水平基準線偏差與文字黏在一起的問題)
+/// 編輯器的 Markdown 輕量語法著色與行距。備援字型基準線由 theme 校正。
 pub fn highlight_markdown_for_editor(
     text: &str,
     theme: AppTheme,
@@ -16,7 +16,7 @@ pub fn highlight_markdown_for_editor(
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap_width;
 
-    // 使用比例字型 (微軟正黑體 msjh.ttc)，中文、英文、數字、符號共用 100% 完全相同的水平基準線與字高！
+    // 正文優先使用系統 CJK 比例字型，保留字型原本的字高與字寬。
     let normal_font = FontId::proportional(14.5_f32 * font_scale);
     let heading_font = FontId::proportional(16.0_f32 * font_scale);
     let code_font = FontId::monospace(13.5_f32 * font_scale);
@@ -113,7 +113,7 @@ pub fn highlight_markdown_for_editor(
                 },
             );
         } else {
-            // 一般內文行 (享有舒適的 24px 行高與完美統一的水平基準線)
+            // 一般內文行
             job.append(
                 line,
                 0.0_f32,
