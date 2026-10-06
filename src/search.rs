@@ -150,9 +150,16 @@ mod tests {
     #[test]
     fn code_and_plain_text_can_keep_physical_lines_while_prose_wraps() {
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(96.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                ui.set_max_width(80.0);
+                assert!(ui.available_width() <= 96.0);
                 let mut job = LayoutJob::default();
                 job.append(&"long_text ".repeat(30), 0.0, Default::default());
                 let wrapped =
