@@ -443,6 +443,49 @@ fn search_enter_and_shift_enter_keep_focus_and_scroll_between_real_matches() {
 }
 
 #[test]
+fn pending_file_loads_do_not_steal_search_arrows_or_settings_escape() {
+    let (mut app, ctx) = model();
+    content(
+        &mut app,
+        "# Current".to_string(),
+        "fixture.md",
+        ViewMode::Markdown,
+    );
+    app.search_query = "Current".to_string();
+    app.open_search();
+    frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+    frame(&mut app, &ctx, 0.05, Vec::new(), Modifiers::NONE);
+    app.siblings = vec!["a.md".into(), "b.md".into()];
+    app.loading_request = Some(LoadRequest {
+        id: u64::MAX,
+        path: "a.md".into(),
+        reset_view: true,
+        revision: app.content_revision,
+        scan_directory: false,
+    });
+    frame(
+        &mut app,
+        &ctx,
+        0.1,
+        vec![key(Key::ArrowRight, Modifiers::NONE)],
+        Modifiers::NONE,
+    );
+    assert_eq!(app.loading_request.as_ref().unwrap().id, u64::MAX);
+    app.search_open = false;
+    app.settings_open = true;
+    frame(
+        &mut app,
+        &ctx,
+        0.2,
+        vec![key(Key::Escape, Modifiers::NONE)],
+        Modifiers::NONE,
+    );
+    assert!(!app.settings_open);
+    assert_eq!(app.loading_request.as_ref().unwrap().id, u64::MAX);
+    app.cancel_document_load();
+}
+
+#[test]
 fn leaving_slides_for_editing_mindmap_search_or_outline_clears_fullscreen_state() {
     for (shortcut, modifiers) in [
         (Key::E, Modifiers::COMMAND),
@@ -594,12 +637,16 @@ fn json_toolbar_does_not_offer_standard_json_rewrites_for_json_lines_or_comments
                 lang: extension.to_string(),
             },
         );
-        let output = frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+        frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+        let output = frame(&mut app, &ctx, 0.05, Vec::new(), Modifiers::NONE);
+        let labels: Vec<_> = texts(&output)
+            .into_iter()
+            .map(|(text, _, _)| text)
+            .collect();
         assert_eq!(
-            texts(&output)
-                .iter()
-                .any(|(text, _, _)| text == "⚡ 格式化"),
-            extension == "json"
+            labels.iter().any(|text| text == "⚡ 格式化"),
+            extension == "json",
+            "{extension}: {labels:?}"
         );
     }
 }

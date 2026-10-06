@@ -24,6 +24,13 @@ impl MdPreviewApp {
         let input = ctx.input(|input| input.clone());
         let command = input.modifiers.command;
         let plain = !command && !input.modifiers.alt;
+        if self.settings_open {
+            if input.key_pressed(egui::Key::Escape) {
+                self.settings_open = false;
+            }
+            self.held_scroll_started = None;
+            return;
+        }
         if self
             .loading_request
             .as_ref()
@@ -33,10 +40,16 @@ impl MdPreviewApp {
                 self.cancel_document_load();
                 self.set_toast("已取消載入".to_string());
             } else if plain
+                && !self.is_editing
+                && !self.search_open
+                && !ctx.wants_keyboard_input()
                 && (input.key_pressed(egui::Key::ArrowRight) || input.key_pressed(egui::Key::L))
             {
                 self.navigate_sibling_file(true);
             } else if plain
+                && !self.is_editing
+                && !self.search_open
+                && !ctx.wants_keyboard_input()
                 && (input.key_pressed(egui::Key::ArrowLeft) || input.key_pressed(egui::Key::H))
             {
                 self.navigate_sibling_file(false);
@@ -44,9 +57,7 @@ impl MdPreviewApp {
             return;
         }
         if input.key_pressed(egui::Key::Escape) {
-            if self.settings_open {
-                self.settings_open = false;
-            } else if self.is_slides_mode {
+            if self.is_slides_mode {
                 self.exit_slides_mode();
             } else if self.is_editing {
                 self.is_editing = false;
@@ -59,10 +70,6 @@ impl MdPreviewApp {
             } else {
                 self.request_action(PendingAction::Close);
             }
-            self.held_scroll_started = None;
-            return;
-        }
-        if self.settings_open {
             self.held_scroll_started = None;
             return;
         }

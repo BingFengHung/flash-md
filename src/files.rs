@@ -219,8 +219,14 @@ mod tests {
             ("tiff", image::ImageFormat::Tiff),
         ] {
             let mut encoded = std::io::Cursor::new(Vec::new());
-            let image = image::DynamicImage::new_rgb8(3, 3);
+            let image = if extension == "jpg" {
+                image::DynamicImage::new_rgb8(3, 3)
+            } else {
+                image::DynamicImage::new_rgba8(3, 3)
+            };
             image.write_to(&mut encoded, format).unwrap();
+            let _ = image::load_from_memory(encoded.get_ref())
+                .unwrap_or_else(|error| panic!("{extension}: {error}"));
             let path = directory.path().join(format!("fixture.{extension}"));
             fs::write(&path, encoded.get_ref()).unwrap();
             let loaded = load_document(&path).unwrap();
