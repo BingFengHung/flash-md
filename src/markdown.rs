@@ -51,7 +51,10 @@ pub fn prepare_document_rendering(content: &str) {
         return;
     }
     let mut diagram = None::<String>;
-    for event in pulldown_cmark::Parser::new_ext(content, crate::parsers::markdown_options()) {
+    for event in pulldown_cmark::Parser::new_ext(
+        crate::parsers::without_utf8_bom(content),
+        crate::parsers::markdown_options(),
+    ) {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
                 if info
@@ -167,6 +170,7 @@ impl<'a> MarkdownRenderer<'a> {
             self.active_match_index,
             self.target_anchor,
             self.base_dir,
+            crate::parsers::cached_toc(ui.ctx(), markdown_text),
         );
         context.search_jump = self.search_jump;
         for event in events.iter().cloned() {
@@ -210,7 +214,9 @@ struct RenderContext<'a> {
     search_rect: Option<egui::Rect>,
     match_counter: usize,
     search_jump: bool,
-    heading_counts: std::collections::HashMap<String, usize>,
+    headings: std::sync::Arc<Vec<crate::parsers::TocItem>>,
+    heading_index: usize,
+    heading_start: Option<egui::Pos2>,
     heading_id: Option<String>,
     inlines: Vec<InlineSpan>,
     current_bold: bool,
@@ -434,6 +440,7 @@ impl<'a> RenderContext<'a> {
         active_match_index: Option<usize>,
         target_anchor: Option<&'a str>,
         base_dir: Option<&'a std::path::Path>,
+        headings: std::sync::Arc<Vec<crate::parsers::TocItem>>,
     ) -> Self {
         Self {
             theme,
@@ -447,7 +454,9 @@ impl<'a> RenderContext<'a> {
             search_rect: None,
             match_counter: 0,
             search_jump: false,
-            heading_counts: Default::default(),
+            headings,
+            heading_index: 0,
+            heading_start: None,
             heading_id: None,
             inlines: Vec::new(),
             current_bold: false,
@@ -708,8 +717,14 @@ impl<'a> RenderContext<'a> {
         match tag {
             Tag::Paragraph => {}
             Tag::Heading { level, id, .. } => {
-                self.heading_id = id.map(|id| id.to_string());
                 self.flush_inline(ui);
+                self.heading_id = self
+                    .headings
+                    .get(self.heading_index)
+                    .map(|heading| heading.anchor.clone())
+                    .or_else(|| id.map(|id| id.to_string()));
+                self.heading_index += 1;
+                self.heading_start = Some(ui.cursor().min);
                 self.in_heading = Some(level);
             }
             Tag::BlockQuote(..) => {
@@ -1041,12 +1056,21 @@ impl<'a> RenderContext<'a> {
             self.label_job(ui, job, Sense::hover())
         };
 
-        let generated_slug =
-            crate::parsers::unique_heading_slug(&clean_heading, &mut self.heading_counts);
-        let slug = self.heading_id.take().unwrap_or(generated_slug);
+        let slug = self
+            .heading_id
+            .take()
+            .unwrap_or_else(|| crate::parsers::heading_slug(&clean_heading));
+        let heading_rect = self
+            .heading_start
+            .take()
+            .map_or(heading_resp.rect, |start| {
+                heading_resp
+                    .rect
+                    .union(egui::Rect::from_min_max(start, heading_resp.rect.max))
+            });
         if let Some(target) = self.target_anchor {
             if self.anchor_rect.is_none() && is_anchor_match(&slug, target) {
-                self.anchor_rect = Some(heading_resp.rect);
+                self.anchor_rect = Some(heading_rect);
             }
         }
 

@@ -38,6 +38,7 @@ impl RenderContext<'_> {
         let scroll_id = ui.next_auto_id();
         egui::ScrollArea::horizontal()
             .id_salt(scroll_id)
+            .animated(!self.search_jump)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0_f32;
@@ -136,6 +137,11 @@ impl RenderContext<'_> {
             );
             if target.is_some() {
                 self.search_rect = target;
+                // Resolve this table's horizontal axis now. The document's
+                // vertical target is resubmitted after all nested areas end.
+                if let Some(target) = target {
+                    ui.scroll_to_rect(target, Some(Align::Center));
+                }
             }
             x += *width;
             if column + 1 < widths.len() {

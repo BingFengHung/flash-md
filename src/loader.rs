@@ -26,6 +26,77 @@ pub struct DocumentLoader {
     latest: Arc<AtomicU64>,
 }
 
+#[derive(Clone)]
+pub struct DirectoryRequest {
+    pub id: u64,
+    pub path: PathBuf,
+}
+
+pub struct DirectoryResult {
+    pub request: DirectoryRequest,
+    pub siblings: Vec<PathBuf>,
+}
+
+pub struct DirectoryScanner {
+    sender: Sender<DirectoryRequest>,
+    pub receiver: Receiver<DirectoryResult>,
+    latest: Arc<AtomicU64>,
+}
+
+impl DirectoryScanner {
+    pub fn new(holder: Arc<Mutex<Option<Context>>>) -> Self {
+        Self::spawn(holder, sibling_files)
+    }
+
+    fn spawn(
+        holder: Arc<Mutex<Option<Context>>>,
+        scan: impl Fn(&std::path::Path) -> Vec<PathBuf> + Send + 'static,
+    ) -> Self {
+        let (sender, requests) = unbounded::<DirectoryRequest>();
+        let (results, receiver) = unbounded();
+        let latest = Arc::new(AtomicU64::new(0));
+        let worker_latest = latest.clone();
+        std::thread::spawn(move || {
+            while let Ok(request) = requests.recv() {
+                let request = requests.try_iter().last().unwrap_or(request);
+                if request.id != worker_latest.load(Ordering::Acquire) {
+                    continue;
+                }
+                let siblings = scan(&request.path);
+                if request.id != worker_latest.load(Ordering::Acquire) {
+                    continue;
+                }
+                if results.send(DirectoryResult { request, siblings }).is_err() {
+                    break;
+                }
+                if let Ok(holder) = holder.lock() {
+                    if let Some(ctx) = holder.as_ref() {
+                        ctx.request_repaint();
+                    }
+                }
+            }
+        });
+        Self {
+            sender,
+            receiver,
+            latest,
+        }
+    }
+
+    pub fn request(&self, path: PathBuf) -> DirectoryRequest {
+        let request = DirectoryRequest {
+            id: self.latest.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
+            path,
+        };
+        let _ = self.sender.send(request.clone());
+        request
+    }
+
+    pub fn cancel(&self) {
+        self.latest.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 impl DocumentLoader {
     pub fn new(holder: Arc<Mutex<Option<Context>>>) -> Self {
         Self::spawn(holder, |request| {
@@ -89,7 +160,7 @@ impl DocumentLoader {
     }
 
     pub fn request(&self, mut request: LoadRequest) -> LoadRequest {
-        request.id = self.latest.fetch_add(1, Ordering::AcqRel) + 1;
+        request.id = self.latest.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
         let _ = self.sender.send(request.clone());
         request
     }
@@ -103,6 +174,32 @@ impl DocumentLoader {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn directory_changes_coalesce_while_a_scan_is_blocked() {
+        let (started_tx, started_rx) = unbounded();
+        let (resume_tx, resume_rx) = unbounded();
+        let scanner = DirectoryScanner::spawn(Arc::new(Mutex::new(None)), move |path| {
+            if path == std::path::Path::new("slow/a.md") {
+                started_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+            }
+            vec![path.to_path_buf()]
+        });
+        scanner.request("slow/a.md".into());
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        scanner.request("intermediate/b.md".into());
+        let latest = scanner.request("latest/c.md".into());
+        assert!(scanner.receiver.is_empty());
+        resume_tx.send(()).unwrap();
+        let result = scanner
+            .receiver
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(result.request.id, latest.id);
+        assert_eq!(result.siblings, vec![PathBuf::from("latest/c.md")]);
+        assert!(scanner.receiver.is_empty());
+    }
 
     #[test]
     fn slow_loads_do_not_block_requests_and_only_the_latest_result_is_delivered() {

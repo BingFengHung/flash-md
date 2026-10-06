@@ -150,7 +150,12 @@ $fixtures = @{
 foreach ($entry in $fixtures.GetEnumerator()) { [IO.File]::WriteAllText((Join-Path $work $entry.Key), $entry.Value) }
 Add-Type -AssemblyName System.Drawing
 $image = New-Object Drawing.Bitmap 100, 100
-try { $image.Save((Join-Path $work 'sample.png'), [Drawing.Imaging.ImageFormat]::Png) } finally { $image.Dispose() }
+try {
+    foreach ($format in @('Png', 'Jpeg', 'Gif', 'Bmp', 'Tiff')) {
+        $extension = $format.ToLowerInvariant()
+        $image.Save((Join-Path $work ('sample.' + $extension)), [Drawing.Imaging.ImageFormat]::$format)
+    }
+} finally { $image.Dispose() }
 $pdf = New-Object Text.StringBuilder
 [void]$pdf.Append("%PDF-1.4`n")
 $stream = 'BT /F1 18 Tf 30 700 Td (PDF smoke test) Tj ET'
@@ -165,7 +170,11 @@ $xref = $pdf.Length
 foreach ($offset in $offsets) { [void]$pdf.Append($offset.ToString('D10') + " 00000 n `n") }
 [void]$pdf.Append("trailer`n<< /Size 6 /Root 1 0 R >>`nstartxref`n$xref`n%%EOF`n")
 [IO.File]::WriteAllBytes((Join-Path $work 'sample.pdf'), [Text.Encoding]::ASCII.GetBytes($pdf.ToString()))
-$archivePreview = Join-Path $work 'sample.zip'
+$bom = Join-Path $work 'bom.md'
+[IO.File]::WriteAllText($bom, "# BOM heading`n`n## Second heading", [Text.UTF8Encoding]::new($true))
+$zipFolder = Join-Path $work 'download.zip'
+New-Item -ItemType Directory -Force -Path $zipFolder | Out-Null
+$archivePreview = Join-Path $zipFolder 'sample.zip'
 Compress-Archive -LiteralPath $md -DestinationPath $archivePreview -Force
 
 $version = Start-Process $exe -ArgumentList '--version' -Wait -PassThru -RedirectStandardOutput (Join-Path $work 'version.txt') -RedirectStandardError (Join-Path $work 'version-error.txt')
@@ -174,7 +183,7 @@ $expectedVersion = [regex]::Match((Get-Content (Join-Path $PSScriptRoot '../../C
 if (-not $expectedVersion -or (Get-Content (Join-Path $work 'version.txt') -Raw) -notmatch ('flash-md v' + [regex]::Escape($expectedVersion))) { throw 'CLI version output missing or stale' }
 Write-Output 'SMOKE CLI version passed'
 Start-Preview $md
-foreach ($name in @('sample.csv','sample.tsv','sample.json','sample.rs','sample.txt','sample.svg','sample.png','sample.pdf')) { Start-Preview (Join-Path $work $name) }
+foreach ($name in @('sample.csv','sample.tsv','sample.json','sample.rs','sample.txt','sample.svg','sample.png','sample.jpeg','sample.gif','sample.bmp','sample.tiff','sample.pdf','bom.md')) { Start-Preview (Join-Path $work $name) }
 Start-Preview (Join-Path $archivePreview ([IO.Path]::GetFileName($md)))
 Start-Preview '' $false
 Write-Output 'SMOKE all native startup and responsiveness checks passed'

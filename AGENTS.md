@@ -184,10 +184,10 @@
 - **IME 選字確認 Enter 伴隨換行問題**：
   - 在 Windows 下使用微軟注音、拼音或日文輸入法時，使用者鍵入 CJK 漢字或候選詞後，會按下 `Enter` 作為組字確認 (Commit)。
   - Windows OS 在送出確認文字後，底層仍會發送 `Key::Enter` 與 `Text("\n")` 事件至佇列中，導致 `egui::TextEdit::multiline` 插入確認文字後又立即額外插入一個換行。
-- **標準解決方案 (CJK IME 確認狀態機)**：
-  - 於 `App::update` 偵測是否輸入 CJK 漢字或非 ASCII 字元 (`s.chars().any(|c| c >= '\u{2E80}')`)，若有則標記 `pending_cjk_ime_confirm = true`。
-  - 當使用者按下 `Enter` 作為組字確認時，自動自 `i.events` 中透過 `retain` 過濾清除伴隨的 `Key::Enter` 與 `Text("\n")` 事件，並重置狀態。
-  - 當組字確認完成後，使用者再次按下 `Enter` 即可正常進行段落換行，且純英數輸入不會受任何影響，兼具 100% 跨平台零 FFI 依賴與極致穩定性！
+- **標準解決方案 (IME 組字事件狀態機)**：
+  - 只依 `Event::Ime` 的組字與確認事件處理確認 Enter，確認結束後清除當次多餘的 Enter／換行事件。
+  - 不得以一般 CJK、非 ASCII 文字或貼上內容推測組字確認；普通中文輸入後的 Enter 必須保留。
+  - 自動化驗證須同時涵蓋真正組字事件與普通中文／貼上事件；實體 Windows 輸入法仍需裝置驗證。
 
 ### 16. egui (0.29+) ScrollArea 雙向滾動狀態與鍵盤導航規範 (Double-Hash 陷阱與 vertical_scroll_offset)
 - **`ScrollArea` Double-Hash 陷阱**：
@@ -251,6 +251,15 @@
 - 自動儲存檢查尚未到期時必須再次排程剩餘時間；只依 IME 組字／確認事件過濾 Enter，禁止以一般 CJK 文字或貼上內容判斷確認鍵。
 - CI 在 Windows 跑實際 App 操作回歸、正式版八種預覽情境的 CPU 排版／圖形生成量測與原生視窗啟動／訊息回應檢查；只在測試副本配置經 SHA-256 驗證的 Mesa 軟體 OpenGL，禁止將測試驅動加入發布套件。
 - 效能結果需區分冷啟動與熱快取平均／p95；雲端量測不得宣稱已驗證使用者電腦的 GPU、檔案總管分頁或系統 IME。
+
+### 23. 交互狀態與格式回歸規範 (v1.0.107)
+- 大綱、Markdown 預覽與心智圖必須共用解析後的 canonical heading ID；自動 ID 預先避開所有明確自訂 ID，圖片標題的定位矩形涵蓋整個標題區塊。
+- 表格搜尋先在所屬水平 ScrollArea 提交水平定位，再於所有巢狀區結束後提交文件垂直定位；驗證命中文字位於實際 clip rect 內。
+- 搜尋單行 TextEdit 在 Enter 當幀可能失去焦點，需接受 lost_focus 並重新 request_focus；Ctrl+F 由編輯／簡報／心智圖返回支援搜尋的預覽，保留草稿。
+- 離開簡報使用同一狀態清理流程，包含工具列與快捷鍵；大綱不在編輯器／簡報顯示。工具列 Close 必須走 PendingAction 流程，避免繞過未儲存確認。
+- 快取切檔先驗證資料夾一致；檔案刪除後依排序插入位置選擇相鄰檔案。目錄變更使用獨立背景掃描器與序號合併，開新文件／清空時取消過期掃描。
+- GIF 使用 egui 動畫解碼器而非靜態 Raster，測試實際不同時間的 texture 上傳；BOM 只在解析時去除，JSON 寫回保留原始 BOM。標準 JSON 重寫按鈕不得用於 JSON Lines／JSONC／JSON5。
+- Explorer 選取只接受實體檔案或有效 ZIP 虛擬路徑，不接受資料夾。ZIP 路徑匹配需尋找實際 archive 檔案，跳過名稱含 `.zip` 的資料夾。
 
 ---
 

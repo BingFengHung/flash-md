@@ -69,17 +69,6 @@ impl MdPreviewApp {
                     if let Some(siblings) = result.siblings {
                         self.siblings = siblings;
                     }
-                    if result.request.reset_view && self.is_slides_fullscreen {
-                        let ctx = self
-                            .ctx_holder
-                            .lock()
-                            .ok()
-                            .and_then(|holder| holder.clone());
-                        if let Some(ctx) = ctx {
-                            self.set_fullscreen_state(&ctx, false);
-                        }
-                        self.is_slides_fullscreen = false;
-                    }
                     let name = loaded
                         .path
                         .file_name()
@@ -105,8 +94,37 @@ impl MdPreviewApp {
         }
     }
 
+    pub(super) fn request_directory_refresh(&mut self) {
+        if let Some(path) = self.current_file.clone() {
+            self.directory_request = Some(self.directory_scanner.request(path));
+        }
+    }
+
+    pub(super) fn poll_directory_scans(&mut self) {
+        while let Ok(result) = self.directory_scanner.receiver.try_recv() {
+            if self
+                .directory_request
+                .as_ref()
+                .is_none_or(|request| request.id != result.request.id)
+            {
+                continue;
+            }
+            self.directory_request = None;
+            if self
+                .current_file
+                .as_ref()
+                .is_some_and(|path| path.parent() == result.request.path.parent())
+            {
+                self.siblings = result.siblings;
+            }
+        }
+    }
+
     pub(super) fn apply_document(&mut self, loaded: LoadedDocument, reset_view: bool) {
         if reset_view {
+            self.exit_slides_mode();
+            self.directory_scanner.cancel();
+            self.directory_request = None;
             self.navigation_cursor = None;
             self.preview_generation = self.preview_generation.wrapping_add(1);
             self.view_mode = if loaded.image_bytes.is_some() {
@@ -261,6 +279,9 @@ impl MdPreviewApp {
             PendingAction::Open(path) => self.open_document(&path),
             PendingAction::Clear => {
                 self.cancel_document_load();
+                self.exit_slides_mode();
+                self.directory_scanner.cancel();
+                self.directory_request = None;
                 self.current_file = None;
                 self.watched_file = None;
                 self.document_kind = DocumentKind::Text;
@@ -287,6 +308,7 @@ impl MdPreviewApp {
             }
             PendingAction::Close => {
                 self.cancel_document_load();
+                self.exit_slides_mode();
                 self.visible = false;
                 hide_app_window();
                 if self.is_standalone {
@@ -370,6 +392,8 @@ impl MdPreviewApp {
             self.set_toast("ℹ 此預覽為唯讀，無法編輯原始檔案".to_string());
             return;
         }
+        self.exit_slides_mode();
+        self.cancel_document_load();
         self.is_editing = !self.is_editing;
         if self.is_editing {
             self.set_toast("✏ 已進入全螢幕就地編輯模式 (Ctrl+S 保存，E 退出)".to_string());
@@ -409,12 +433,40 @@ impl MdPreviewApp {
             self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
         }
         if out.exit_slides {
-            self.is_slides_mode = false;
-            if self.is_slides_fullscreen {
-                self.is_slides_fullscreen = false;
-                self.set_fullscreen_state(ctx, false);
-            }
+            self.exit_slides_mode();
             self.set_toast("👁 已退出簡報投影模式".to_string());
+        }
+    }
+
+    pub(super) fn exit_slides_mode(&mut self) {
+        let fullscreen = self.is_slides_fullscreen;
+        self.is_slides_mode = false;
+        self.is_slides_fullscreen = false;
+        if fullscreen {
+            let ctx = self
+                .ctx_holder
+                .lock()
+                .ok()
+                .and_then(|holder| holder.clone());
+            if let Some(ctx) = ctx {
+                self.set_fullscreen_state(&ctx, false);
+            }
+        }
+    }
+
+    pub(super) fn toggle_slides_mode(&mut self, ctx: &Context) {
+        if self.is_slides_mode {
+            self.exit_slides_mode();
+        } else {
+            self.is_editing = false;
+            self.search_open = false;
+            self.search_query.clear();
+            self.search_match_index = 0;
+            self.search_match_count = 0;
+            self.is_slides_mode = true;
+            self.is_slides_fullscreen = true;
+            self.current_slide_index = 0;
+            self.set_fullscreen_state(ctx, true);
         }
     }
 
@@ -484,11 +536,24 @@ impl MdPreviewApp {
         if files.is_empty() {
             return;
         }
-        let index = files.iter().position(|p| p == current).unwrap_or(0);
-        let next = if forward {
-            (index + 1) % files.len()
+        if files[0].parent() != current.parent() {
+            return;
+        }
+        let next = if let Some(index) = files.iter().position(|path| path == current) {
+            if forward {
+                (index + 1) % files.len()
+            } else {
+                (index + files.len() - 1) % files.len()
+            }
         } else {
-            (index + files.len() - 1) % files.len()
+            let name = crate::files::file_name_sort_key(current);
+            let insertion =
+                files.partition_point(|path| crate::files::file_name_sort_key(path) < name);
+            if forward {
+                insertion % files.len()
+            } else {
+                (insertion + files.len() - 1) % files.len()
+            }
         };
         let path = files[next].clone();
         self.load_file(&path);
@@ -513,7 +578,7 @@ impl MdPreviewApp {
         }
     }
 
-    /// 一鍵排版美化 JSON / JSON5 / JSONC
+    /// 一鍵排版美化標準 JSON
     pub fn format_json_content(&mut self) {
         if !self.document_kind.can_save() {
             self.set_toast("ℹ 此預覽為唯讀，無法修改原始檔案".to_string());

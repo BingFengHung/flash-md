@@ -212,3 +212,95 @@ fn navigation_continues_past_unreadable_files_without_replacing_the_previous_doc
     assert_eq!(app.current_file.as_deref(), Some(last.as_path()));
     assert_eq!(app.content, "last");
 }
+
+#[test]
+fn pending_cross_directory_load_does_not_navigate_using_the_old_siblings() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    let old = first.join("a.md");
+    let next = second.join("b.md");
+    fs::write(&old, "old").unwrap();
+    fs::write(first.join("c.md"), "old neighbor").unwrap();
+    fs::write(&next, "new folder").unwrap();
+    let mut app = app();
+    app.open_document(&old);
+    settle(&mut app);
+    app.open_document(&next);
+    let request_id = app.loading_request.as_ref().unwrap().id;
+    app.navigate_sibling_file(true);
+    app.navigate_sibling_file(false);
+    assert_eq!(app.loading_request.as_ref().unwrap().id, request_id);
+    settle(&mut app);
+    assert_eq!(app.current_file, Some(next));
+    assert_eq!(app.content, "new folder");
+}
+
+#[test]
+fn deleting_the_current_file_selects_the_nearest_surviving_neighbor_in_both_directions() {
+    for (forward, expected) in [(true, "c.md"), (false, "a.md")] {
+        let directory = tempfile::tempdir().unwrap();
+        for name in ["a.md", "b.md", "c.md"] {
+            fs::write(directory.path().join(name), name).unwrap();
+        }
+        let current = directory.path().join("b.md");
+        let mut app = app();
+        app.open_document(&current);
+        settle(&mut app);
+        fs::remove_file(&current).unwrap();
+        app.request_directory_refresh();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.directory_request.is_some() {
+            app.poll_directory_scans();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        app.navigate_sibling_file(forward);
+        settle(&mut app);
+        assert_eq!(app.current_file, Some(directory.path().join(expected)));
+    }
+}
+
+#[test]
+fn late_directory_results_cannot_replace_a_new_folders_snapshot_or_a_cleared_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    fs::create_dir(&first).unwrap();
+    fs::create_dir(&second).unwrap();
+    fs::write(first.join("a.md"), "old").unwrap();
+    fs::write(second.join("b.md"), "new").unwrap();
+    let mut app = app();
+    app.open_document(&first.join("a.md"));
+    settle(&mut app);
+    app.request_directory_refresh();
+    app.open_document(&second.join("b.md"));
+    settle(&mut app);
+    app.poll_directory_scans();
+    assert_eq!(app.siblings, vec![second.join("b.md")]);
+    app.request_directory_refresh();
+    app.execute_action(PendingAction::Clear);
+    app.poll_directory_scans();
+    assert!(app.directory_request.is_none());
+    assert!(app.siblings.is_empty());
+    assert!(app.current_file.is_none());
+}
+
+#[test]
+fn json_formatting_and_saving_preserve_the_original_utf8_bom() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bom.json");
+    let original = "\u{feff}{\"message\":\"中文\",\"number\":7}";
+    fs::write(&path, original).unwrap();
+    let mut app = app();
+    app.open_document(&path);
+    settle(&mut app);
+    app.format_json_content();
+    assert!(app.is_modified);
+    assert!(app.save_current_file(false));
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.starts_with('\u{feff}'));
+    assert_eq!(crate::parsers::minify_json(&saved).unwrap(), original);
+}

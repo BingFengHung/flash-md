@@ -33,17 +33,10 @@ pub fn load_document(path: &Path) -> Result<LoadedDocument, String> {
     let (bytes, watch_path, archive) = match fs::read(path) {
         Ok(bytes) => (bytes, path.to_path_buf(), false),
         Err(original_error) => {
-            let raw = path.to_string_lossy();
-            let normalized = raw.replace('\\', "/");
-            let lower = normalized.to_ascii_lowercase();
-            let Some(index) = lower.find(".zip/") else {
+            let Some((zip_path, entry)) = zip_entry_path(path) else {
                 return Err(original_error.to_string());
             };
-            let zip_path = PathBuf::from(&normalized[..index + 4]);
-            if !zip_path.is_file() {
-                return Err(original_error.to_string());
-            }
-            let bytes = read_bytes_from_zip(&zip_path, &normalized[index + 5..])?;
+            let bytes = read_bytes_from_zip(&zip_path, &entry)?;
             (bytes, zip_path, true)
         }
     };
@@ -64,17 +57,18 @@ pub fn load_document(path: &Path) -> Result<LoadedDocument, String> {
             })
             .unwrap_or_default()
     };
-    let image_pixels = if is_image_extension(&extension) && extension != "svg" {
-        image::load_from_memory(&bytes).ok().map(|decoded| {
-            let rgba = decoded.to_rgba8();
-            egui::ColorImage::from_rgba_unmultiplied(
-                [rgba.width() as usize, rgba.height() as usize],
-                rgba.as_raw(),
-            )
-        })
-    } else {
-        None
-    };
+    let image_pixels =
+        if is_image_extension(&extension) && !matches!(extension.as_str(), "svg" | "gif") {
+            image::load_from_memory(&bytes).ok().map(|decoded| {
+                let rgba = decoded.to_rgba8();
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [rgba.width() as usize, rgba.height() as usize],
+                    rgba.as_raw(),
+                )
+            })
+        } else {
+            None
+        };
     let (kind, content, image_bytes) = if is_image_extension(&extension) {
         let kind = if extension == "svg" {
             DocumentKind::Svg
@@ -108,6 +102,21 @@ pub fn load_document(path: &Path) -> Result<LoadedDocument, String> {
         size,
         modified,
     })
+}
+
+pub fn zip_entry_path(path: &Path) -> Option<(PathBuf, String)> {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    lower.match_indices(".zip/").find_map(|(index, _)| {
+        let archive = PathBuf::from(&normalized[..index + 4]);
+        let entry = &normalized[index + 5..];
+        (archive.is_file() && !entry.is_empty() && !entry.ends_with('/'))
+            .then(|| (archive, entry.to_string()))
+    })
+}
+
+pub fn is_preview_target(path: &Path) -> bool {
+    path.is_file() || (!path.exists() && zip_entry_path(path).is_some())
 }
 
 fn read_bytes_from_zip(zip_path: &Path, entry_name: &str) -> Result<Vec<u8>, String> {
@@ -161,18 +170,72 @@ pub fn sibling_files(path: &Path) -> Vec<PathBuf> {
                     .is_some_and(|n| !n.starts_with('.') && !n.starts_with("~$"))
         })
         .collect();
-    files.sort_by_cached_key(|p| {
-        p.file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase()
-    });
+    files.sort_by_cached_key(|path| file_name_sort_key(path));
     files
+}
+
+pub fn file_name_sort_key(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_targets_skip_directories_and_find_archives_below_zip_named_folders() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("download.zip");
+        fs::create_dir(&folder).unwrap();
+        let archive = folder.join("archive.ZIP");
+        fs::write(&archive, b"archive fixture").unwrap();
+        let virtual_file = archive.join("中文 space.md");
+        assert_eq!(
+            zip_entry_path(&virtual_file),
+            Some((archive.clone(), "中文 space.md".to_string()))
+        );
+        assert!(is_preview_target(&archive));
+        assert!(is_preview_target(&virtual_file));
+        assert!(!is_preview_target(&folder));
+        assert!(!is_preview_target(
+            &folder.join("missing.zip").join("file.md")
+        ));
+        assert!(!is_preview_target(&archive.join("folder/")));
+    }
+
+    #[test]
+    fn supported_bitmap_formats_decode_and_gif_keeps_its_encoded_animation() {
+        let directory = tempfile::tempdir().unwrap();
+        for (extension, format) in [
+            ("png", image::ImageFormat::Png),
+            ("jpg", image::ImageFormat::Jpeg),
+            ("webp", image::ImageFormat::WebP),
+            ("gif", image::ImageFormat::Gif),
+            ("bmp", image::ImageFormat::Bmp),
+            ("ico", image::ImageFormat::Ico),
+            ("tiff", image::ImageFormat::Tiff),
+        ] {
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            let image = image::DynamicImage::new_rgb8(3, 3);
+            image.write_to(&mut encoded, format).unwrap();
+            let path = directory.path().join(format!("fixture.{extension}"));
+            fs::write(&path, encoded.get_ref()).unwrap();
+            let loaded = load_document(&path).unwrap();
+            assert_eq!(loaded.kind, DocumentKind::Image, "{extension}");
+            assert_eq!(
+                loaded.image_pixels.is_some(),
+                extension != "gif",
+                "{extension}"
+            );
+            assert_eq!(
+                loaded.image_bytes.as_deref(),
+                Some(encoded.get_ref().as_slice())
+            );
+        }
+    }
 
     #[test]
     fn failing_load_does_not_return_partial_document() {

@@ -429,7 +429,7 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
                                     if let Ok(raw_path) = raw_path {
                                         if !raw_path.is_empty() {
                                             let path = normalize_explorer_path(&raw_path);
-                                            if path.exists() {
+                                            if crate::files::is_preview_target(&path) {
                                                 info!(
                                                     "✅ [IFolderView Selection] 成功取得檔案: {:?}",
                                                     path
@@ -461,7 +461,7 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
                                     if let Ok(raw_path) = raw_path {
                                         if !raw_path.is_empty() {
                                             let path = normalize_explorer_path(&raw_path);
-                                            if path.exists() {
+                                            if crate::files::is_preview_target(&path) {
                                                 info!(
                                                     "✅ [IFolderView Checked] 成功取得檔案: {:?}",
                                                     path
@@ -493,7 +493,7 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
                         let raw_path = String::from_utf16_lossy(&path_buf[..len]);
                         if !raw_path.is_empty() {
                             let path = normalize_explorer_path(&raw_path);
-                            if path.exists() {
+                            if crate::files::is_preview_target(&path) {
                                 info!("✅ [IFolderView Focus] 成功取得檔案: {:?}", path);
                                 return Some(path);
                             }
@@ -520,7 +520,7 @@ unsafe fn extract_from_folder_view_dual(folder_view: &IShellFolderViewDual) -> O
                             let raw_path = path_bstr.to_string();
                             if !raw_path.is_empty() {
                                 let path = normalize_explorer_path(&raw_path);
-                                if path.exists() {
+                                if crate::files::is_preview_target(&path) {
                                     info!(
                                         "✅ 成功自 SelectedItems 取得檔案: {:?} (原始: {})",
                                         path, raw_path
@@ -528,22 +528,6 @@ unsafe fn extract_from_folder_view_dual(folder_view: &IShellFolderViewDual) -> O
                                     return Some(path);
                                 }
                             }
-                        }
-                    }
-                }
-
-                // 若選取的包含資料夾或虛擬項目，取第 0 個
-                let item_variant = VARIANT::from(0i32);
-                if let Ok(item) = selected_items.Item(&item_variant) {
-                    if let Ok(path_bstr) = item.Path() {
-                        let raw_path = path_bstr.to_string();
-                        if !raw_path.is_empty() {
-                            let path = normalize_explorer_path(&raw_path);
-                            info!(
-                                "✅ 成功自 SelectedItems 取得項目: {:?} (原始: {})",
-                                path, raw_path
-                            );
-                            return Some(path);
                         }
                     }
                 }
@@ -557,7 +541,7 @@ unsafe fn extract_from_folder_view_dual(folder_view: &IShellFolderViewDual) -> O
             let raw_path = path_bstr.to_string();
             if !raw_path.is_empty() {
                 let path = normalize_explorer_path(&raw_path);
-                if path.exists() {
+                if crate::files::is_preview_target(&path) {
                     info!(
                         "✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})",
                         path, raw_path
@@ -595,22 +579,22 @@ pub fn normalize_explorer_path(raw: &str) -> PathBuf {
 
     // 優先以原生反斜線路徑驗證檔案是否存在
     let p_decoded_native = PathBuf::from(decoded.replace('/', "\\"));
-    if p_decoded_native.exists() {
+    if crate::files::is_preview_target(&p_decoded_native) {
         return p_decoded_native;
     }
 
     let p_decoded = PathBuf::from(&decoded);
-    if p_decoded.exists() {
+    if crate::files::is_preview_target(&p_decoded) {
         return p_decoded;
     }
 
     let p_raw_native = PathBuf::from(s.replace('/', "\\"));
-    if p_raw_native.exists() {
+    if crate::files::is_preview_target(&p_raw_native) {
         return p_raw_native;
     }
 
     let p_raw = PathBuf::from(s);
-    if p_raw.exists() {
+    if crate::files::is_preview_target(&p_raw) {
         return p_raw;
     }
 

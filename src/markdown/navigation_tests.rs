@@ -164,3 +164,91 @@ fn markdown_table_search_keeps_global_match_counts_on_cached_frames() {
         });
     }
 }
+
+#[test]
+fn headings_with_images_and_reserved_explicit_ids_scroll_to_the_correct_block() {
+    for (heading, anchor) in [
+        ("## Title ![Badge](missing.png)", "title-badge"),
+        ("## Target\n\n## Manual {#target}", "target-1"),
+    ] {
+        let document = format!(
+            "# Intro\n\n{}{heading}\n\n{}",
+            "Paragraph.\n\n".repeat(45),
+            "After.\n\n".repeat(45)
+        );
+        let ctx = egui::Context::default();
+        for frame in 0..3 {
+            let mut offset = 0.0_f32;
+            let _ = ctx.run(input(frame, 520.0_f32, 320.0_f32), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let scroll = egui::ScrollArea::vertical()
+                        .id_salt("image-heading")
+                        .animated(false)
+                        .show(ui, |ui| {
+                            let rendered = MarkdownRenderer::new(
+                                AppTheme::Dark,
+                                1.0_f32,
+                                "",
+                                None,
+                                (frame == 0).then_some(anchor),
+                                None,
+                            )
+                            .render(ui, &document);
+                            assert_eq!(rendered.anchor_found, frame == 0);
+                        });
+                    offset = scroll.state.offset.y;
+                });
+            });
+            assert!(
+                offset > 600.0_f32,
+                "image/explicit heading failed to scroll"
+            );
+        }
+    }
+}
+
+#[test]
+fn searching_a_wide_markdown_table_reveals_the_last_column_and_row() {
+    let document = format!("# Intro\n\n{}| A | B | C | D | E | F | G | H |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| one | two | three | four | five | six | seven | NEEDLE |\n\n{}", "Paragraph.\n\n".repeat(45), "After.\n\n".repeat(45));
+    let ctx = egui::Context::default();
+    for frame in 0..3 {
+        let mut offset = 0.0_f32;
+        let output = ctx.run(input(frame, 520.0_f32, 320.0_f32), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let scroll = egui::ScrollArea::vertical()
+                    .id_salt("wide-table-search")
+                    .animated(false)
+                    .show(ui, |ui| {
+                        let mut renderer = MarkdownRenderer::new(
+                            AppTheme::Dark,
+                            1.0_f32,
+                            "NEEDLE",
+                            Some(0),
+                            None,
+                            None,
+                        );
+                        renderer.search_jump = frame == 0;
+                        let rendered = renderer.render(ui, &document);
+                        assert_eq!(rendered.match_count, 1);
+                    });
+                offset = scroll.state.offset.y;
+            });
+        });
+        assert!(
+            offset > 600.0_f32,
+            "table search failed to scroll vertically"
+        );
+        if frame == 2 {
+            let shape = output.shapes.iter().find(|shape| matches!(&shape.shape, Shape::Text(text) if text.galley.text() == "NEEDLE")).unwrap();
+            let Shape::Text(text) = &shape.shape else {
+                unreachable!()
+            };
+            let rect = text.galley.rect.translate(text.pos.to_vec2());
+            assert!(
+                shape.clip_rect.contains_rect(rect),
+                "table search is outside the visible cell: {rect:?} / {:?}",
+                shape.clip_rect
+            );
+        }
+    }
+}

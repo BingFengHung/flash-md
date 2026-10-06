@@ -47,11 +47,7 @@ impl MdPreviewApp {
             if self.settings_open {
                 self.settings_open = false;
             } else if self.is_slides_mode {
-                self.is_slides_mode = false;
-                if self.is_slides_fullscreen {
-                    self.is_slides_fullscreen = false;
-                    self.set_fullscreen_state(ctx, false);
-                }
+                self.exit_slides_mode();
             } else if self.is_editing {
                 self.is_editing = false;
             } else if self.search_open {
@@ -144,9 +140,11 @@ impl MdPreviewApp {
             }
         }
         if !self.is_editing && command && input.key_pressed(egui::Key::M) {
+            self.exit_slides_mode();
             self.cycle_view_mode();
         }
         if !self.is_editing && input.key_pressed(egui::Key::F6) {
+            self.exit_slides_mode();
             match self.view_mode {
                 ViewMode::Markdown if !self.content.is_empty() => {
                     self.view_mode = ViewMode::Mindmap
@@ -156,15 +154,13 @@ impl MdPreviewApp {
             }
         }
         if command && input.key_pressed(egui::Key::F) {
-            self.search_open = true;
-            self.search_focus_requested = true;
+            self.open_search();
         }
         if input.key_pressed(egui::Key::F3) {
             if self.search_open {
                 self.navigate_search_match(!input.modifiers.shift);
             } else {
-                self.search_open = true;
-                self.search_focus_requested = true;
+                self.open_search();
             }
         }
         if !self.is_editing
@@ -172,6 +168,7 @@ impl MdPreviewApp {
             && input.key_pressed(egui::Key::T)
             && matches!(self.view_mode, ViewMode::Markdown)
         {
+            self.exit_slides_mode();
             self.toc_open = !self.toc_open;
         }
         if !self.is_editing
@@ -180,12 +177,7 @@ impl MdPreviewApp {
             && (input.key_pressed(egui::Key::F5)
                 || (plain && !ctx.wants_keyboard_input() && input.key_pressed(egui::Key::P)))
         {
-            self.is_slides_mode = !self.is_slides_mode;
-            self.is_slides_fullscreen = self.is_slides_mode;
-            if self.is_slides_mode {
-                self.current_slide_index = 0;
-            }
-            self.set_fullscreen_state(ctx, self.is_slides_mode);
+            self.toggle_slides_mode(ctx);
         }
         if input.key_pressed(egui::Key::F11) {
             let fullscreen = !input.viewport().fullscreen.unwrap_or(false);
@@ -235,8 +227,7 @@ impl MdPreviewApp {
             return;
         }
         if plain && input.key_pressed(egui::Key::Slash) {
-            self.search_open = true;
-            self.search_focus_requested = true;
+            self.open_search();
             return;
         }
         if plain && input.key_pressed(egui::Key::N) {
@@ -352,6 +343,26 @@ impl MdPreviewApp {
         self.target_anchor = None;
         self.preview_generation = self.preview_generation.wrapping_add(1);
         self.search_match_index = 0;
+        self.search_jump_requested = !self.search_query.trim().is_empty();
+    }
+
+    pub(super) fn open_search(&mut self) {
+        if self.content.is_empty() {
+            self.set_toast("ℹ 此預覽沒有可搜尋的文字".to_string());
+            return;
+        }
+        self.exit_slides_mode();
+        self.is_editing = false;
+        if matches!(self.view_mode, ViewMode::Mindmap) {
+            self.view_mode = ViewMode::Markdown;
+        } else if matches!(self.view_mode, ViewMode::Image { .. }) {
+            self.view_mode = ViewMode::Code {
+                lang: "xml".to_string(),
+            };
+        }
+        self.target_anchor = None;
+        self.search_open = true;
+        self.search_focus_requested = true;
         self.search_jump_requested = !self.search_query.trim().is_empty();
     }
 }

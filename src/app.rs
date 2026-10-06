@@ -8,7 +8,7 @@ use crate::document::{DocumentKind, PendingAction, UnsavedChoice};
 use crate::explorer::{hide_app_window, show_and_focus_app_window};
 use crate::files::LoadedDocument;
 use crate::hotkey::HotkeyEvent;
-use crate::loader::{DocumentLoader, LoadRequest};
+use crate::loader::{DirectoryRequest, DirectoryScanner, DocumentLoader, LoadRequest};
 use crate::markdown::{
     get_image_badge, get_language_badge, is_code_extension, is_image_extension, render_code_viewer,
     MarkdownRenderer,
@@ -48,6 +48,8 @@ pub struct MdPreviewApp {
     pub close_confirmed: bool,
     pub content_revision: u64,
     loader: DocumentLoader,
+    directory_scanner: DirectoryScanner,
+    directory_request: Option<DirectoryRequest>,
     loading_request: Option<LoadRequest>,
     navigation_cursor: Option<PathBuf>,
     pub search_match_count: usize,
@@ -132,12 +134,15 @@ impl MdPreviewApp {
         let always_on_top = config.always_on_top;
         let (update_tx, update_rx) = unbounded();
         let loader = DocumentLoader::new(ctx_holder.clone());
+        let directory_scanner = DirectoryScanner::new(ctx_holder.clone());
         Self {
             document_kind: DocumentKind::Text,
             pending_action: None,
             close_confirmed: false,
             content_revision: 0,
             loader,
+            directory_scanner,
+            directory_request: None,
             loading_request: None,
             navigation_cursor: None,
             search_match_count: 0,
@@ -283,7 +288,7 @@ impl MdPreviewApp {
         self.status_toast = Some((msg, std::time::Instant::now()));
     }
 
-    /// 切換至同目錄下的上一個 / 下一個檔案 (依檔名自然排序)
+    /// 切換至同目錄下的上一個 / 下一個檔案 (依檔名排序)
     /// 渲染 Markdown 目錄大綱，回傳收起狀態與目標錨點。
     pub fn render_toc_sidebar(&self, ui: &mut egui::Ui) -> (bool, Option<String>) {
         crate::views::toc_sidebar::render_toc_sidebar(
@@ -298,6 +303,7 @@ impl MdPreviewApp {
 impl MdPreviewApp {
     fn update_ui(&mut self, ctx: &egui::Context) {
         self.poll_document_loads();
+        self.poll_directory_scans();
         // 背景常駐未顯示時低頻輪詢，視窗顯現時由使用者操作與事件驅動，達成 0% CPU 靜止待機
         if !self.visible {
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -339,11 +345,7 @@ impl MdPreviewApp {
             }
         }
         if refresh_directory {
-            self.siblings = self
-                .current_file
-                .as_deref()
-                .map(crate::files::sibling_files)
-                .unwrap_or_default();
+            self.request_directory_refresh();
         }
         if reload_document {
             self.reload_current_file();
@@ -785,30 +787,25 @@ impl MdPreviewApp {
 
                     // 搜尋按鈕 (僅文字/程式碼模式可用)
                     if !matches!(self.view_mode, ViewMode::Image { .. }) && render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F 或 /)").clicked() {
-                            self.search_open = !self.search_open;
                             if self.search_open {
-                                self.search_focus_requested = true;
+                                self.search_open = false;
+                            } else {
+                                self.open_search();
                             }
                     }
 
                     // Markdown 大綱側邊欄開關按鈕
-                    if matches!(self.view_mode, ViewMode::Markdown) && render_nav_button(ui, self.theme, "📑 大綱", self.toc_open, "開啟/收起章節目錄大綱 (Ctrl + T)").clicked() {
+                    if matches!(self.view_mode, ViewMode::Markdown) && !self.is_editing && render_nav_button(ui, self.theme, "📑 大綱", self.toc_open, "開啟/收起章節目錄大綱 (Ctrl + T)").clicked() {
+                            self.exit_slides_mode();
                             self.toc_open = !self.toc_open;
                     }
 
                     // Markdown 簡報投影模式切換按鈕
                     if matches!(self.view_mode, ViewMode::Markdown) && !self.is_editing && render_nav_button(ui, self.theme, "📽 簡報", self.is_slides_mode, "切換全螢幕簡報投影模式 (F5 或 P)").clicked() {
-                            self.is_slides_mode = !self.is_slides_mode;
+                            self.toggle_slides_mode(ctx);
                             if self.is_slides_mode {
-                                self.current_slide_index = 0;
-                                self.is_slides_fullscreen = true;
-                                self.set_fullscreen_state(ctx, true);
                                 self.set_toast("📽 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
                             } else {
-                                if self.is_slides_fullscreen {
-                                    self.is_slides_fullscreen = false;
-                                    self.set_fullscreen_state(ctx, false);
-                                }
                                 self.set_toast("👁 已退出簡報投影模式".to_string());
                             }
                     }
@@ -817,6 +814,7 @@ impl MdPreviewApp {
                     if matches!(self.view_mode, ViewMode::Markdown | ViewMode::Mindmap) && !self.is_editing && !self.content.is_empty() {
                         let is_mindmap = matches!(self.view_mode, ViewMode::Mindmap);
                         if render_nav_button(ui, self.theme, "🧠 心智圖", is_mindmap, "切換 Markdown 互動心智圖模式 (Ctrl + M)").clicked() {
+                            self.exit_slides_mode();
                             if is_mindmap {
                                 self.view_mode = ViewMode::Markdown;
                                 self.set_toast("已切換回 Markdown 渲染模式 📄".to_string());
@@ -834,7 +832,7 @@ impl MdPreviewApp {
                         .unwrap_or("")
                         .to_lowercase();
 
-                    if matches!(current_ext.as_str(), "json" | "jsonc" | "json5" | "jsonl") {
+                    if current_ext == "json" {
                         if render_nav_button(ui, self.theme, "⚡ 格式化", false, "一鍵排版美化 JSON (縮排對齊)").clicked() {
                             self.format_json_content();
                         }
@@ -881,11 +879,7 @@ impl MdPreviewApp {
 
                         // 關閉按鈕
                         if render_nav_button(ui, self.theme, "✕ 關閉", false, "隱藏預覽視窗 (Esc)").clicked() {
-                            self.visible = false;
-                            hide_app_window();
-                            if self.is_standalone {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
+                            self.request_action(PendingAction::Close);
                         }
 
                         // 全螢幕 / 視窗切換按鈕 (F11)
@@ -962,9 +956,10 @@ impl MdPreviewApp {
                         }
 
                         // 在搜尋框內按下 Enter 或 Shift + Enter 進行上一筆/下一筆跳轉
-                        if search_input_resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if (search_input_resp.has_focus() || search_input_resp.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             let shift = ui.input(|i| i.modifiers.shift);
                             self.navigate_search_match(!shift);
+                            search_input_resp.request_focus();
                         }
 
                         // 搜尋列開啟但焦點不在輸入框時，提供 Vim 風格的 n/N 導航。
@@ -1160,7 +1155,11 @@ impl MdPreviewApp {
         let mut toc_target_anchor = None;
 
         // 如果開啟大綱模式且處於 Markdown 檢視，先掛載獨立可調整寬度的左側側邊欄 (SidePanel)
-        if self.toc_open && matches!(self.view_mode, ViewMode::Markdown) && !self.content.is_empty()
+        if self.toc_open
+            && !self.is_editing
+            && !self.is_slides_mode
+            && matches!(self.view_mode, ViewMode::Markdown)
+            && !self.content.is_empty()
         {
             egui::SidePanel::left("toc_side_panel")
                 .resizable(true)

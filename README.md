@@ -10,6 +10,15 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 ---
 
+## v1.0.107 interaction and format fixes
+
+- Search Enter / Shift+Enter keeps focus and navigates matches. Search from editing, slides or mindmaps returns to the document preview while keeping unsaved content. Wide Markdown table searches reveal the matching column as well as the row.
+- Outline, preview and mindmap anchors use the same heading IDs, including headings with images and automatic IDs that would otherwise collide with explicit IDs. UTF-8 BOM files keep their first Markdown heading and slide frontmatter; JSON formatting preserves the original BOM when saving.
+- Fast navigation during a cross-folder load cannot reuse the previous folder's entries. Directory changes scan on a background worker, discard stale results and choose the correct neighbor if the current file was deleted.
+- Switching from slides to editing, search, outline or mindmap consistently exits presentation fullscreen. The outline stays hidden in the editor and slides. The toolbar Close button uses the Save / Discard / Cancel flow.
+- GIF previews retain animation instead of decoding only the first frame. Explorer selection excludes directories and supports ZIP entries inside folders whose names end in `.zip`. Format / Minify is offered for standard `.json` files; JSON5, JSONC and JSON Lines remain available for preview and editing.
+- Regression checks exercise real search keys, painted table visibility, heading scroll offsets, toolbar clicks, two GIF frames, BOM roundtrips and asynchronous navigation. Native Windows checks also open JPEG, GIF, BMP, TIFF, BOM Markdown and an archive beneath a `.zip` folder.
+
 ## v1.0.106 Responsiveness and verification
 
 - Read files, extract PDF/ZIP content, decode images, initialize syntax/Mermaid resources and scan new directories on one background worker. Rapid navigation keeps only the latest request; cancelling, closing or editing prevents late results from replacing the current document. Navigation can advance past unreadable files, and native window lookup verifies the process ID even when the caption changes.
@@ -23,7 +32,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 - Markdown tables measure stable column widths before painting, wrap long cells, align left/center/right, and keep every cell in a row at the same height. Narrow windows scroll horizontally instead of squeezing columns.
 - Outline jumps are sent after nested tables finish rendering, so headings, duplicate titles and explicit IDs scroll to the correct section.
-- Alt+Space captures the foreground window at keydown, queries on one worker, ignores stale results and wakes the preview without stealing focus before loading. Sibling navigation reuses the directory cache and watcher; entry changes refresh the cache once per frame, and each opened document starts with fresh scroll state.
+- Alt+Space captures the foreground window at keydown, queries on one worker, ignores stale results and wakes the preview without stealing focus before loading. Sibling navigation reuses the directory cache and watcher; entry changes refresh the cache on a background worker, and each opened document starts with fresh scroll state.
 - Regression tests cover painted table geometry, narrow windows, actual heading scroll offsets, delayed hotkey queries and cached sibling navigation.
 
 ## v1.0.104 fixes
@@ -42,7 +51,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - 🧠 **Interactive Mindmap Mode**: Press **`F6`** or **`Ctrl + M`** to transform any Markdown outline into a **fluid, interactive vector mindmap**! Features smooth cubic Bezier connectors, pan & zoom, expandable/collapsible nodes (`[+]`/`[-]`), and 1-click jump back to markdown section!
 - 📽️ **Full-Screen Markdown Slides Mode**: Press **`F5`** or **`P`** to instantly convert any Markdown document (split by `---`) into an elegant presentation deck with keyboard navigation (`←`/`→`/`Space`), floating controls, and fullscreen projection!
 - ✏️ **In-Place Full-Screen Editor**: Press **`E`** or **`Ctrl + E`** during preview to seamlessly switch to an in-place markdown/text editor—modify files without launching heavy external editors!
-- 🔤 **Smart IME Enter Filter**: Flawless compatibility with Chinese (Zhuyin/Bopomofo, Pinyin) and Japanese IMEs—Enter key confirms composition without inserting unwanted newlines!
+- 🔤 **Smart IME Enter Filter**: Composition events prevent an IME confirmation Enter from adding an unwanted newline while preserving normal text and paste input.
 - 💾 **Manual & Auto-Debounce Save**: Save manually with `Ctrl + S` or enable "Auto-debounce save (800ms)" in settings, with real-time status bar indication of unsaved changes!
 - ⚙️ **Persistent User Preferences**: Click "⚙️ Settings" to customize and permanently persist your preferred **Dark/Light theme**, save mode, and font scale across reboots and updates!
 - 🔍 **Smart Explorer Selection Detection**: Runs in the background and uses Windows Shell COM APIs to automatically detect the selected file when `Alt + Space` is pressed.
@@ -51,7 +60,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - 📊 **Word Count & Reading Time Estimation**: Real-time CJK / English word count, estimated reading time, and an elegant top reading progress bar!
 - ⬅️➡️ **Keyboard Sibling File Navigation**: Press `←` / `→` (or click `◀` / `▶` buttons) to instantly browse previous/next files in the same directory, complete with index indicators `[3/18]`!
 - 📜 **Smooth Document Keyboard Scrolling**: Scroll through long documents seamlessly using `↑` / `↓` or `PageUp` / `PageDown` / `Home` / `End` keys!
-- ⚡ **Full Large-File Preview**: Large files open in a fast partial preview with a visible **Load Full Content** button when you need to inspect everything.
+- ⚡ **Full Large-File Preview**: File reading and preparation run on a background worker; CSV/TSV keeps all rows available while painting only the visible cells.
 - 📋 **1-Click Code Block Copying**: Code blocks in Markdown and the standalone Code Viewer now feature dedicated copy buttons with instant green "✓ Copied" feedback.
 - 🔍 **Robust Full-Text Search (Ctrl + F or /)**: Live match count (`Match X / Y`), auto-focus on open, **vivid electric orange active focus highlight**, jump to next/previous matches via `Enter` / `n` or `Shift + Enter` / `N` / `F3`, and Unicode-safe text highlighting.
 - ⚡ **Vim-Style Navigation**: Supports `/` to search, `n` / `N` to navigate matches, `h` / `l` for sibling files, `j` / `k` for smooth scrolling, and `g` / `G` to jump to top/bottom!

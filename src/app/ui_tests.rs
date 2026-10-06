@@ -397,6 +397,214 @@ fn closing_or_editing_during_a_background_load_never_reopens_or_overwrites_the_d
 }
 
 #[test]
+fn search_enter_and_shift_enter_keep_focus_and_scroll_between_real_matches() {
+    let (mut app, ctx) = model();
+    content(
+        &mut app,
+        format!(
+            "# Intro\n\nNEEDLE\n\n{}NEEDLE\n\n{}",
+            "Paragraph.\n\n".repeat(70),
+            "After.\n\n".repeat(50)
+        ),
+        "fixture.md",
+        ViewMode::Markdown,
+    );
+    app.search_query = "NEEDLE".to_string();
+    app.open_search();
+    frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+    frame(&mut app, &ctx, 0.05, Vec::new(), Modifiers::NONE);
+    assert_eq!(app.search_match_count, 2);
+    assert!(ctx.wants_keyboard_input());
+    frame(
+        &mut app,
+        &ctx,
+        0.1,
+        vec![key(Key::Enter, Modifiers::NONE)],
+        Modifiers::NONE,
+    );
+    assert_eq!(app.search_match_index, 1);
+    assert!(app.current_scroll_offset > 800.0_f32);
+    assert!(ctx.wants_keyboard_input());
+    let mut release = key(Key::Enter, Modifiers::NONE);
+    if let Event::Key { pressed, .. } = &mut release {
+        *pressed = false;
+    }
+    frame(&mut app, &ctx, 0.15, vec![release], Modifiers::NONE);
+    frame(
+        &mut app,
+        &ctx,
+        0.2,
+        vec![key(Key::Enter, Modifiers::SHIFT)],
+        Modifiers::SHIFT,
+    );
+    assert_eq!(app.search_match_index, 0);
+    assert!(app.current_scroll_offset < 200.0_f32);
+    assert!(ctx.wants_keyboard_input());
+}
+
+#[test]
+fn leaving_slides_for_editing_mindmap_search_or_outline_clears_fullscreen_state() {
+    for (shortcut, modifiers) in [
+        (Key::E, Modifiers::COMMAND),
+        (Key::M, Modifiers::COMMAND),
+        (Key::F6, Modifiers::NONE),
+        (Key::F, Modifiers::COMMAND),
+        (Key::T, Modifiers::COMMAND),
+    ] {
+        let (mut app, ctx) = model();
+        content(
+            &mut app,
+            "# First\n\n---\n\n# Second".to_string(),
+            "fixture.md",
+            ViewMode::Markdown,
+        );
+        frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+        frame(
+            &mut app,
+            &ctx,
+            0.1,
+            vec![key(Key::F5, Modifiers::NONE)],
+            Modifiers::NONE,
+        );
+        assert!(app.is_slides_mode && app.is_slides_fullscreen);
+        let output = frame(
+            &mut app,
+            &ctx,
+            0.2,
+            vec![key(shortcut, modifiers)],
+            modifiers,
+        );
+        assert!(
+            !app.is_slides_mode && !app.is_slides_fullscreen,
+            "{shortcut:?}"
+        );
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Fullscreen(false))),
+            "{shortcut:?}"
+        );
+        match shortcut {
+            Key::E => assert!(app.is_editing),
+            Key::M | Key::F6 => assert!(matches!(app.view_mode, ViewMode::Mindmap)),
+            Key::F => assert!(app.search_open && ctx.wants_keyboard_input()),
+            Key::T => assert!(app.toc_open),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn outline_is_hidden_in_editor_and_slides_and_search_preserves_the_draft() {
+    let (mut app, ctx) = model();
+    content(
+        &mut app,
+        "# Original\n\nBody".to_string(),
+        "fixture.md",
+        ViewMode::Markdown,
+    );
+    app.toc_open = true;
+    app.toggle_edit_mode();
+    let output = frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+    assert!(!texts(&output)
+        .iter()
+        .any(|(text, _, _)| text.contains("目錄大綱")));
+    app.content = "# Draft\n\nNEEDLE".to_string();
+    app.is_modified = true;
+    app.invalidate_content();
+    frame(
+        &mut app,
+        &ctx,
+        0.1,
+        vec![key(Key::F, Modifiers::COMMAND)],
+        Modifiers::COMMAND,
+    );
+    assert!(!app.is_editing && app.search_open && app.is_modified);
+    assert_eq!(app.content, "# Draft\n\nNEEDLE");
+    app.search_open = false;
+    app.view_mode = ViewMode::Mindmap;
+    app.open_search();
+    assert!(matches!(app.view_mode, ViewMode::Markdown));
+    app.search_open = false;
+    app.toggle_slides_mode(&ctx);
+    let output = frame(&mut app, &ctx, 0.2, Vec::new(), Modifiers::NONE);
+    assert!(!texts(&output)
+        .iter()
+        .any(|(text, _, _)| text.contains("目錄大綱")));
+    app.execute_action(PendingAction::Clear);
+    assert!(!app.is_slides_mode && !app.is_slides_fullscreen);
+}
+
+#[test]
+fn clicking_toolbar_close_keeps_unsaved_changes_until_the_user_chooses() {
+    let (mut app, ctx) = model();
+    content(
+        &mut app,
+        "# Draft".to_string(),
+        "fixture.md",
+        ViewMode::Markdown,
+    );
+    app.original_content = "# Original".to_string();
+    app.is_modified = true;
+    frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+    let output = frame(&mut app, &ctx, 0.05, Vec::new(), Modifiers::NONE);
+    let position = texts(&output)
+        .iter()
+        .find(|(text, _, _)| text == "✕ 關閉")
+        .unwrap()
+        .1
+        .center();
+    for (time, pressed) in [(0.1, true), (0.15, false)] {
+        frame(
+            &mut app,
+            &ctx,
+            time,
+            vec![
+                Event::PointerMoved(position),
+                Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            Modifiers::NONE,
+        );
+    }
+    assert!(matches!(app.pending_action, Some(PendingAction::Close)));
+    assert!(app.visible && app.is_modified && !app.close_confirmed);
+    assert_eq!(app.content, "# Draft");
+    app.resolve_pending_action(UnsavedChoice::Cancel);
+    assert!(app.visible && app.is_modified);
+    app.request_action(PendingAction::Close);
+    app.resolve_pending_action(UnsavedChoice::Discard);
+    assert!(!app.visible && app.close_confirmed);
+}
+
+#[test]
+fn json_toolbar_does_not_offer_standard_json_rewrites_for_json_lines_or_comments() {
+    for extension in ["json", "jsonl", "jsonc", "json5"] {
+        let (mut app, ctx) = model();
+        content(
+            &mut app,
+            "{\"value\":1}".to_string(),
+            &format!("fixture.{extension}"),
+            ViewMode::Code {
+                lang: extension.to_string(),
+            },
+        );
+        let output = frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+        assert_eq!(
+            texts(&output)
+                .iter()
+                .any(|(text, _, _)| text == "⚡ 格式化"),
+            extension == "json"
+        );
+    }
+}
+
+#[test]
 #[ignore = "Run optimized frame measurements in Windows CI"]
 fn performance_preview_frames() {
     let markdown = format!("# Performance\n\n{}\n| Name | Value |\n| --- | --- |\n{}\n```mermaid\nflowchart TD\n A[Read] --> B[Preview]\n```", "Readable text 中文測試 with **style**.\n\n".repeat(200), "| Data | wrapped content |\n".repeat(30));

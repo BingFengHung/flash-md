@@ -9,6 +9,10 @@ pub fn content_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
+pub fn without_utf8_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
 pub fn markdown_options() -> Options {
     Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
@@ -27,7 +31,7 @@ pub fn cached_events(ctx: &egui::Context, content: &str) -> Arc<Vec<Event<'stati
             }
         }
         let events: Arc<Vec<Event<'static>>> = Arc::new(
-            Parser::new_ext(content, markdown_options())
+            Parser::new_ext(without_utf8_bom(content), markdown_options())
                 .map(Event::into_static)
                 .collect(),
         );
@@ -85,13 +89,19 @@ pub struct TocItem {
 }
 
 pub fn extract_markdown_toc(content: &str) -> Vec<TocItem> {
+    let content = without_utf8_bom(content);
     let starts: Vec<_> = std::iter::once(0)
         .chain(content.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
     let mut items = Vec::new();
     let mut heading = None;
     let mut title = String::new();
-    let mut counts = HashMap::new();
+    let mut counts: HashMap<String, usize> = Parser::new_ext(content, markdown_options())
+        .filter_map(|event| match event {
+            Event::Start(Tag::Heading { id: Some(id), .. }) => Some((id.into_string(), 1)),
+            _ => None,
+        })
+        .collect();
     for (event, range) in Parser::new_ext(content, markdown_options()).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { level, id, .. }) => {
@@ -108,8 +118,7 @@ pub fn extract_markdown_toc(content: &str) -> Vec<TocItem> {
             Event::SoftBreak | Event::HardBreak if heading.is_some() => title.push(' '),
             Event::End(TagEnd::Heading(_)) => {
                 if let Some((level, id, line_idx)) = heading.take() {
-                    let generated = unique_heading_slug(&title, &mut counts);
-                    let anchor = id.unwrap_or(generated);
+                    let anchor = id.unwrap_or_else(|| unique_heading_slug(&title, &mut counts));
                     items.push(TocItem {
                         level,
                         title: title.clone(),
@@ -201,16 +210,29 @@ pub fn cached_csv(ctx: &egui::Context, content: &str, separator: char) -> Arc<Cs
 }
 
 pub fn format_json(input: &str) -> Result<String, String> {
-    let value: serde_json::Value = serde_json::from_str(input).map_err(|e| e.to_string())?;
-    serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+    let value: serde_json::Value =
+        serde_json::from_str(without_utf8_bom(input)).map_err(|e| e.to_string())?;
+    let formatted = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    Ok(if input.starts_with('\u{feff}') {
+        format!("\u{feff}{formatted}")
+    } else {
+        formatted
+    })
 }
 
 pub fn minify_json(input: &str) -> Result<String, String> {
-    let value: serde_json::Value = serde_json::from_str(input).map_err(|e| e.to_string())?;
-    serde_json::to_string(&value).map_err(|e| e.to_string())
+    let value: serde_json::Value =
+        serde_json::from_str(without_utf8_bom(input)).map_err(|e| e.to_string())?;
+    let formatted = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+    Ok(if input.starts_with('\u{feff}') {
+        format!("\u{feff}{formatted}")
+    } else {
+        formatted
+    })
 }
 
 pub fn extract_slides(content: &str) -> Vec<String> {
+    let content = without_utf8_bom(content);
     if content.trim().is_empty() {
         return vec!["# 📽 簡報模式\n\n此文件暫無內容。".to_string()];
     }
@@ -357,6 +379,40 @@ pub fn cached_slides(ctx: &egui::Context, text: &str) -> Arc<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bom_preserves_first_heading_line_numbers_frontmatter_and_json_roundtrips() {
+        let document = "\u{feff}# First\n\n## Second";
+        let toc = extract_markdown_toc(document);
+        assert_eq!(toc.len(), 2);
+        assert_eq!((&*toc[0].anchor, toc[0].line_idx), ("first", 0));
+        assert_eq!((&*toc[1].anchor, toc[1].line_idx), ("second", 2));
+        let events = cached_events(&egui::Context::default(), document);
+        assert!(matches!(
+            events.first(),
+            Some(Event::Start(Tag::Heading { .. }))
+        ));
+        let slides = extract_slides("\u{feff}---\ntitle: Fixture\n---\n# First\n\n---\n\n# Second");
+        assert_eq!(slides, vec!["# First".to_string(), "# Second".to_string()]);
+        let source = "\u{feff}{\"text\":\"中文\",\"count\":42}";
+        let pretty = format_json(source).unwrap();
+        assert!(pretty.starts_with('\u{feff}'));
+        assert_eq!(minify_json(&pretty).unwrap(), source);
+    }
+
+    #[test]
+    fn automatic_heading_anchors_reserve_explicit_ids_even_when_defined_later() {
+        let toc = extract_markdown_toc(
+            "# Target\n# Explicit {#target}\n# Explicit\n# Target\n# Target-1",
+        );
+        let anchors: Vec<_> = toc.iter().map(|item| item.anchor.as_str()).collect();
+        assert_eq!(
+            anchors,
+            ["target-1", "target", "explicit", "target-2", "target-1-1"]
+        );
+        let toc = extract_markdown_toc("# Title ![Badge](missing.png)");
+        assert_eq!(toc[0].anchor, "title-badge");
+    }
 
     #[test]
     fn csv_preserves_quoted_newlines_spaces_and_escaped_quotes() {

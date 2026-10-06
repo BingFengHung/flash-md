@@ -43,6 +43,7 @@ pub struct MindmapOutput {
 
 /// 解析 Markdown 內容為心智圖樹狀結構
 pub fn parse_markdown_to_mindmap(content: &str, fallback_root_title: &str) -> MindmapNode {
+    let content = crate::parsers::without_utf8_bom(content);
     let mut root = MindmapNode {
         id: 0,
         title: if fallback_root_title.is_empty() {
@@ -676,6 +677,21 @@ fn get_branch_color(level: usize, idx: usize, theme: AppTheme) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bom_and_explicit_ids_match_the_shared_outline_anchors() {
+        let document = "\u{feff}# Root\n\n## Target\n\n## Explicit {#target}\n\n## Title ![Badge](missing.png)";
+        let root = super::parse_markdown_to_mindmap(document, "file");
+        assert_eq!(root.anchor.as_deref(), Some("root"));
+        let anchors: Vec<_> = root
+            .children
+            .iter()
+            .map(|node| node.anchor.as_deref())
+            .collect();
+        assert_eq!(
+            anchors,
+            [Some("target-1"), Some("target"), Some("title-badge")]
+        );
+    }
     #[test]
     fn mindmap_ignores_code_headings_and_preserves_duplicate_and_setext_anchors() {
         let root = super::parse_markdown_to_mindmap(
