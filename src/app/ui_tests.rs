@@ -847,12 +847,13 @@ fn performance_preview_frames() {
             app.image_uri = Some("bytes://performance.png".to_string());
         }
         let mut times = Vec::new();
+        let frame_clock = std::time::Instant::now();
         for index in 0..65 {
             let start = std::time::Instant::now();
             let output = frame(
                 &mut app,
                 &ctx,
-                index as f64 / 60.0_f64,
+                frame_clock.elapsed().as_secs_f64(),
                 Vec::new(),
                 Modifiers::NONE,
             );
@@ -873,7 +874,7 @@ fn performance_preview_frames() {
                     let output = frame(
                         &mut app,
                         &ctx,
-                        0.01 + start.elapsed().as_secs_f64(),
+                        frame_clock.elapsed().as_secs_f64(),
                         Vec::new(),
                         Modifiers::NONE,
                     );
@@ -909,12 +910,12 @@ fn performance_preview_frames() {
             app.search_match_index = 0;
             app.search_jump_requested = true;
             let mut search_times = Vec::new();
-            for index in 0..30 {
+            for _ in 0..30 {
                 let start = std::time::Instant::now();
                 let output = frame(
                     &mut app,
                     &ctx,
-                    10.0 + index as f64 / 60.0,
+                    frame_clock.elapsed().as_secs_f64(),
                     Vec::new(),
                     Modifiers::NONE,
                 );

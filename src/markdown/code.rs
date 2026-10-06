@@ -325,7 +325,7 @@ pub fn render_code_viewer(
     Frame::none()
         .fill(theme.card_bg_color())
         .rounding(Rounding::same(8.0))
-        .stroke(Stroke::new(1.0, theme.border_color()))
+        .stroke(Stroke::new(1.0_f32, theme.border_color()))
         .inner_margin(Margin::symmetric(16.0, 14.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -412,7 +412,7 @@ pub fn render_code_viewer(
             ui.painter().vline(
                 separator,
                 rect.y_range(),
-                Stroke::new(1.0, theme.border_color()),
+                Stroke::new(1.0_f32, theme.border_color()),
             );
             if layout.truncated {
                 ui.add_space(10.0);

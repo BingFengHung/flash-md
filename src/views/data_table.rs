@@ -201,8 +201,20 @@ fn prepare_table(ui: &Ui, data: &CsvTableData, theme: AppTheme, scale: f32) -> A
                 .iter_mut()
                 .enumerate()
                 .map(|(column, max)| {
-                    let value =
-                        metrics.width(row.get(column).map(String::as_str).unwrap_or(""), false);
+                    let text = row.get(column).map(String::as_str).unwrap_or("");
+                    let value = if text.contains('\n') {
+                        ui.fonts(|fonts| {
+                            fonts.layout_no_wrap(
+                                text.into(),
+                                FontId::proportional(13.5 * scale),
+                                Color32::WHITE,
+                            )
+                        })
+                        .size()
+                        .x
+                    } else {
+                        metrics.width(text, false)
+                    };
                     *max = max.max(value.round());
                     value
                 })
