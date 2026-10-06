@@ -1282,7 +1282,6 @@ impl<'a> RenderContext<'a> {
 }
 
 /// 渲染現代斑馬紋資料表格
-#[allow(clippy::too_many_arguments)]
 pub use crate::views::data_table::render_csv_table;
 
 #[cfg(test)]

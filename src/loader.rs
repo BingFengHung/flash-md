@@ -105,7 +105,7 @@ mod tests {
         let (started_tx, started_rx) = unbounded();
         let (resume_tx, resume_rx) = unbounded();
         let loader = DocumentLoader::spawn(Arc::new(Mutex::new(None)), move |request| {
-            if request.path == PathBuf::from("slow.md") {
+            if request.path == std::path::Path::new("slow.md") {
                 started_tx.send(()).unwrap();
                 resume_rx.recv().unwrap();
             }
