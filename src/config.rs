@@ -3,13 +3,14 @@ use log::{info, warn};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SaveMode {
     Manual,       // 按下 Ctrl + S 手動保存
     AutoDebounce, // 打字停止 800ms 後自動防抖保存
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub theme: AppTheme,
     pub font_scale: f32,
@@ -54,7 +55,7 @@ impl AppConfig {
     pub fn save(&self) {
         if let Some(path) = Self::config_path() {
             let json = self.to_json();
-            if let Err(e) = fs::write(&path, json) {
+            if let Err(e) = crate::document::atomic_write(&path, json.as_bytes()) {
                 warn!("寫入偏好設定檔失敗: {}", e);
             } else {
                 info!("已成功保存使用者偏好設定至 {:?}", path);
@@ -63,51 +64,15 @@ impl AppConfig {
     }
 
     fn to_json(&self) -> String {
-        format!(
-            "{{\n  \"theme\": \"{}\",\n  \"font_scale\": {:.2},\n  \"always_on_top\": {},\n  \"save_mode\": \"{}\"\n}}",
-            match self.theme {
-                AppTheme::Dark => "Dark",
-                AppTheme::Light => "Light",
-            },
-            self.font_scale,
-            self.always_on_top,
-            match self.save_mode {
-                SaveMode::Manual => "Manual",
-                SaveMode::AutoDebounce => "AutoDebounce",
-            }
-        )
+        serde_json::to_string_pretty(self).expect("finite configuration")
     }
 
     fn parse_json(s: &str) -> Result<Self, String> {
-        let mut config = Self::default();
-        for line in s.lines() {
-            let trimmed = line.trim().trim_matches(',').trim();
-            if trimmed.starts_with("\"theme\"") {
-                if trimmed.contains("\"Dark\"") {
-                    config.theme = AppTheme::Dark;
-                } else if trimmed.contains("\"Light\"") {
-                    config.theme = AppTheme::Light;
-                }
-            } else if trimmed.starts_with("\"font_scale\"") {
-                if let Some(val_str) = trimmed.split(':').nth(1) {
-                    if let Ok(val) = val_str.trim().parse::<f32>() {
-                        config.font_scale = val.clamp(0.7_f32, 2.0_f32);
-                    }
-                }
-            } else if trimmed.starts_with("\"always_on_top\"") {
-                if trimmed.contains("true") {
-                    config.always_on_top = true;
-                } else if trimmed.contains("false") {
-                    config.always_on_top = false;
-                }
-            } else if trimmed.starts_with("\"save_mode\"") {
-                if trimmed.contains("\"AutoDebounce\"") {
-                    config.save_mode = SaveMode::AutoDebounce;
-                } else if trimmed.contains("\"Manual\"") {
-                    config.save_mode = SaveMode::Manual;
-                }
-            }
+        let mut config: Self = serde_json::from_str(s).map_err(|e| e.to_string())?;
+        if !config.font_scale.is_finite() {
+            return Err("字型比例必須為有限數值".to_string());
         }
+        config.font_scale = config.font_scale.clamp(0.6_f32, 2.5_f32);
         Ok(config)
     }
 }

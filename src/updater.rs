@@ -1,187 +1,242 @@
-use log::{info, warn};
+use serde::Deserialize;
 use std::env;
-use std::process::Command;
+use std::fs;
+use std::path::Path;
+use std::process::{Command, Output};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GITHUB_REPO: &str = "BingFengHung/flash-md";
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
     pub tag_name: String,
-    pub version: String,
     pub download_url: String,
     pub html_url: String,
     pub changelog: String,
+    pub digest: Option<String>,
 }
 
-/// 向 GitHub API 檢查是否有新版本發布
-pub fn check_latest_release() -> Option<ReleaseInfo> {
-    info!("正在檢查 GitHub Releases 最新版本 (目前版本: v{})...", CURRENT_VERSION);
+pub enum UpdateEvent {
+    Checked(Result<Option<ReleaseInfo>, String>),
+    Installed(Result<(), String>),
+}
 
-    #[cfg(windows)]
-    {
-        let ps_script = format!(
-            r#"$ProgressPreference = 'SilentlyContinue';
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
-$headers = @{{ 'User-Agent' = 'flash-md-updater' }};
-try {{
-    $res = Invoke-RestMethod -Uri 'https://api.github.com/repos/{}/releases/latest' -Headers $headers;
-    $asset = $res.assets | Where-Object {{ $_.name -like '*windows-x86_64.zip' }} | Select-Object -First 1;
-    $dUrl = if ($asset) {{ $asset.browser_download_url }} else {{ '' }};
-    $body = ($res.body -replace "`r", "") -replace "`n", "<BR>";
-    Write-Output "$($res.tag_name)|||$($dUrl)|||$($res.html_url)|||$body"
-}} catch {{
-    Write-Output "ERROR: $($_.Exception.Message)"
-}}"#,
-            GITHUB_REPO
-        );
+#[derive(Deserialize)]
+struct ReleasePayload {
+    tag_name: String,
+    html_url: String,
+    #[serde(default)]
+    body: Option<String>,
+    assets: Vec<ReleaseAsset>,
+}
 
-        let output = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", &ps_script])
-            .output();
+#[derive(Deserialize)]
+struct ReleaseAsset {
+    name: String,
+    browser_download_url: String,
+    #[serde(default)]
+    digest: Option<String>,
+}
 
-        if let Ok(out) = output {
-            let res_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if res_str.starts_with("ERROR:") || res_str.is_empty() {
-                warn!("檢查更新失敗: {}", res_str);
-                return None;
-            }
-
-            let parts: Vec<&str> = res_str.split("|||").collect();
-            if parts.len() >= 4 {
-                let tag_name = parts[0].trim().to_string();
-                let download_url = parts[1].trim().to_string();
-                let html_url = parts[2].trim().to_string();
-                let changelog = parts[3].replace("<BR>", "\n").trim().to_string();
-
-                let remote_ver = tag_name.trim_start_matches('v').to_string();
-                if is_newer_version(CURRENT_VERSION, &remote_ver) {
-                    info!("🎉 發現新版本: {} (當前版本: v{})", tag_name, CURRENT_VERSION);
-                    return Some(ReleaseInfo {
-                        tag_name,
-                        version: remote_ver,
-                        download_url,
-                        html_url,
-                        changelog,
-                    });
-                } else {
-                    info!("✅ 目前已是最新版本 (v{})", CURRENT_VERSION);
-                }
-            }
-        }
+fn asset_for_arch(arch: &str) -> Result<&'static str, String> {
+    match arch {
+        "x86_64" => Ok("flash-md-windows-x86_64.zip"),
+        "aarch64" => Ok("flash-md-windows-aarch64.zip"),
+        _ => Err(format!("不支援的更新架構：{}", arch)),
     }
-
-    None
 }
 
-/// 比較兩個語意化版本號，若 remote > current 則傳回 true
 pub fn is_newer_version(current: &str, remote: &str) -> bool {
-    let parse_ver = |v: &str| -> Vec<u32> {
-        v.trim_start_matches('v')
-            .split('.')
-            .filter_map(|s| s.parse::<u32>().ok())
-            .collect()
-    };
-
-    let cur_parts = parse_ver(current);
-    let rem_parts = parse_ver(remote);
-
-    for (c, r) in cur_parts.iter().zip(rem_parts.iter()) {
-        if r > c {
-            return true;
-        } else if r < c {
-            return false;
-        }
+    let parse = |s: &str| semver::Version::parse(s.trim_start_matches('v')).ok();
+    match (parse(current), parse(remote)) {
+        (Some(current), Some(remote)) => remote > current,
+        _ => false,
     }
-
-    rem_parts.len() > cur_parts.len()
 }
 
-/// 自動下載最新 Release 並覆蓋更新當前執行檔 (Windows Hot-Swap)
-pub fn perform_self_update(release: &ReleaseInfo) -> Result<(), String> {
-    if release.download_url.is_empty() {
-        return Err("未找到 Windows 執行檔下載連結".to_string());
+fn parse_release(json: &str, current: &str, arch: &str) -> Result<Option<ReleaseInfo>, String> {
+    let release: ReleasePayload = serde_json::from_str(json.trim_start_matches('\u{feff}'))
+        .map_err(|e| format!("更新資訊格式無效：{}", e))?;
+    semver::Version::parse(release.tag_name.trim_start_matches('v'))
+        .map_err(|e| format!("版本號無效：{}", e))?;
+    if !is_newer_version(current, &release.tag_name) {
+        return Ok(None);
     }
+    let name = asset_for_arch(arch)?;
+    let asset = release
+        .assets
+        .into_iter()
+        .find(|asset| asset.name == name)
+        .ok_or_else(|| format!("版本 {} 尚未提供 {}", release.tag_name, name))?;
+    let prefix = format!("https://github.com/{}/releases/download/", GITHUB_REPO);
+    if !asset.browser_download_url.starts_with(&prefix) {
+        return Err("更新下載網址不屬於本專案".to_string());
+    }
+    Ok(Some(ReleaseInfo {
+        tag_name: release.tag_name,
+        download_url: asset.browser_download_url,
+        html_url: release.html_url,
+        changelog: release.body.unwrap_or_default(),
+        digest: asset.digest,
+    }))
+}
 
-    let current_exe = env::current_exe().map_err(|e| format!("無法取得當前執行檔路徑: {}", e))?;
-
-    info!("開始下載並自動更新至 {}...", release.tag_name);
-
+fn powershell(script: &str) -> Result<Output, String> {
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
     #[cfg(windows)]
     {
-        let ps_script = format!(
-            r#"$ProgressPreference = 'SilentlyContinue';
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
-$zipPath = Join-Path $env:TEMP 'flash-md-update.zip';
-$extractPath = Join-Path $env:TEMP 'flash-md-update-extract';
-if (Test-Path $extractPath) {{ Remove-Item -Recurse -Force $extractPath }};
-New-Item -ItemType Directory -Path $extractPath | Out-Null;
-
-Write-Host "正在下載最新版本...";
-Invoke-WebRequest -Uri '{}' -OutFile $zipPath;
-
-Write-Host "正在解壓縮...";
-Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force;
-
-$newExe = Get-ChildItem -Path $extractPath -Filter "flash-md.exe" -Recurse | Select-Object -First 1;
-if (-not $newExe) {{
-    throw "解壓縮後未找到 flash-md.exe";
-}}
-
-$targetExe = '{}';
-$backupExe = "$targetExe.old";
-if (Test-Path $backupExe) {{ Remove-Item -Force $backupExe }};
-
-Write-Host "替換執行檔中...";
-Move-Item -Path $targetExe -Destination $backupExe -Force;
-Copy-Item -Path $newExe.FullName -Destination $targetExe -Force;
-Remove-Item -Force $zipPath;
-Remove-Item -Recurse -Force $extractPath;
-
-Write-Host "SUCCESS";
-"#,
-            release.download_url,
-            current_exe.to_string_lossy().replace('\\', "\\\\")
-        );
-
-        let output = Command::new("powershell")
-            .args(&["-NoProfile", "-Command", &ps_script])
-            .output()
-            .map_err(|e| format!("執行更新腳本失敗: {}", e))?;
-
-        let out_str = String::from_utf8_lossy(&output.stdout);
-        if out_str.contains("SUCCESS") {
-            info!("✅ 自動更新成功！已升級至 {}", release.tag_name);
-            Ok(())
-        } else {
-            let err_str = String::from_utf8_lossy(&output.stderr);
-            Err(format!("更新過程發生錯誤: {}\n{}", out_str.trim(), err_str.trim()))
-        }
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-
-    #[cfg(not(windows))]
-    {
-        Err("目前僅支援 Windows 自動更新".to_string())
+    let output = command
+        .output()
+        .map_err(|e| format!("無法執行更新程序：{}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "更新程序失敗（{}）：{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
+    Ok(output)
 }
 
-/// 自動更新完成後，以新版本執行檔重啟程式進程並無縫繼承參數
-pub fn restart_with_new_version(args: &[String]) {
-    if let Ok(current_exe) = env::current_exe() {
-        info!("正在重啟新版本: {:?}, 參數: {:?}", current_exe, args);
-        let mut cmd = Command::new(&current_exe);
-        cmd.args(args);
+fn ps_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
 
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            // 0x00000200 = CREATE_NEW_PROCESS_GROUP, 0x00000008 = DETACHED_PROCESS
-            cmd.creation_flags(0x00000200 | 0x00000008);
-        }
+pub fn check_latest_release() -> Result<Option<ReleaseInfo>, String> {
+    let script = format!(
+        r#"$ErrorActionPreference = 'Stop';
+$ProgressPreference = 'SilentlyContinue';
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding;
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
+$res = Invoke-RestMethod -Uri 'https://api.github.com/repos/{}/releases/latest' -Headers @{{ 'User-Agent' = 'flash-md-updater' }} -TimeoutSec 30;
+$res | ConvertTo-Json -Depth 10 -Compress;"#,
+        GITHUB_REPO
+    );
+    let output = powershell(&script)?;
+    let json = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    parse_release(json.trim(), CURRENT_VERSION, env::consts::ARCH)
+}
 
-        let _ = cmd.spawn();
+fn replace_executable(staged: &Path, target: &Path) -> Result<(), String> {
+    replace_with(staged, target, |from, to| fs::rename(from, to))
+}
+
+fn replace_with(
+    staged: &Path,
+    target: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(".old");
+    let backup = std::path::PathBuf::from(name);
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|e| format!("無法移除舊備份：{}", e))?;
     }
+    rename(target, &backup).map_err(|e| format!("無法備份目前執行檔：{}", e))?;
+    if let Err(error) = rename(staged, target) {
+        return match rename(&backup, target) {
+            Ok(()) => Err(format!("更新失敗，已還原原版本：{}", error)),
+            Err(rollback) => Err(format!(
+                "更新失敗：{}；無法自動還原：{}。備份位置：{}",
+                error,
+                rollback,
+                backup.display()
+            )),
+        };
+    }
+    Ok(())
+}
+
+fn validate_executable(bytes: &[u8], arch: &str) -> Result<(), String> {
+    if bytes.len() < 64 || &bytes[..2] != b"MZ" {
+        return Err("下載內容不是 Windows 執行檔".to_string());
+    }
+    let offset = u32::from_le_bytes(bytes[60..64].try_into().unwrap()) as usize;
+    let header = bytes
+        .get(offset..offset.saturating_add(6))
+        .ok_or("Windows 執行檔標頭不完整")?;
+    if &header[..4] != b"PE\0\0" {
+        return Err("Windows 執行檔標頭無效".to_string());
+    }
+    let expected = match arch {
+        "x86_64" => 0x8664_u16,
+        "aarch64" => 0xaa64_u16,
+        _ => return Err("不支援的執行檔架構".to_string()),
+    };
+    if u16::from_le_bytes([header[4], header[5]]) != expected {
+        return Err("下載執行檔的架構不符合目前版本".to_string());
+    }
+    Ok(())
+}
+
+pub fn perform_self_update(release: &ReleaseInfo) -> Result<(), String> {
+    let target = env::current_exe().map_err(|e| e.to_string())?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let temporary =
+        env::temp_dir().join(format!("flash-md-update-{}-{}", std::process::id(), nonce));
+    fs::create_dir(&temporary).map_err(|e| e.to_string())?;
+    let staged = target.with_extension(format!("exe.update-{}-{}", std::process::id(), nonce));
+    let result = (|| {
+        let zip = temporary.join("release.zip");
+        let extract = temporary.join("extract");
+        let verify = match &release.digest {
+            Some(digest) => {
+                let hash = digest
+                    .strip_prefix("sha256:")
+                    .ok_or("不支援的更新校驗格式")?;
+                if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err("更新校驗碼格式無效".to_string());
+                }
+                format!("if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne {}) {{ throw 'SHA256 mismatch' }};", ps_literal(hash))
+            }
+            None => String::new(),
+        };
+        let script = format!(
+            r#"$ErrorActionPreference = 'Stop';
+$ProgressPreference = 'SilentlyContinue';
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
+$zip = {};
+Invoke-WebRequest -UseBasicParsing -Uri {} -OutFile $zip -TimeoutSec 90;
+{}
+Expand-Archive -LiteralPath $zip -DestinationPath {} -Force;"#,
+            ps_literal(&zip.to_string_lossy()),
+            ps_literal(&release.download_url),
+            verify,
+            ps_literal(&extract.to_string_lossy())
+        );
+        powershell(&script)?;
+        let executable = extract.join("flash-md.exe");
+        let bytes = fs::read(&executable).map_err(|e| format!("找不到下載的執行檔：{}", e))?;
+        validate_executable(&bytes, env::consts::ARCH)?;
+        crate::document::atomic_write(&staged, &bytes)
+            .map_err(|e| format!("無法準備更新檔：{}", e))?;
+        replace_executable(&staged, &target)
+    })();
+    let _ = fs::remove_file(&staged);
+    let _ = fs::remove_dir_all(&temporary);
+    result
+}
+
+pub fn restart_with_new_version(args: &[String]) -> Result<(), String> {
+    let executable = env::current_exe().map_err(|e| e.to_string())?;
+    let mut command = Command::new(executable);
+    command.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x00000200 | 0x00000008);
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("無法啟動新版本：{}", e))
 }
 
 #[cfg(test)]
@@ -189,17 +244,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_newer_version() {
-        assert!(is_newer_version("1.0.88", "1.0.89"));
-        assert!(is_newer_version("v1.0.88", "v1.0.89"));
-        assert!(is_newer_version("1.0.88", "1.1.0"));
-        assert!(is_newer_version("1.0.88", "2.0.0"));
-        assert!(is_newer_version("1.0", "1.0.1"));
+    fn versions_follow_semver_and_invalid_input_is_not_newer() {
+        assert!(is_newer_version("1.0.103", "v1.0.104"));
+        assert!(is_newer_version("1.0.0-beta.1", "1.0.0"));
+        assert!(!is_newer_version("1.0.0", "1.0.0-beta.1"));
+        assert!(!is_newer_version("1.0.0", "broken"));
+        assert!(!is_newer_version("1.0.104", "1.0.103"));
+    }
 
-        // 相同版本或較舊版本應回傳 false
-        assert!(!is_newer_version("1.0.89", "1.0.89"));
-        assert!(!is_newer_version("v1.0.89", "1.0.89"));
-        assert!(!is_newer_version("1.0.89", "1.0.88"));
-        assert!(!is_newer_version("2.0.0", "1.9.9"));
+    #[test]
+    fn release_selection_respects_architecture_and_reports_missing_asset() {
+        let json = r#"{"tag_name":"v1.1.0","html_url":"https://github.com/BingFengHung/flash-md/releases","body":"notes ||| with unicode 中文","assets":[{"name":"flash-md-windows-x86_64.zip","browser_download_url":"https://github.com/BingFengHung/flash-md/releases/download/v1.1.0/x64.zip"},{"name":"flash-md-windows-aarch64.zip","browser_download_url":"https://github.com/BingFengHung/flash-md/releases/download/v1.1.0/arm64.zip"}]}"#;
+        assert!(parse_release(json, "1.0.0", "aarch64")
+            .unwrap()
+            .unwrap()
+            .download_url
+            .ends_with("arm64.zip"));
+        assert!(parse_release(json, "1.0.0", "x86_64")
+            .unwrap()
+            .unwrap()
+            .download_url
+            .ends_with("x64.zip"));
+        assert!(parse_release(json, "1.0.0", "unknown").is_err());
+        assert!(parse_release("network error", "1.0.0", "x86_64").is_err());
+        assert!(parse_release(json, "1.1.0", "x86_64").unwrap().is_none());
+    }
+
+    #[test]
+    fn failed_install_rolls_back_the_original_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("flash-md.exe");
+        let staged = dir.path().join("new.exe");
+        fs::write(&target, "original").unwrap();
+        fs::write(&staged, "new").unwrap();
+        let mut calls = 0;
+        let result = replace_with(&staged, &target, |from, to| {
+            calls += 1;
+            if calls == 2 {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated install failure",
+                ))
+            } else {
+                fs::rename(from, to)
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "original");
+        assert_eq!(fs::read_to_string(&staged).unwrap(), "new");
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn powershell_paths_preserve_backslashes_and_escape_quotes() {
+        assert_eq!(
+            ps_literal(r"C:\O'Brien\flash-md.exe"),
+            r"'C:\O''Brien\flash-md.exe'"
+        );
+    }
+
+    #[test]
+    fn executable_validation_rejects_truncated_and_wrong_architecture() {
+        assert!(validate_executable(b"not an exe", "x86_64").is_err());
+        let mut exe = vec![0; 100];
+        exe[..2].copy_from_slice(b"MZ");
+        exe[60..64].copy_from_slice(&64_u32.to_le_bytes());
+        exe[64..68].copy_from_slice(b"PE\0\0");
+        exe[68..70].copy_from_slice(&0x8664_u16.to_le_bytes());
+        assert!(validate_executable(&exe, "x86_64").is_ok());
+        assert!(validate_executable(&exe, "aarch64").is_err());
     }
 }

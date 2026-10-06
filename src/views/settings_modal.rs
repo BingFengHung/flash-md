@@ -1,6 +1,6 @@
-use egui::{Align, Align2, Color32, Frame, Layout, Margin, RichText, Rounding, Stroke, Vec2};
 use crate::config::SaveMode;
 use crate::theme::AppTheme;
+use egui::{Align, Align2, Color32, Frame, Layout, Margin, RichText, Rounding, Stroke, Vec2};
 
 pub struct SettingsModalOutput {
     pub is_open: bool,
@@ -57,11 +57,17 @@ pub fn render_settings_modal(
                             .color(text_primary),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(
-                            egui::Button::new(RichText::new("✕").size(13.0_f32).color(text_secondary))
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("✕").size(13.0_f32).color(text_secondary),
+                                )
                                 .fill(Color32::TRANSPARENT)
                                 .stroke(Stroke::NONE),
-                        ).on_hover_text("關閉 (Esc)").clicked() {
+                            )
+                            .on_hover_text("關閉 (Esc)")
+                            .clicked()
+                        {
                             close_settings = true;
                         }
                     });
@@ -75,7 +81,12 @@ pub fn render_settings_modal(
                 ui.add_space(14.0_f32);
 
                 // 區塊 1: 外觀主題 (Segmented Control 分段膠囊切換器)
-                ui.label(RichText::new("🎨 外觀色彩主題").size(13.0_f32).strong().color(accent));
+                ui.label(
+                    RichText::new("🎨 外觀色彩主題")
+                        .size(13.0_f32)
+                        .strong()
+                        .color(accent),
+                );
                 ui.add_space(4.0_f32);
 
                 Frame::none()
@@ -138,7 +149,12 @@ pub fn render_settings_modal(
                 ui.add_space(14.0_f32);
 
                 // 區塊 2: 檔案保存模式 (互動式卡片選擇器)
-                ui.label(RichText::new("💾 編輯保存模式").size(13.0_f32).strong().color(accent));
+                ui.label(
+                    RichText::new("💾 編輯保存模式")
+                        .size(13.0_f32)
+                        .strong()
+                        .color(accent),
+                );
                 ui.add_space(4.0_f32);
 
                 // 卡片 A: 手動保存
@@ -180,7 +196,8 @@ pub fn render_settings_modal(
                                 );
                             });
                         });
-                    }).response;
+                    })
+                    .response;
 
                 if resp_a.interact(egui::Sense::click()).clicked() && !is_manual {
                     new_save_mode = Some(SaveMode::Manual);
@@ -227,7 +244,8 @@ pub fn render_settings_modal(
                                 );
                             });
                         });
-                    }).response;
+                    })
+                    .response;
 
                 if resp_b.interact(egui::Sense::click()).clicked() && !is_auto {
                     new_save_mode = Some(SaveMode::AutoDebounce);
@@ -237,7 +255,12 @@ pub fn render_settings_modal(
 
                 // 區塊 3: 字型縮放 (帶百分比標籤與快速預設)
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🔍 字型顯示縮放").size(13.0_f32).strong().color(accent));
+                    ui.label(
+                        RichText::new("🔍 字型顯示縮放")
+                            .size(13.0_f32)
+                            .strong()
+                            .color(accent),
+                    );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let pct = (scale * 100.0_f32).round() as u32;
                         ui.label(
@@ -257,7 +280,11 @@ pub fn render_settings_modal(
                     .inner_margin(Margin::symmetric(12.0_f32, 8.0_f32))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            if ui.add(egui::Button::new("➖").small()).on_hover_text("縮小 (每次 -10%)").clicked() {
+                            if ui
+                                .add(egui::Button::new("➖").small())
+                                .on_hover_text("縮小 (每次 -10%)")
+                                .clicked()
+                            {
                                 let next_s = (scale - 0.10_f32).clamp(0.7_f32, 1.8_f32);
                                 new_font_scale = Some(next_s);
                             }
@@ -265,16 +292,27 @@ pub fn render_settings_modal(
                             let slider = egui::Slider::new(&mut scale, 0.7_f32..=1.8_f32)
                                 .show_value(false)
                                 .step_by(0.05_f64);
-                            if ui.add_sized([ui.available_width() - 80.0_f32, 20.0_f32], slider).changed() {
+                            if ui
+                                .add_sized([ui.available_width() - 80.0_f32, 20.0_f32], slider)
+                                .changed()
+                            {
                                 new_font_scale = Some(scale);
                             }
 
-                            if ui.add(egui::Button::new("➕").small()).on_hover_text("放大 (每次 +10%)").clicked() {
+                            if ui
+                                .add(egui::Button::new("➕").small())
+                                .on_hover_text("放大 (每次 +10%)")
+                                .clicked()
+                            {
                                 let next_s = (scale + 0.10_f32).clamp(0.7_f32, 1.8_f32);
                                 new_font_scale = Some(next_s);
                             }
 
-                            if ui.add(egui::Button::new("100%").small()).on_hover_text("重置為預設 100%").clicked() {
+                            if ui
+                                .add(egui::Button::new("100%").small())
+                                .on_hover_text("重置為預設 100%")
+                                .clicked()
+                            {
                                 new_font_scale = Some(1.0_f32);
                             }
                         });

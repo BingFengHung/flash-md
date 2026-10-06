@@ -1,6 +1,7 @@
 use egui::{Rounding, ScrollArea, Vec2};
 
 /// 繪製圖片與 SVG 向量圖檢視畫布 (支援滾輪縮放、平移與自適應視窗)
+#[allow(clippy::too_many_arguments)]
 pub fn render_image_viewer(
     ui: &mut egui::Ui,
     image_bytes: Option<&[u8]>,
@@ -25,20 +26,14 @@ pub fn render_image_viewer(
             *image_fit_mode = false;
         }
 
-        let scroll_id = ui.make_persistent_id("image_viewer_scroll_area");
-        let mut scroll_state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
-
-        if reset_scroll_to_top {
-            scroll_state.offset = Vec2::ZERO;
-            scroll_state.store(ui.ctx(), scroll_id);
-        } else if keyboard_scroll_delta != 0.0_f32 {
-            scroll_state.offset.y = (scroll_state.offset.y - keyboard_scroll_delta).max(0.0_f32);
-            scroll_state.store(ui.ctx(), scroll_id);
-        }
-
-        let scroll = ScrollArea::both()
-            .id_source(scroll_id)
+        let mut scroll = ScrollArea::both()
+            .id_salt("image_viewer_scroll_area")
             .auto_shrink([false, false]);
+        if reset_scroll_to_top {
+            scroll = scroll.scroll_offset(Vec2::ZERO);
+        } else if keyboard_scroll_delta != 0.0_f32 {
+            scroll = scroll.vertical_scroll_offset(keyboard_scroll_delta.max(0.0_f32));
+        }
 
         scroll.show(ui, |ui| {
             ui.centered_and_justified(|ui| {
@@ -48,55 +43,24 @@ pub fn render_image_viewer(
                     "png"
                 };
 
-                if ext.eq_ignore_ascii_case("svg") {
-                    let uri = format!("bytes://viewer_image_preview.{}", ext);
-                    let mut img = egui::Image::from_bytes(uri, bytes.to_vec())
-                        .rounding(Rounding::same(6.0_f32));
-
+                if let Some(image) = crate::textures::cached_image(
+                    ui.ctx(),
+                    image_uri.unwrap_or("bytes://preview"),
+                    bytes,
+                    ext,
+                ) {
+                    let mut img = image.widget().rounding(Rounding::same(6.0_f32));
                     if *image_fit_mode {
-                        let max_w = (available.x - 24.0_f32).max(100.0_f32);
-                        let max_h = (available.y - 24.0_f32).max(100.0_f32);
-                        img = img.max_size(Vec2::new(max_w, max_h));
+                        img = img.max_size(Vec2::new(
+                            (available.x - 24.0_f32).max(100.0_f32),
+                            (available.y - 24.0_f32).max(100.0_f32),
+                        ));
                     } else {
                         img = img.fit_to_original_size(*image_zoom);
                     }
-
-                    ui.add(img);
-                } else if let Ok(dyn_img) = image::load_from_memory(bytes) {
-                    let size = [dyn_img.width() as usize, dyn_img.height() as usize];
-                    let rgba = dyn_img.to_rgba8().into_raw();
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-                    let texture = ui.ctx().load_texture(
-                        "viewer_image_texture",
-                        color_image,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    let mut img = egui::Image::from_texture(&texture)
-                        .rounding(Rounding::same(6.0_f32));
-
-                    if *image_fit_mode {
-                        let max_w = (available.x - 24.0_f32).max(100.0_f32);
-                        let max_h = (available.y - 24.0_f32).max(100.0_f32);
-                        img = img.max_size(Vec2::new(max_w, max_h));
-                    } else {
-                        img = img.fit_to_original_size(*image_zoom);
-                    }
-
                     ui.add(img);
                 } else {
-                    let uri = format!("bytes://viewer_image_preview.{}", ext);
-                    let mut img = egui::Image::from_bytes(uri, bytes.to_vec())
-                        .rounding(Rounding::same(6.0_f32));
-
-                    if *image_fit_mode {
-                        let max_w = (available.x - 24.0_f32).max(100.0_f32);
-                        let max_h = (available.y - 24.0_f32).max(100.0_f32);
-                        img = img.max_size(Vec2::new(max_w, max_h));
-                    } else {
-                        img = img.fit_to_original_size(*image_zoom);
-                    }
-
-                    ui.add(img);
+                    ui.label("圖片格式無法解碼");
                 }
             });
         });
@@ -107,7 +71,10 @@ pub fn render_image_viewer(
             ui.centered_and_justified(|ui| {
                 let img = egui::Image::from_uri(uri.to_string())
                     .rounding(Rounding::same(6.0_f32))
-                    .max_size(Vec2::new((available.x - 24.0_f32).max(100.0_f32), (available.y - 24.0_f32).max(100.0_f32)));
+                    .max_size(Vec2::new(
+                        (available.x - 24.0_f32).max(100.0_f32),
+                        (available.y - 24.0_f32).max(100.0_f32),
+                    ));
                 ui.add(img);
             });
         });

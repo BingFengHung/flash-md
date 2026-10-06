@@ -3,10 +3,15 @@
 
 mod app;
 mod config;
+mod document;
 mod emoji;
 mod explorer;
+mod files;
 mod hotkey;
 mod markdown;
+mod parsers;
+mod search;
+mod textures;
 mod theme;
 mod tray;
 mod updater;
@@ -21,7 +26,9 @@ use log::info;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
-use updater::{check_latest_release, perform_self_update, restart_with_new_version, CURRENT_VERSION};
+use updater::{
+    check_latest_release, perform_self_update, restart_with_new_version, CURRENT_VERSION,
+};
 use watcher::FileWatcher;
 
 #[cfg(windows)]
@@ -37,6 +44,7 @@ fn attach_parent_console() {
     name = "flash-md",
     author = "flash-md contributors",
     version = CURRENT_VERSION,
+    disable_version_flag = true,
     about = "⚡ Windows 快捷鍵極速 Markdown 與全語言程式碼預覽工具 (Flash Quick Look for Windows)",
     long_about = "在 Windows 檔案總管或桌面選取 Markdown、程式碼或純文字檔案並按下 Alt + Space，即可閃電般彈出預覽視窗！亦可直接以命令列傳入檔案路徑預覽。"
 )]
@@ -75,7 +83,11 @@ fn main() -> eframe::Result<()> {
 
     // 處理版本號查詢: flash-md --version 或 flash-md -v
     if cli.version {
-        println!("⚡ flash-md v{} (Windows x86_64)", CURRENT_VERSION);
+        println!(
+            "⚡ flash-md v{} (Windows {})",
+            CURRENT_VERSION,
+            std::env::consts::ARCH
+        );
         println!("🚀 極速 macOS Quick Look 風格 Markdown 與全語言程式碼預覽工具");
         println!("🔗 專案首頁: https://github.com/BingFengHung/flash-md");
         std::process::exit(0);
@@ -84,29 +96,45 @@ fn main() -> eframe::Result<()> {
     // 處理命令列更新模式: flash-md --update
     if cli.update {
         println!("============================================================");
-        println!("⚡ flash-md 自動更新檢查器 (目前本機版本: v{})", CURRENT_VERSION);
+        println!(
+            "⚡ flash-md 自動更新檢查器 (目前本機版本: v{})",
+            CURRENT_VERSION
+        );
         println!("============================================================");
         println!("🔍 正在連線至 GitHub Releases 檢查最新版本發布...");
-        
-        if let Some(release) = check_latest_release() {
-            println!("🎉 發現全新版本: {}！", release.tag_name);
-            println!("📥 正在下載最新二進制發布檔並進行熱置換升級...");
-            match perform_self_update(&release) {
-                Ok(_) => {
-                    println!("✨ 恭喜！flash-md 已成功自動升級至 {}！", release.tag_name);
-                    println!("🚀 正在自動為您啟動新版本 flash-md...");
-                    restart_with_new_version(&[]);
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("❌ 自動更新失敗: {}", e);
-                    eprintln!("💡 您亦可手動前往下載: {}", release.html_url);
-                    std::process::exit(1);
+
+        match check_latest_release() {
+            Ok(Some(release)) => {
+                println!("🎉 發現全新版本: {}！", release.tag_name);
+                println!("📥 正在下載最新二進制發布檔並進行熱置換升級...");
+                match perform_self_update(&release) {
+                    Ok(_) => {
+                        println!("✨ 恭喜！flash-md 已成功自動升級至 {}！", release.tag_name);
+                        println!("🚀 正在自動為您啟動新版本 flash-md...");
+                        if let Err(error) = restart_with_new_version(&[]) {
+                            eprintln!("{}", error);
+                            std::process::exit(1);
+                        }
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("❌ 自動更新失敗: {}", e);
+                        eprintln!("💡 您亦可手動前往下載: {}", release.html_url);
+                        std::process::exit(1);
+                    }
                 }
             }
-        } else {
-            println!("✅ flash-md 目前已是最新版本 (v{})！無需進行更新。", CURRENT_VERSION);
-            std::process::exit(0);
+            Ok(None) => {
+                println!(
+                    "✅ flash-md 目前已是最新版本 (v{})！無需進行更新。",
+                    CURRENT_VERSION
+                );
+                std::process::exit(0);
+            }
+            Err(error) => {
+                eprintln!("❌ 無法檢查更新：{}", error);
+                std::process::exit(1);
+            }
         }
     }
 
@@ -124,18 +152,32 @@ fn main() -> eframe::Result<()> {
     let ctx_holder = Arc::new(Mutex::new(None));
 
     // 啟動全域快捷鍵掛鉤監聽 (WH_KEYBOARD_LL 攔截並吞噬 Alt + Space)
-    let _hotkey_handle = hotkey::start_hotkey_listener(hotkey_tx, ctx_holder.clone(), running.clone());
+    let _hotkey_handle = if is_standalone {
+        None
+    } else {
+        Some(hotkey::start_hotkey_listener(
+            hotkey_tx,
+            ctx_holder.clone(),
+            running.clone(),
+        ))
+    };
 
     // 建立系統匣常駐圖示
-    let _tray_manager = tray::TrayManager::new(tray_tx, ctx_holder.clone());
+    let _tray_manager = if is_standalone {
+        None
+    } else {
+        Some(tray::TrayManager::new(tray_tx, ctx_holder.clone()))
+    };
 
     // 建立檔案監視器
     let file_watcher = FileWatcher::new(watcher_tx, ctx_holder.clone());
 
     // 設定 eframe 原生視窗選項 (背景模式下完全不顯示黑框與視窗，真正安靜常駐)
+    let window_title = format!("flash-md - 快捷鍵 Markdown 預覽 ({})", std::process::id());
+    explorer::set_app_window_title(&window_title);
     let native_options = eframe::NativeOptions {
         viewport: ViewportBuilder::default()
-            .with_title("flash-md - 快捷鍵 Markdown 預覽")
+            .with_title(window_title)
             .with_icon(tray::create_app_icon_data())
             .with_inner_size([940.0, 700.0])
             .with_min_inner_size([500.0, 400.0])

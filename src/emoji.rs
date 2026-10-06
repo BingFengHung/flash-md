@@ -77,8 +77,6 @@ pub fn is_emoji_char(c: char) -> bool {
         0x1F300..=0x1F9FF
             | 0x1FA00..=0x1FAFF
             | 0x1F1E0..=0x1F1FF
-            | 0x1F600..=0x1F64F
-            | 0x1F680..=0x1F6FF
             | 0x2600..=0x27BF
             | 0x2B05..=0x2B07
             | 0x2B50

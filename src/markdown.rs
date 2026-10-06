@@ -1,9 +1,21 @@
+mod code;
+mod mermaid;
+mod pdf;
+
+use code::find_syntax_by_lang;
+pub use code::{
+    get_image_badge, get_language_badge, is_code_extension, is_image_extension, render_code_viewer,
+};
+use mermaid::{extract_attr_str, get_or_render_mermaid_diagram};
+pub use pdf::{extract_text_from_pdf_bytes, is_pdf_extension};
+
+pub use crate::parsers::{format_json, minify_json, CsvTableData};
 use crate::theme::AppTheme;
 use egui::{
-    text::LayoutJob, Align, Align2, Color32, FontId, Frame, Layout, Margin,
-    RichText, Rounding, Sense, Stroke, Ui, Vec2,
+    text::LayoutJob, Align, Align2, Color32, FontId, Frame, Layout, Margin, RichText, Rounding,
+    Sense, Stroke, Ui, Vec2,
 };
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -21,6 +33,7 @@ fn get_theme_set() -> &'static ThemeSet {
 }
 
 /// 依搜尋關鍵字即時進行高亮分段附加 (全 Unicode 安全切片，支援中英文與特殊字元，區分當前聚焦與一般相符)
+#[allow(clippy::too_many_arguments)]
 pub fn append_highlighted_text(
     job: &mut LayoutJob,
     text: &str,
@@ -33,129 +46,39 @@ pub fn append_highlighted_text(
     active_match_idx: Option<usize>,
     match_counter: &mut usize,
 ) {
-    let clean_query = search_query.trim();
-    if clean_query.is_empty() || text.is_empty() {
-        job.append(text, 0.0_f32, base_format);
-        return;
-    }
-
-    // ASCII 快速路徑：零堆疊分配，零拷貝極速掃描
-    if text.is_ascii() && clean_query.is_ascii() {
-        let query_lower = clean_query.to_ascii_lowercase();
-        let text_lower = text.to_ascii_lowercase();
-        let mut last_end = 0;
-        let mut search_idx = 0;
-
-        while let Some(pos) = text_lower[search_idx..].find(&query_lower) {
-            let start = search_idx + pos;
-            let end = start + query_lower.len();
-
-            if start > last_end {
-                job.append(&text[last_end..start], 0.0_f32, base_format.clone());
-            }
-
-            let is_active = active_match_idx == Some(*match_counter);
-            *match_counter += 1;
-
-            let mut hl_fmt = base_format.clone();
-            if is_active {
-                hl_fmt.background = active_hl_bg;
-                hl_fmt.color = active_hl_fg;
-            } else {
-                hl_fmt.background = normal_hl_bg;
-                hl_fmt.color = normal_hl_fg;
-            }
-            job.append(&text[start..end], 0.0_f32, hl_fmt);
-
-            last_end = end;
-            search_idx = end;
-        }
-
-        if last_end < text.len() {
-            job.append(&text[last_end..], 0.0_f32, base_format);
-        }
-        return;
-    }
-
-    // Unicode 多語系路徑：安全字元索引比對
-    let query_lower: Vec<char> = clean_query.to_lowercase().chars().collect();
-    let text_chars: Vec<(usize, char)> = text.char_indices().collect();
-
-    let mut i = 0;
-    let mut last_byte_idx = 0;
-
-    while i + query_lower.len() <= text_chars.len() {
-        let is_match = (0..query_lower.len()).all(|k| {
-            text_chars[i + k].1.to_lowercase().eq(query_lower[k].to_lowercase())
-        });
-
-        if is_match {
-            let start_byte = text_chars[i].0;
-            let end_byte = if i + query_lower.len() < text_chars.len() {
-                text_chars[i + query_lower.len()].0
-            } else {
-                text.len()
-            };
-
-            if start_byte > last_byte_idx {
-                job.append(&text[last_byte_idx..start_byte], 0.0_f32, base_format.clone());
-            }
-
-            let is_active = active_match_idx == Some(*match_counter);
-            *match_counter += 1;
-
-            let mut hl_fmt = base_format.clone();
-            if is_active {
-                hl_fmt.background = active_hl_bg;
-                hl_fmt.color = active_hl_fg;
-            } else {
-                hl_fmt.background = normal_hl_bg;
-                hl_fmt.color = normal_hl_fg;
-            }
-            job.append(&text[start_byte..end_byte], 0.0_f32, hl_fmt);
-
-            i += query_lower.len();
-            last_byte_idx = end_byte;
-        } else {
-            i += 1;
-        }
-    }
-
-    if last_byte_idx < text.len() {
-        job.append(&text[last_byte_idx..], 0.0_f32, base_format);
-    }
+    let mut plain = LayoutJob::default();
+    plain.append(text, 0.0, base_format);
+    crate::search::highlight_job(
+        &mut plain,
+        search_query,
+        active_match_idx,
+        match_counter,
+        normal_hl_bg,
+        normal_hl_fg,
+        active_hl_bg,
+        active_hl_fg,
+    );
+    let offset = job.text.len();
+    job.text.push_str(&plain.text);
+    job.sections
+        .extend(plain.sections.into_iter().map(|mut section| {
+            section.byte_range.start += offset;
+            section.byte_range.end += offset;
+            section
+        }));
 }
 
-/// 將標題或錨點字串正規化（去除符號、空格與 URL 編碼，保留中英文字母與數字）
-pub fn normalize_anchor_slug(input: &str) -> String {
-    let decoded = crate::explorer::url_decode(input);
-    let trimmed = decoded.trim().trim_start_matches('#');
-    trimmed
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c >= '\u{4E00}')
-        .flat_map(|c| c.to_lowercase())
-        .collect()
+/// 精確比對 URL 解碼後的錨點，避免子字串跳到錯誤或重複標題。
+pub fn is_anchor_match(heading_slug: &str, anchor: &str) -> bool {
+    heading_slug
+        == crate::explorer::url_decode(anchor)
+            .trim()
+            .trim_start_matches('#')
 }
 
-/// 智慧比對標題與目標錨點（支援精確比對、GitHub Slug 比對與中文字元子字串模糊匹配）
-pub fn is_anchor_match(heading: &str, anchor: &str) -> bool {
-    let clean_heading = heading.trim();
-    let clean_anchor = anchor.trim().trim_start_matches('#');
-
-    if clean_heading.eq_ignore_ascii_case(clean_anchor) {
-        return true;
-    }
-
-    let slug_h = normalize_anchor_slug(clean_heading);
-    let slug_a = normalize_anchor_slug(clean_anchor);
-
-    if !slug_h.is_empty() && !slug_a.is_empty() {
-        if slug_h == slug_a || slug_h.contains(&slug_a) || slug_a.contains(&slug_h) {
-            return true;
-        }
-    }
-
-    false
+pub struct RenderOutput {
+    pub clicked_anchor: Option<String>,
+    pub match_count: usize,
 }
 
 pub struct MarkdownRenderer<'a> {
@@ -163,6 +86,7 @@ pub struct MarkdownRenderer<'a> {
     pub font_scale: f32,
     pub search_query: &'a str,
     pub active_match_index: Option<usize>,
+    pub search_jump: bool,
     pub target_anchor: Option<&'a str>,
     pub base_dir: Option<&'a std::path::Path>,
     pub _marker: std::marker::PhantomData<&'a ()>,
@@ -182,21 +106,15 @@ impl<'a> MarkdownRenderer<'a> {
             font_scale,
             search_query,
             active_match_index,
+            search_jump: false,
             target_anchor,
             base_dir,
             _marker: std::marker::PhantomData,
         }
     }
 
-    pub fn render(&self, ui: &mut Ui, markdown_text: &str) -> Option<String> {
-        let mut options = Options::empty();
-        options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_FOOTNOTES);
-        options.insert(Options::ENABLE_STRIKETHROUGH);
-        options.insert(Options::ENABLE_TASKLISTS);
-        options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
-
-        let parser = Parser::new_ext(markdown_text, options);
+    pub fn render(&self, ui: &mut Ui, markdown_text: &str) -> RenderOutput {
+        let events = crate::parsers::cached_events(ui.ctx(), markdown_text);
         let mut context = RenderContext::new(
             self.theme,
             self.font_scale,
@@ -205,15 +123,15 @@ impl<'a> MarkdownRenderer<'a> {
             self.target_anchor,
             self.base_dir,
         );
-
-        for event in parser {
+        context.search_jump = self.search_jump;
+        for event in events.iter().cloned() {
             context.process_event(ui, event);
         }
-
-        // 刷新剩餘段落
         context.flush_inline(ui);
-
-        context.clicked_anchor
+        RenderOutput {
+            clicked_anchor: context.clicked_anchor,
+            match_count: context.match_counter,
+        }
     }
 }
 
@@ -236,6 +154,9 @@ struct RenderContext<'a> {
     base_dir: Option<&'a std::path::Path>,
     clicked_anchor: Option<String>,
     match_counter: usize,
+    search_jump: bool,
+    heading_counts: std::collections::HashMap<String, usize>,
+    heading_id: Option<String>,
     inlines: Vec<InlineSpan>,
     current_bold: bool,
     current_italic: bool,
@@ -256,189 +177,6 @@ struct RenderContext<'a> {
     in_table_head: bool,
     list_level: usize,
     ordered_list_index: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct MermaidTextNode {
-    pub x: f32,
-    pub y: f32,
-    pub font_size: f32,
-    pub color: Color32,
-    pub align: Align2,
-    pub text: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct MermaidDiagramData {
-    pub svg_bytes: Vec<u8>,
-    pub width: f32,
-    pub height: f32,
-    pub text_nodes: Vec<MermaidTextNode>,
-}
-
-fn extract_attr_f32(s: &str, attr: &str) -> Option<f32> {
-    let pos = s.find(attr)?;
-    let after = &s[pos + attr.len()..];
-    let quote = after.chars().next()?;
-    if quote != '"' && quote != '\'' {
-        return None;
-    }
-    let rest = &after[1..];
-    let end = rest.find(quote)?;
-    rest[..end].trim().parse::<f32>().ok()
-}
-
-fn extract_attr_str(s: &str, attr: &str) -> Option<String> {
-    let pos = s.find(attr)?;
-    let after = &s[pos + attr.len()..];
-    let quote = after.chars().next()?;
-    if quote != '"' && quote != '\'' {
-        return None;
-    }
-    let rest = &after[1..];
-    let end = rest.find(quote)?;
-    Some(rest[..end].to_string())
-}
-
-fn parse_hex_color(s: &str) -> Option<Color32> {
-    let hex = s.trim().trim_start_matches('#');
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some(Color32::from_rgb(r, g, b))
-    } else if hex.len() == 3 {
-        let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
-        let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
-        let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
-        Some(Color32::from_rgb(r, g, b))
-    } else {
-        None
-    }
-}
-
-/// 快取 Mermaid 圖表解析與向量文字節點資料
-pub fn get_or_render_mermaid_diagram(code: &str) -> Option<MermaidDiagramData> {
-    use std::sync::Mutex;
-    use std::collections::HashMap;
-    use std::hash::{Hash, Hasher};
-    static CACHE: Mutex<Option<HashMap<u64, Option<MermaidDiagramData>>>> = Mutex::new(None);
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut hasher);
-    let key = hasher.finish();
-
-    let mut guard = CACHE.lock().ok()?;
-    let map = guard.get_or_insert_with(HashMap::new);
-
-    if let Some(cached) = map.get(&key) {
-        return cached.clone();
-    }
-
-    let parsed = (|| -> Option<MermaidDiagramData> {
-        let svg_str = mermaid_rs_renderer::render(code).ok()?;
-
-        // 1. 解析 viewBox 或 width / height
-        let mut vb_w = 400.0_f32;
-        let mut vb_h = 300.0_f32;
-
-        if let Some(pos) = svg_str.find("viewBox=\"") {
-            let after = &svg_str[pos + 9..];
-            if let Some(end) = after.find('"') {
-                let parts: Vec<&str> = after[..end].split_whitespace().collect();
-                if parts.len() == 4 {
-                    if let (Ok(w), Ok(h)) = (parts[2].parse::<f32>(), parts[3].parse::<f32>()) {
-                        if w > 1.0_f32 && h > 1.0_f32 {
-                            vb_w = w;
-                            vb_h = h;
-                        }
-                    }
-                }
-            }
-        } else if let (Some(w_str), Some(h_str)) = (extract_attr_str(&svg_str, "width="), extract_attr_str(&svg_str, "height=")) {
-            let w_val = w_str.trim().trim_end_matches("px").parse::<f32>();
-            let h_val = h_str.trim().trim_end_matches("px").parse::<f32>();
-            if let (Ok(w), Ok(h)) = (w_val, h_val) {
-                if w > 1.0_f32 && h > 1.0_f32 {
-                    vb_w = w;
-                    vb_h = h;
-                }
-            }
-        }
-
-        // 2. 提取所有 <text ...>內容</text> 節點
-        let mut text_nodes = Vec::new();
-        let mut search_idx = 0;
-        while let Some(start_tag) = svg_str[search_idx..].find("<text") {
-            let text_start = search_idx + start_tag;
-            if let Some(tag_close) = svg_str[text_start..].find('>') {
-                let tag_attrs = &svg_str[text_start..text_start + tag_close];
-                let content_start = text_start + tag_close + 1;
-                if let Some(end_tag) = svg_str[content_start..].find("</text>") {
-                    let raw_content = &svg_str[content_start..content_start + end_tag];
-
-                    let mut clean_text = raw_content.to_string();
-                    while let Some(s) = clean_text.find('<') {
-                        if let Some(e) = clean_text[s..].find('>') {
-                            clean_text.replace_range(s..s + e + 1, "");
-                        } else {
-                            break;
-                        }
-                    }
-                    clean_text = clean_text
-                        .replace("&amp;", "&")
-                        .replace("&lt;", "<")
-                        .replace("&gt;", ">")
-                        .replace("&quot;", "\"")
-                        .replace("&#39;", "'")
-                        .trim()
-                        .to_string();
-
-                    if !clean_text.is_empty() {
-                        let x = extract_attr_f32(tag_attrs, "x=").unwrap_or(0.0_f32);
-                        let y = extract_attr_f32(tag_attrs, "y=").unwrap_or(0.0_f32);
-                        let font_size = extract_attr_f32(tag_attrs, "font-size=").unwrap_or(14.0_f32);
-
-                        let align = if tag_attrs.contains("text-anchor=\"middle\"") {
-                            Align2::CENTER_CENTER
-                        } else if tag_attrs.contains("text-anchor=\"end\"") {
-                            Align2::RIGHT_CENTER
-                        } else {
-                            Align2::LEFT_CENTER
-                        };
-
-                        let color = if let Some(fill_str) = extract_attr_str(tag_attrs, "fill=") {
-                            parse_hex_color(&fill_str).unwrap_or(Color32::from_rgb(31, 41, 55))
-                        } else {
-                            Color32::from_rgb(31, 41, 55)
-                        };
-
-                        text_nodes.push(MermaidTextNode {
-                            x,
-                            y,
-                            font_size,
-                            color,
-                            align,
-                            text: clean_text,
-                        });
-                    }
-                    search_idx = content_start + end_tag + 7;
-                    continue;
-                }
-            }
-            search_idx += start_tag + 5;
-        }
-
-        Some(MermaidDiagramData {
-            svg_bytes: svg_str.into_bytes(),
-            width: vb_w,
-            height: vb_h,
-            text_nodes,
-        })
-    })();
-
-    map.insert(key, parsed.clone());
-    parsed
 }
 
 fn decode_uri_component(s: &str) -> String {
@@ -513,14 +251,21 @@ fn detect_image_format_from_bytes(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn find_local_image_bytes(base_dir: Option<&std::path::Path>, clean_url: &str) -> Option<(Vec<u8>, &'static str)> {
+fn find_local_image_bytes(
+    base_dir: Option<&std::path::Path>,
+    clean_url: &str,
+) -> Option<(std::path::PathBuf, Vec<u8>, &'static str)> {
     let url_without_query = clean_url
         .trim_start_matches('<')
         .trim_end_matches('>')
         .trim_matches('"')
         .trim_matches('\'')
-        .split('?').next().unwrap_or(clean_url)
-        .split('#').next().unwrap_or(clean_url);
+        .split('?')
+        .next()
+        .unwrap_or(clean_url)
+        .split('#')
+        .next()
+        .unwrap_or(clean_url);
 
     let decoded = decode_uri_component(url_without_query);
     let raw_path = decoded
@@ -539,7 +284,7 @@ fn find_local_image_bytes(base_dir: Option<&std::path::Path>, clean_url: &str) -
     if direct_path.is_absolute() && direct_path.is_file() {
         if let Ok(bytes) = std::fs::read(&direct_path) {
             let fmt = detect_image_format_from_bytes(&bytes).unwrap_or("png");
-            return Some((bytes, fmt));
+            return Some((direct_path.clone(), bytes, fmt));
         }
     }
 
@@ -566,7 +311,7 @@ fn find_local_image_bytes(base_dir: Option<&std::path::Path>, clean_url: &str) -
             if cand.is_file() {
                 if let Ok(bytes) = std::fs::read(cand) {
                     let fmt = detect_image_format_from_bytes(&bytes).unwrap_or("png");
-                    return Some((bytes, fmt));
+                    return Some((cand.to_path_buf(), bytes, fmt));
                 }
             }
         }
@@ -586,7 +331,7 @@ fn find_local_image_bytes(base_dir: Option<&std::path::Path>, clean_url: &str) -
                 if cand.is_file() {
                     if let Ok(bytes) = std::fs::read(cand) {
                         let fmt = detect_image_format_from_bytes(&bytes).unwrap_or(ext);
-                        return Some((bytes, fmt));
+                        return Some((cand.to_path_buf(), bytes, fmt));
                     }
                 }
             }
@@ -606,7 +351,7 @@ fn find_local_image_bytes(base_dir: Option<&std::path::Path>, clean_url: &str) -
                     if sub_cand.is_file() {
                         if let Ok(bytes) = std::fs::read(&sub_cand) {
                             let fmt = detect_image_format_from_bytes(&bytes).unwrap_or("png");
-                            return Some((bytes, fmt));
+                            return Some((sub_cand.clone(), bytes, fmt));
                         }
                     }
                     for ext in &extensions {
@@ -614,7 +359,7 @@ fn find_local_image_bytes(base_dir: Option<&std::path::Path>, clean_url: &str) -
                         if sub_cand_ext.is_file() {
                             if let Ok(bytes) = std::fs::read(&sub_cand_ext) {
                                 let fmt = detect_image_format_from_bytes(&bytes).unwrap_or(ext);
-                                return Some((bytes, fmt));
+                                return Some((sub_cand_ext.clone(), bytes, fmt));
                             }
                         }
                     }
@@ -644,6 +389,9 @@ impl<'a> RenderContext<'a> {
             base_dir,
             clicked_anchor: None,
             match_counter: 0,
+            search_jump: false,
+            heading_counts: Default::default(),
+            heading_id: None,
             inlines: Vec::new(),
             current_bold: false,
             current_italic: false,
@@ -676,12 +424,41 @@ impl<'a> RenderContext<'a> {
                 Color32::BLACK,                                    // 當前 Focus 相符：純黑字
             ),
             AppTheme::Light => (
-                Color32::from_rgb(254, 240, 138),                  // 普通相符：柔和檸檬黃底
-                Color32::from_rgb(113, 63, 18),                    // 普通相符：深褐色字
-                Color32::from_rgb(234, 88, 12),                    // 當前 Focus 相符：深橘紅底
-                Color32::WHITE,                                    // 當前 Focus 相符：純白字
+                Color32::from_rgb(254, 240, 138), // 普通相符：柔和檸檬黃底
+                Color32::from_rgb(113, 63, 18),   // 普通相符：深褐色字
+                Color32::from_rgb(234, 88, 12),   // 當前 Focus 相符：深橘紅底
+                Color32::WHITE,                   // 當前 Focus 相符：純白字
             ),
         }
+    }
+
+    fn label_job(&mut self, ui: &mut Ui, mut job: LayoutJob, sense: Sense) -> egui::Response {
+        let base = self.match_counter;
+        let (bg, fg, active_bg, active_fg) = self.hl_colors();
+        crate::search::highlight_job(
+            &mut job,
+            self.search_query,
+            self.active_match_index,
+            &mut self.match_counter,
+            bg,
+            fg,
+            active_bg,
+            active_fg,
+        );
+        let local = self.active_match_index.and_then(|index| {
+            (base..self.match_counter)
+                .contains(&index)
+                .then(|| index - base)
+        });
+        crate::search::searchable_label(
+            ui,
+            job,
+            self.search_query,
+            local,
+            self.search_jump,
+            sense,
+            true,
+        )
     }
 
     fn push_text(&mut self, text: &str) {
@@ -691,7 +468,9 @@ impl<'a> RenderContext<'a> {
             self.code_block_content.push_str(text);
         } else {
             let clean_text = if text.contains('\u{FE0F}') || text.contains('\u{FE0E}') {
-                text.chars().filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}').collect()
+                text.chars()
+                    .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}')
+                    .collect()
             } else {
                 text.to_string()
             };
@@ -714,26 +493,26 @@ impl<'a> RenderContext<'a> {
         let is_web_url = clean_url.starts_with("http://") || clean_url.starts_with("https://");
         let is_data_uri = clean_url.starts_with("data:image/");
 
-        let (image_bytes, resolved_ext) = if is_data_uri {
-            let bytes = if let Some(comma_pos) = clean_url.find(',') {
-                decode_base64(&clean_url[comma_pos + 1..])
-            } else {
-                None
-            };
-            let ext = if let Some(ref b) = bytes {
-                detect_image_format_from_bytes(b).unwrap_or("png")
-            } else {
-                "png"
-            };
-            (bytes, ext)
+        let cached_image = if is_data_uri {
+            clean_url
+                .find(',')
+                .and_then(|comma| decode_base64(&clean_url[comma + 1..]))
+                .and_then(|bytes| {
+                    let extension = detect_image_format_from_bytes(&bytes).unwrap_or("png");
+                    let key = format!(
+                        "bytes://data_{:x}.{}",
+                        crate::parsers::content_hash(clean_url),
+                        extension
+                    );
+                    crate::textures::cached_image(ui.ctx(), &key, &bytes, extension)
+                })
         } else if !is_web_url {
-            if let Some((bytes, ext)) = find_local_image_bytes(self.base_dir, clean_url) {
-                (Some(bytes), ext)
-            } else {
-                (None, "png")
-            }
+            let key = format!("{:?}|{}", self.base_dir, clean_url);
+            crate::textures::local_image(ui.ctx(), &key, || {
+                find_local_image_bytes(self.base_dir, clean_url)
+            })
         } else {
-            (None, "png")
+            None
         };
 
         let available_w = (ui.available_width() - 16.0_f32).max(100.0_f32);
@@ -744,52 +523,14 @@ impl<'a> RenderContext<'a> {
             .stroke(Stroke::new(1.0_f32, self.theme.border_color()))
             .inner_margin(Margin::same(10.0_f32))
             .show(ui, |ui| {
-                if let Some(bytes) = image_bytes {
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    use std::hash::{Hash, Hasher};
-                    bytes.hash(&mut hasher);
-                    clean_url.hash(&mut hasher);
-                    let uri = format!("bytes://md_img_{:x}.{}", hasher.finish(), resolved_ext);
-
-                    // 1. 若為 SVG 向量圖，透過 egui_extras SVG 載入器渲染
-                    if resolved_ext == "svg" {
-                        let img = egui::Image::from_bytes(uri, bytes)
-                            .rounding(Rounding::same(6.0_f32))
-                            .max_width(available_w);
-                        ui.vertical_centered(|ui| {
-                            ui.add(img);
-                        });
-                    } else {
-                        // 2. 所有點陣圖 (PNG, JPEG, WEBP, GIF, BMP, ICO) 採用 image crate 同步記憶體即時解碼
-                        // 直接由主執行緒生成 GPU 紋理並渲染，徹底避開非同步載入器延遲、格式誤判與 0 尺寸空白卡片問題！
-                        match image::load_from_memory(&bytes) {
-                            Ok(dyn_img) => {
-                                let size = [dyn_img.width() as usize, dyn_img.height() as usize];
-                                let rgba = dyn_img.to_rgba8().into_raw();
-                                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
-                                let texture = ui.ctx().load_texture(
-                                    &uri,
-                                    color_image,
-                                    egui::TextureOptions::LINEAR,
-                                );
-                                let img = egui::Image::from_texture(&texture)
-                                    .rounding(Rounding::same(6.0_f32))
-                                    .max_width(available_w);
-                                ui.vertical_centered(|ui| {
-                                    ui.add(img);
-                                });
-                            }
-                            Err(_) => {
-                                // 備援：嘗試使用 egui 預設 bytes loader
-                                let img = egui::Image::from_bytes(uri, bytes)
-                                    .rounding(Rounding::same(6.0_f32))
-                                    .max_width(available_w);
-                                ui.vertical_centered(|ui| {
-                                    ui.add(img);
-                                });
-                            }
-                        }
-                    }
+                if let Some(image) = cached_image {
+                    let img = image
+                        .widget()
+                        .rounding(Rounding::same(6.0_f32))
+                        .max_width(available_w);
+                    ui.vertical_centered(|ui| {
+                        ui.add(img);
+                    });
                 } else if is_web_url {
                     let img = egui::Image::from_uri(clean_url.to_string())
                         .rounding(Rounding::same(6.0_f32))
@@ -806,8 +547,12 @@ impl<'a> RenderContext<'a> {
                                 .italics(),
                         );
                         ui.label(
-                            RichText::new(if !alt_text.is_empty() { alt_text } else { clean_url })
-                                .color(self.theme.text_primary()),
+                            RichText::new(if !alt_text.is_empty() {
+                                alt_text
+                            } else {
+                                clean_url
+                            })
+                            .color(self.theme.text_primary()),
                         );
                     });
                 }
@@ -838,7 +583,9 @@ impl<'a> RenderContext<'a> {
                     self.code_block_content.push_str(&code);
                 } else {
                     let clean_code = if code.contains('\u{FE0F}') || code.contains('\u{FE0E}') {
-                        code.chars().filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}').collect()
+                        code.chars()
+                            .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}')
+                            .collect()
                     } else {
                         code.to_string()
                     };
@@ -893,7 +640,8 @@ impl<'a> RenderContext<'a> {
     fn handle_start_tag(&mut self, ui: &mut Ui, tag: Tag) {
         match tag {
             Tag::Paragraph => {}
-            Tag::Heading { level, .. } => {
+            Tag::Heading { level, id, .. } => {
+                self.heading_id = id.map(|id| id.to_string());
                 self.flush_inline(ui);
                 self.in_heading = Some(level);
             }
@@ -1040,7 +788,6 @@ impl<'a> RenderContext<'a> {
         if spans.is_empty() {
             return;
         }
-        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
 
         let has_hyperlinks = spans.iter().any(|s| s.link_url.is_some());
         let has_emojis = spans.iter().any(|s| {
@@ -1052,9 +799,7 @@ impl<'a> RenderContext<'a> {
         if !has_hyperlinks && !has_emojis {
             let mut job = LayoutJob::default();
             for (idx, span) in spans.into_iter().enumerate() {
-                let color = if is_list_item && idx == 0 {
-                    self.theme.accent_color()
-                } else if span.code {
+                let color = if (is_list_item && idx == 0) || span.code {
                     self.theme.accent_color()
                 } else {
                     self.theme.text_primary()
@@ -1064,7 +809,10 @@ impl<'a> RenderContext<'a> {
                     font_id: FontId::proportional(14.5_f32 * self.font_scale),
                     color,
                     italics: span.italic,
-                    strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
+                    strikethrough: Stroke::new(
+                        if span.strikethrough { 1.5_f32 } else { 0.0_f32 },
+                        color,
+                    ),
                     line_height: Some(22.0_f32 * self.font_scale),
                     valign: egui::Align::BOTTOM,
                     background: if span.code {
@@ -1075,20 +823,9 @@ impl<'a> RenderContext<'a> {
                     ..Default::default()
                 };
 
-                append_highlighted_text(
-                    &mut job,
-                    &span.text,
-                    self.search_query,
-                    base_fmt,
-                    hl_bg,
-                    hl_fg,
-                    act_bg,
-                    act_fg,
-                    self.active_match_index,
-                    &mut self.match_counter,
-                );
+                job.append(&span.text, 0.0, base_fmt);
             }
-            ui.label(job);
+            self.label_job(ui, job, Sense::hover());
         } else {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0_f32;
@@ -1096,9 +833,7 @@ impl<'a> RenderContext<'a> {
                 for (idx, span) in spans.into_iter().enumerate() {
                     let is_link = span.link_url.is_some();
 
-                    let color = if is_list_item && idx == 0 {
-                        self.theme.accent_color()
-                    } else if span.code || is_link {
+                    let color = if (is_list_item && idx == 0) || span.code || is_link {
                         self.theme.accent_color()
                     } else {
                         self.theme.text_primary()
@@ -1121,7 +856,10 @@ impl<'a> RenderContext<'a> {
                         color,
                         italics: span.italic,
                         underline,
-                        strikethrough: Stroke::new(if span.strikethrough { 1.5_f32 } else { 0.0_f32 }, color),
+                        strikethrough: Stroke::new(
+                            if span.strikethrough { 1.5_f32 } else { 0.0_f32 },
+                            color,
+                        ),
                         line_height: Some(22.0_f32 * self.font_scale),
                         valign: egui::Align::BOTTOM,
                         background,
@@ -1146,34 +884,26 @@ impl<'a> RenderContext<'a> {
                                     continue;
                                 }
                                 let mut span_job = LayoutJob::default();
-                                append_highlighted_text(
-                                    &mut span_job,
-                                    t,
-                                    self.search_query,
-                                    base_fmt.clone(),
-                                    hl_bg,
-                                    hl_fg,
-                                    act_bg,
-                                    act_fg,
-                                    self.active_match_index,
-                                    &mut self.match_counter,
-                                );
+                                span_job.append(t, 0.0, base_fmt.clone());
 
                                 if let Some(ref url) = span.link_url {
-                                    let resp = ui.add(egui::Label::new(span_job).sense(egui::Sense::click()));
+                                    let resp = self.label_job(ui, span_job, Sense::click());
                                     if resp.hovered() {
-                                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                                        ui.output_mut(|o| {
+                                            o.cursor_icon = egui::CursorIcon::PointingHand
+                                        });
                                     }
                                     if resp.clicked() {
                                         if url.starts_with('#') {
-                                            self.clicked_anchor = Some(url.trim_start_matches('#').to_string());
+                                            self.clicked_anchor =
+                                                Some(url.trim_start_matches('#').to_string());
                                         } else {
                                             let _ = open::that(url);
                                         }
                                     }
                                     resp.on_hover_text(url);
                                 } else {
-                                    ui.label(span_job);
+                                    self.label_job(ui, span_job, Sense::hover());
                                 }
                             }
                         }
@@ -1184,16 +914,16 @@ impl<'a> RenderContext<'a> {
     }
 
     fn render_heading(&mut self, ui: &mut Ui, level: HeadingLevel) {
-        if self.inlines.is_empty() {
-            return;
-        }
-
         let heading_text: String = self.inlines.drain(..).map(|s| s.text).collect();
-        let clean_heading = if heading_text.contains('\u{FE0F}') || heading_text.contains('\u{FE0E}') {
-            heading_text.chars().filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}').collect()
-        } else {
-            heading_text
-        };
+        let clean_heading =
+            if heading_text.contains('\u{FE0F}') || heading_text.contains('\u{FE0E}') {
+                heading_text
+                    .chars()
+                    .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}')
+                    .collect()
+            } else {
+                heading_text
+            };
         let (size, is_h1_or_h2) = match level {
             HeadingLevel::H1 => (26.0 * self.font_scale, true),
             HeadingLevel::H2 => (21.0 * self.font_scale, true),
@@ -1203,8 +933,6 @@ impl<'a> RenderContext<'a> {
             HeadingLevel::H6 => (13.0 * self.font_scale, false),
         };
 
-        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
-
         let base_fmt = egui::TextFormat {
             font_id: FontId::proportional(size),
             color: self.theme.text_primary(),
@@ -1213,7 +941,9 @@ impl<'a> RenderContext<'a> {
         };
 
         let segments = crate::emoji::split_text_emojis(&clean_heading);
-        let has_emojis = segments.iter().any(|s| matches!(s, crate::emoji::TextOrEmoji::Emoji(..)));
+        let has_emojis = segments
+            .iter()
+            .any(|s| matches!(s, crate::emoji::TextOrEmoji::Emoji(..)));
 
         let heading_resp = if has_emojis {
             ui.horizontal_wrapped(|ui| {
@@ -1231,42 +961,24 @@ impl<'a> RenderContext<'a> {
                         }
                         crate::emoji::TextOrEmoji::Text(t) => {
                             let mut job = LayoutJob::default();
-                            append_highlighted_text(
-                                &mut job,
-                                t,
-                                self.search_query,
-                                base_fmt.clone(),
-                                hl_bg,
-                                hl_fg,
-                                act_bg,
-                                act_fg,
-                                self.active_match_index,
-                                &mut self.match_counter,
-                            );
-                            ui.label(job);
+                            job.append(t, 0.0, base_fmt.clone());
+                            self.label_job(ui, job, Sense::hover());
                         }
                     }
                 }
-            }).response
+            })
+            .response
         } else {
             let mut job = LayoutJob::default();
-            append_highlighted_text(
-                &mut job,
-                &clean_heading,
-                self.search_query,
-                base_fmt,
-                hl_bg,
-                hl_fg,
-                act_bg,
-                act_fg,
-                self.active_match_index,
-                &mut self.match_counter,
-            );
-            ui.label(job)
+            job.append(&clean_heading, 0.0, base_fmt);
+            self.label_job(ui, job, Sense::hover())
         };
 
+        let generated_slug =
+            crate::parsers::unique_heading_slug(&clean_heading, &mut self.heading_counts);
+        let slug = self.heading_id.take().unwrap_or(generated_slug);
         if let Some(target) = self.target_anchor {
-            if is_anchor_match(&clean_heading, target) {
+            if is_anchor_match(&slug, target) {
                 heading_resp.scroll_to_me(Some(egui::Align::TOP));
             }
         }
@@ -1323,8 +1035,10 @@ impl<'a> RenderContext<'a> {
     }
 
     fn render_code_block(&mut self, ui: &mut Ui) {
-        let lang = self.code_block_lang.trim();
-        let code = self.code_block_content.trim_end();
+        let lang_owned = self.code_block_lang.trim().to_string();
+        let code_owned = self.code_block_content.trim_end().to_string();
+        let lang = lang_owned.as_str();
+        let code = code_owned.as_str();
 
         // 1. Mermaid 向量流程圖即時渲染 (具備記憶體快取、原生微軟正黑體字型疊加與 60fps 滑順捲動)
         if lang.eq_ignore_ascii_case("mermaid") && !code.trim().is_empty() {
@@ -1350,7 +1064,8 @@ impl<'a> RenderContext<'a> {
                             );
 
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let copy_id = ui.make_persistent_id(format!("md_mermaid_copy_{:x}", code_hash));
+                                let copy_id = ui
+                                    .make_persistent_id(format!("md_mermaid_copy_{:x}", code_hash));
                                 let is_copied = ui.ctx().data(|d| {
                                     d.get_temp::<std::time::Instant>(copy_id)
                                         .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
@@ -1372,7 +1087,9 @@ impl<'a> RenderContext<'a> {
                                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                         let _ = clipboard.set_text(code.to_string());
                                     }
-                                    ui.ctx().data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
+                                    ui.ctx().data_mut(|d| {
+                                        d.insert_temp(copy_id, std::time::Instant::now())
+                                    });
                                 }
                             });
                         });
@@ -1407,7 +1124,8 @@ impl<'a> RenderContext<'a> {
                                     rect.min.x + node.x * scale_x,
                                     rect.min.y + node.y * scale_y,
                                 );
-                                let font_size = (node.font_size * scale_x * self.font_scale).max(9.0_f32);
+                                let font_size =
+                                    (node.font_size * scale_x * self.font_scale).max(9.0_f32);
                                 painter.text(
                                     screen_pos,
                                     node.align,
@@ -1427,8 +1145,6 @@ impl<'a> RenderContext<'a> {
             }
         }
 
-        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
-
         Frame::none()
             .fill(self.theme.code_bg_color())
             .rounding(Rounding::same(6.0))
@@ -1446,7 +1162,11 @@ impl<'a> RenderContext<'a> {
                     );
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let copy_id = ui.make_persistent_id(format!("md_cb_copy_{:p}_{}", code.as_ptr(), code.len()));
+                        let copy_id = ui.make_persistent_id(format!(
+                            "md_cb_copy_{:p}_{}",
+                            code.as_ptr(),
+                            code.len()
+                        ));
                         let is_copied = ui.ctx().data(|d| {
                             d.get_temp::<std::time::Instant>(copy_id)
                                 .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
@@ -1468,7 +1188,8 @@ impl<'a> RenderContext<'a> {
                             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                 let _ = clipboard.set_text(code.to_string());
                             }
-                            ui.ctx().data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
+                            ui.ctx()
+                                .data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
                         }
                     });
                 });
@@ -1480,11 +1201,9 @@ impl<'a> RenderContext<'a> {
                 // 語法高亮 (快取 LayoutJob 避免每幀重複執行 syntect 正則高亮，零堆疊分配雜湊)
                 let cache_id = egui::Id::new((
                     "md_cb_hl",
-                    code.as_ptr() as usize,
-                    code.len(),
+                    crate::parsers::content_hash(code),
+                    lang,
                     (self.font_scale * 100.0_f32) as u32,
-                    self.search_query,
-                    self.active_match_index,
                     self.theme as u8,
                 ));
 
@@ -1522,18 +1241,7 @@ impl<'a> RenderContext<'a> {
                                     color,
                                     ..Default::default()
                                 };
-                                append_highlighted_text(
-                                    &mut job,
-                                    text,
-                                    self.search_query,
-                                    base_fmt,
-                                    hl_bg,
-                                    hl_fg,
-                                    act_bg,
-                                    act_fg,
-                                    self.active_match_index,
-                                    &mut self.match_counter,
-                                );
+                                job.append(text, 0.0, base_fmt);
                             }
                         }
 
@@ -1542,22 +1250,19 @@ impl<'a> RenderContext<'a> {
                     }
                 });
 
-                ui.label(layout_job);
+                self.label_job(ui, layout_job, Sense::hover());
             });
     }
 
-    fn render_table(&self, ui: &mut Ui) {
+    fn render_table(&mut self, ui: &mut Ui) {
         if self.table_headers.is_empty() && self.table_rows.is_empty() {
             return;
         }
 
-        let num_cols = self.table_headers.len().max(
-            self.table_rows
-                .iter()
-                .map(|r| r.len())
-                .max()
-                .unwrap_or(0),
-        );
+        let num_cols = self
+            .table_headers
+            .len()
+            .max(self.table_rows.iter().map(|r| r.len()).max().unwrap_or(0));
 
         if num_cols == 0 {
             return;
@@ -1571,7 +1276,8 @@ impl<'a> RenderContext<'a> {
             AppTheme::Light => Color32::from_rgba_unmultiplied(0, 0, 0, 8),
         };
 
-        let (hl_bg, hl_fg, act_bg, act_fg) = self.hl_colors();
+        let headers = self.table_headers.clone();
+        let rows = self.table_rows.clone();
 
         ui.add_space(4.0_f32);
         egui::ScrollArea::horizontal()
@@ -1586,77 +1292,71 @@ impl<'a> RenderContext<'a> {
                         egui::Grid::new(ui.next_auto_id())
                             .striped(false)
                             .min_col_width(70.0_f32 * self.font_scale)
-                            .spacing(Vec2::new(12.0_f32 * self.font_scale, 6.0_f32 * self.font_scale))
+                            .spacing(Vec2::new(
+                                12.0_f32 * self.font_scale,
+                                6.0_f32 * self.font_scale,
+                            ))
                             .show(ui, |ui| {
                                 // Header
                                 if !self.table_headers.is_empty() {
-                                    for header in &self.table_headers {
+                                    for header in &headers {
                                         Frame::none()
                                             .fill(header_bg)
                                             .stroke(Stroke::new(1.0_f32, border_color))
                                             .rounding(Rounding::same(4.0_f32))
-                                            .inner_margin(Margin::symmetric(10.0_f32 * self.font_scale, 6.0_f32 * self.font_scale))
+                                            .inner_margin(Margin::symmetric(
+                                                10.0_f32 * self.font_scale,
+                                                6.0_f32 * self.font_scale,
+                                            ))
                                             .show(ui, |ui| {
                                                 let mut job = LayoutJob::default();
                                                 let base_fmt = egui::TextFormat {
-                                                    font_id: FontId::proportional(13.5_f32 * self.font_scale),
+                                                    font_id: FontId::proportional(
+                                                        13.5_f32 * self.font_scale,
+                                                    ),
                                                     color: self.theme.accent_color(),
                                                     valign: egui::Align::BOTTOM,
                                                     ..Default::default()
                                                 };
-                                                let mut counter = 0;
-                                                append_highlighted_text(
-                                                    &mut job,
-                                                    header,
-                                                    self.search_query,
-                                                    base_fmt,
-                                                    hl_bg,
-                                                    hl_fg,
-                                                    act_bg,
-                                                    act_fg,
-                                                    self.active_match_index,
-                                                    &mut counter,
-                                                );
-                                                ui.label(job);
+                                                job.append(header, 0.0, base_fmt);
+                                                self.label_job(ui, job, Sense::hover());
                                             });
                                     }
                                     ui.end_row();
                                 }
 
                                 // Rows
-                                for (row_idx, row) in self.table_rows.iter().enumerate() {
-                                    let row_bg = if row_idx % 2 == 0 { even_row_bg } else { odd_row_bg };
+                                for (row_idx, row) in rows.iter().enumerate() {
+                                    let row_bg = if row_idx % 2 == 0 {
+                                        even_row_bg
+                                    } else {
+                                        odd_row_bg
+                                    };
 
                                     for col_idx in 0..num_cols {
-                                        let cell = row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
+                                        let cell =
+                                            row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
                                         Frame::none()
                                             .fill(row_bg)
                                             .stroke(Stroke::new(0.5_f32, border_color))
                                             .rounding(Rounding::same(4.0_f32))
-                                            .inner_margin(Margin::symmetric(10.0_f32 * self.font_scale, 6.0_f32 * self.font_scale))
+                                            .inner_margin(Margin::symmetric(
+                                                10.0_f32 * self.font_scale,
+                                                6.0_f32 * self.font_scale,
+                                            ))
                                             .show(ui, |ui| {
                                                 let mut job = LayoutJob::default();
                                                 let base_fmt = egui::TextFormat {
-                                                    font_id: FontId::proportional(13.0_f32 * self.font_scale),
+                                                    font_id: FontId::proportional(
+                                                        13.0_f32 * self.font_scale,
+                                                    ),
                                                     color: self.theme.text_primary(),
                                                     line_height: Some(19.0_f32 * self.font_scale),
                                                     valign: egui::Align::BOTTOM,
                                                     ..Default::default()
                                                 };
-                                                let mut counter = 0;
-                                                append_highlighted_text(
-                                                    &mut job,
-                                                    cell,
-                                                    self.search_query,
-                                                    base_fmt,
-                                                    hl_bg,
-                                                    hl_fg,
-                                                    act_bg,
-                                                    act_fg,
-                                                    self.active_match_index,
-                                                    &mut counter,
-                                                );
-                                                ui.label(job);
+                                                job.append(cell, 0.0, base_fmt);
+                                                self.label_job(ui, job, Sense::hover());
                                             });
                                     }
                                     ui.end_row();
@@ -1668,596 +1368,8 @@ impl<'a> RenderContext<'a> {
     }
 }
 
-/// 依語言副檔名或標記尋找最佳 Syntect 語法定義 (包含多層備援機制)
-pub fn find_syntax_by_lang<'a>(lang_lower: &str, syntax_set: &'a SyntaxSet) -> &'a syntect::parsing::SyntaxReference {
-    syntax_set
-        .find_syntax_by_token(lang_lower)
-        .or_else(|| syntax_set.find_syntax_by_extension(lang_lower))
-        .or_else(|| {
-            match lang_lower {
-                "rs" | "rust" => syntax_set.find_syntax_by_name("Rust"),
-                "py" | "python" => syntax_set.find_syntax_by_name("Python"),
-                "js" | "mjs" | "cjs" | "javascript" => syntax_set.find_syntax_by_name("JavaScript"),
-                "jsx" => syntax_set.find_syntax_by_name("JavaScript (JSX)").or_else(|| syntax_set.find_syntax_by_name("JavaScript")),
-                "ts" | "typescript" => syntax_set.find_syntax_by_name("TypeScript").or_else(|| syntax_set.find_syntax_by_name("JavaScript")),
-                "tsx" => syntax_set.find_syntax_by_name("TypeScript (TSX)").or_else(|| syntax_set.find_syntax_by_name("JavaScript (JSX)")).or_else(|| syntax_set.find_syntax_by_name("JavaScript")),
-                "toml" => syntax_set.find_syntax_by_name("TOML").or_else(|| syntax_set.find_syntax_by_name("YAML")),
-                "ini" | "conf" | "cfg" | "env" => syntax_set.find_syntax_by_name("INI").or_else(|| syntax_set.find_syntax_by_name("YAML")),
-                "yaml" | "yml" => syntax_set.find_syntax_by_name("YAML"),
-                "json" | "json5" | "jsonc" => syntax_set.find_syntax_by_name("JSON"),
-                "c" | "h" => syntax_set.find_syntax_by_name("C"),
-                "cpp" | "cc" | "cxx" | "hpp" => syntax_set.find_syntax_by_name("C++"),
-                "cs" | "csharp" => syntax_set.find_syntax_by_name("C#"),
-                "go" | "golang" => syntax_set.find_syntax_by_name("Go"),
-                "java" => syntax_set.find_syntax_by_name("Java"),
-                "kt" | "kts" | "kotlin" => syntax_set.find_syntax_by_name("Kotlin").or_else(|| syntax_set.find_syntax_by_name("Java")),
-                "html" | "htm" | "xhtml" => syntax_set.find_syntax_by_name("HTML"),
-                "css" => syntax_set.find_syntax_by_name("CSS"),
-                "scss" | "sass" | "less" => syntax_set.find_syntax_by_name("Sass").or_else(|| syntax_set.find_syntax_by_name("CSS")),
-                "sql" => syntax_set.find_syntax_by_name("SQL"),
-                "sh" | "bash" | "zsh" | "fish" | "shell" => {
-                    syntax_set.find_syntax_by_name("Bourne Again Shell (bash)")
-                        .or_else(|| syntax_set.find_syntax_by_name("Shell-Unix-Generic"))
-                }
-                "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" | "ps" => {
-                    syntax_set.find_syntax_by_name("PowerShell")
-                        .or_else(|| syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"))
-                        .or_else(|| syntax_set.find_syntax_by_name("Shell-Unix-Generic"))
-                }
-                "bat" | "cmd" | "batch" => {
-                    syntax_set.find_syntax_by_name("Batch File")
-                        .or_else(|| syntax_set.find_syntax_by_name("Batch File (DOS)"))
-                        .or_else(|| syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"))
-                }
-                "dockerfile" | "containerfile" => {
-                    syntax_set.find_syntax_by_name("Dockerfile")
-                        .or_else(|| syntax_set.find_syntax_by_name("Bourne Again Shell (bash)"))
-                }
-                "xml" | "svg" => syntax_set.find_syntax_by_name("XML"),
-                "lua" => syntax_set.find_syntax_by_name("Lua"),
-                "php" => syntax_set.find_syntax_by_name("PHP"),
-                "rb" | "ruby" => syntax_set.find_syntax_by_name("Ruby"),
-                "graphql" | "gql" => syntax_set.find_syntax_by_name("JSON"),
-                "vue" | "svelte" => syntax_set.find_syntax_by_name("HTML"),
-                _ => None,
-            }
-        })
-        .unwrap_or_else(|| syntax_set.find_syntax_plain_text())
-}
-
-/// 支援全語法高亮 + 行號 + 搜尋高亮的獨立程式碼檢視器 (全量 LayoutJob 快取，秒開 100K 行超大檔案)
-pub fn render_code_viewer(
-    ui: &mut Ui,
-    theme: AppTheme,
-    font_scale: f32,
-    code: &str,
-    extension_or_lang: &str,
-    search_query: &str,
-    active_match_index: Option<usize>,
-) {
-    let syntax_set = get_syntax_set();
-    let theme_set = get_theme_set();
-
-    let syntect_theme = match theme {
-        AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
-        AppTheme::Light => &theme_set.themes["InspiredGitHub"],
-    };
-
-    let lang_lower = extension_or_lang.to_lowercase();
-    let syntax = find_syntax_by_lang(&lang_lower, syntax_set);
-
-    let font_id = FontId::monospace(13.5 * font_scale);
-    let gutter_color = theme.text_secondary().gamma_multiply(0.6);
-    let border_color = theme.border_color();
-
-    let (hl_bg, hl_fg, act_bg, act_fg) = match theme {
-        AppTheme::Dark => (
-            Color32::from_rgba_unmultiplied(234, 179, 8, 110),
-            Color32::from_rgb(254, 240, 138),
-            Color32::from_rgb(249, 115, 22),
-            Color32::BLACK,
-        ),
-        AppTheme::Light => (
-            Color32::from_rgb(254, 240, 138),
-            Color32::from_rgb(113, 63, 18),
-            Color32::from_rgb(234, 88, 12),
-            Color32::WHITE,
-        ),
-    };
-
-    // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算 (零堆疊分配雜湊)
-    // Large files start in a safe, fast preview. Keep the expansion state in
-    // egui's temporary data so the viewer can offer a real way to render the
-    // remaining content without adding UI state to every caller.
-    let expand_id = egui::Id::new((
-        "code_viewer_expand",
-        code.as_ptr() as usize,
-        code.len(),
-    ));
-    let is_expanded = ui.ctx().data(|d| d.get_temp::<bool>(expand_id).unwrap_or(false));
-
-    let cache_id = egui::Id::new((
-        "code_viewer_fast_v3",
-        code.as_ptr() as usize,
-        code.len(),
-        (font_scale * 100.0_f32) as u32,
-        search_query,
-        active_match_index,
-        theme as u8,
-        &lang_lower,
-        is_expanded,
-    ));
-
-    let (gutter_job, code_job, total_line_count, displayed_line_count, is_truncated) = ui.ctx().data_mut(|d| {
-        if let Some(cached) = d.get_temp::<(LayoutJob, LayoutJob, usize, usize, bool)>(cache_id) {
-            cached.clone()
-        } else {
-            let mut gutter_job = LayoutJob::default();
-            let mut code_job = LayoutJob::default();
-
-            // 1. 極速位元組行數統計 (7MB 僅需 0.3ms，完全不卡主執行緒)
-            let total_lines = code.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1;
-
-            // 2. 依照檔案大小動態決定安全預覽策略
-            let is_huge_file = code.len() > 300 * 1024; // > 300 KB
-            let max_render_lines = if is_expanded {
-                total_lines
-            } else if is_huge_file {
-                1000
-            } else {
-                3000
-            };
-            let max_highlight_lines = if is_expanded {
-                total_lines
-            } else if is_huge_file {
-                200
-            } else {
-                2000
-            };
-            const MAX_LINE_CHAR_LIMIT: usize = 1000;
-
-            let default_text_color = match theme {
-                AppTheme::Dark => Color32::from_rgb(226, 232, 240),
-                AppTheme::Light => Color32::from_rgb(30, 41, 59),
-            };
-
-            let syntax_set = get_syntax_set();
-            let theme_set = get_theme_set();
-            let syntect_theme = match theme {
-                AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
-                AppTheme::Light => &theme_set.themes["InspiredGitHub"],
-            };
-            let syntax = find_syntax_by_lang(&lang_lower, syntax_set);
-            let mut highlighter = HighlightLines::new(syntax, syntect_theme);
-
-            let mut displayed_lines = 0;
-            let mut match_counter = 0;
-            let mut has_line_truncation = false;
-
-            // 3. 僅迭代需要預覽的行數，絕不浪費 CPU 遍歷整個 7MB 字串
-            for line in code.lines().take(max_render_lines) {
-                displayed_lines += 1;
-
-                // 超長單行截斷防護 (例如 minified bundle)
-                let (chunk, is_line_truncated) = if !is_expanded && line.len() > MAX_LINE_CHAR_LIMIT {
-                    let boundary = line
-                        .char_indices()
-                        .nth(MAX_LINE_CHAR_LIMIT)
-                        .map(|(idx, _)| idx)
-                        .unwrap_or(line.len());
-                    (&line[..boundary], true)
-                } else {
-                    (line, false)
-                };
-                has_line_truncation |= is_line_truncated;
-
-                let line_with_nl = format!("{}\n", chunk);
-
-                if displayed_lines <= max_highlight_lines {
-                    let ranges = highlighter
-                        .highlight_line(&line_with_nl, syntax_set)
-                        .unwrap_or_default();
-
-                    for (style, text) in ranges {
-                        let color = Color32::from_rgb(
-                            style.foreground.r,
-                            style.foreground.g,
-                            style.foreground.b,
-                        );
-
-                        let base_fmt = egui::TextFormat {
-                            font_id: font_id.clone(),
-                            color,
-                            line_height: Some(21.0 * font_scale),
-                            ..Default::default()
-                        };
-
-                        append_highlighted_text(
-                            &mut code_job,
-                            text,
-                            search_query,
-                            base_fmt,
-                            hl_bg,
-                            hl_fg,
-                            act_bg,
-                            act_fg,
-                            active_match_index,
-                            &mut match_counter,
-                        );
-                    }
-                } else {
-                    let base_fmt = egui::TextFormat {
-                        font_id: font_id.clone(),
-                        color: default_text_color,
-                        line_height: Some(21.0 * font_scale),
-                        ..Default::default()
-                    };
-                    append_highlighted_text(
-                        &mut code_job,
-                        &line_with_nl,
-                        search_query,
-                        base_fmt,
-                        hl_bg,
-                        hl_fg,
-                        act_bg,
-                        act_fg,
-                        active_match_index,
-                        &mut match_counter,
-                    );
-                }
-
-                if is_line_truncated {
-                    let base_fmt = egui::TextFormat {
-                        font_id: font_id.clone(),
-                        color: theme.text_secondary(),
-                        line_height: Some(21.0 * font_scale),
-                        ..Default::default()
-                    };
-                    code_job.append(" ... [單行過長已截斷]\n", 0.0, base_fmt);
-                }
-            }
-
-            let gutter_digits = format!("{}", displayed_lines.max(1)).len().max(2);
-            for i in 0..displayed_lines {
-                let line_num_str = format!("{:>width$}\n", i + 1, width = gutter_digits);
-                gutter_job.append(
-                    &line_num_str,
-                    0.0,
-                    egui::TextFormat {
-                        font_id: font_id.clone(),
-                        color: gutter_color,
-                        line_height: Some(21.0 * font_scale),
-                        ..Default::default()
-                    },
-                );
-            }
-
-            let is_truncated = !is_expanded
-                && (total_lines > displayed_lines || has_line_truncation);
-            let result = (gutter_job, code_job, total_lines, displayed_lines, is_truncated);
-            d.insert_temp(cache_id, result.clone());
-            result
-        }
-    });
-
-    // 容器卡片外框
-    Frame::none()
-        .fill(theme.card_bg_color())
-        .rounding(Rounding::same(8.0))
-        .stroke(Stroke::new(1.0_f32, border_color))
-        .inner_margin(Margin::symmetric(16.0, 14.0))
-        .show(ui, |ui| {
-            // 程式碼檢視器頂部工具列 (語言識別 + 行數 + 複製按鈕)
-            ui.horizontal(|ui| {
-                let (name, emoji) = get_language_badge(&lang_lower);
-                ui.label(
-                    RichText::new(format!("{} {}", emoji, name))
-                        .font(FontId::monospace(11.5 * font_scale))
-                        .color(theme.accent_color())
-                        .strong(),
-                );
-                let line_desc = if is_truncated {
-                    format!("•  {} 行 (已預覽前 {} 行)", total_line_count, displayed_line_count)
-                } else {
-                    format!("•  {} 行", total_line_count)
-                };
-                ui.label(
-                    RichText::new(line_desc)
-                        .size(11.0 * font_scale)
-                        .color(theme.text_secondary()),
-                );
-                if is_truncated {
-                    Frame::none()
-                        .fill(theme.code_bg_color())
-                        .rounding(Rounding::same(3.0))
-                        .inner_margin(Margin::symmetric(5.0, 1.0))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("⚡ 大檔極速防護模式")
-                                    .size(10.0 * font_scale)
-                                    .color(theme.accent_color()),
-                            );
-                        });
-                }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let copy_id = ui.make_persistent_id(format!("viewer_cb_copy_{:p}_{}", code.as_ptr(), code.len()));
-                    let is_copied = ui.ctx().data(|d| {
-                        d.get_temp::<std::time::Instant>(copy_id)
-                            .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
-                            .unwrap_or(false)
-                    });
-
-                    let btn_text = if is_copied {
-                        RichText::new("✓ 已複製完整代碼")
-                            .color(Color32::from_rgb(34, 197, 94))
-                            .size(11.5 * font_scale)
-                            .strong()
-                    } else {
-                        RichText::new("📋 複製完整代碼")
-                            .color(theme.text_secondary())
-                            .size(11.5 * font_scale)
-                    };
-
-                    if ui.button(btn_text).clicked() {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(code.to_string());
-                        }
-                        ui.ctx().data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
-                    }
-                });
-            });
-
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
-
-            ui.horizontal_top(|ui| {
-                // 1. 行號欄 (Line Numbers Gutter)
-                ui.vertical(|ui| {
-                    ui.label(gutter_job);
-                });
-
-                // 分隔垂直線
-                ui.add_space(8.0);
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, (displayed_line_count as f32) * 21.0 * font_scale), egui::Sense::hover());
-                ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0_f32, border_color));
-                ui.add_space(8.0);
-
-                // 2. 程式碼語法高亮區域 (使用快取的 LayoutJob，瞬時渲染)
-                ui.vertical(|ui| {
-                    ui.label(code_job);
-                });
-            });
-
-            if is_truncated {
-                ui.add_space(10.0);
-                Frame::none()
-                    .fill(theme.code_bg_color())
-                    .rounding(Rounding::same(6.0))
-                    .stroke(Stroke::new(1.0_f32, theme.accent_color().gamma_multiply(0.4)))
-                    .inner_margin(Margin::symmetric(14.0, 8.0))
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "⚡ 檔案較大（共 {} 行），已為您極速安全預覽前 {} 行以維持 60 FPS 順暢體驗。點擊右上角「複製完整代碼」可提取完整內容。",
-                                    total_line_count, displayed_line_count
-                                ))
-                                .color(theme.accent_color())
-                                .size(11.5 * font_scale),
-                            );
-                            if ui.button("載入完整內容").clicked() {
-                                ui.ctx().data_mut(|d| d.insert_temp(expand_id, true));
-                                ui.ctx().request_repaint();
-                            }
-                        });
-                    });
-            }
-        });
-}
-
-/// 判斷特定副檔名是否為圖片或向量圖類型
-pub fn is_image_extension(ext: &str) -> bool {
-    matches!(
-        ext.to_lowercase().as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg" | "tiff" | "tif" | "avif"
-    )
-}
-
-/// 取得圖片類型的美觀顯示名稱與 Emoji 徽章
-pub fn get_image_badge(ext: &str) -> (String, &'static str) {
-    match ext.to_lowercase().as_str() {
-        "png" => ("PNG 圖片".to_string(), "🖼"),
-        "jpg" | "jpeg" => ("JPEG 圖片".to_string(), "📷"),
-        "svg" => ("SVG 向量圖".to_string(), "🎨"),
-        "gif" => ("GIF 動態圖".to_string(), "🎬"),
-        "webp" => ("WEBP 圖片".to_string(), "🌐"),
-        "ico" => ("ICO 圖示".to_string(), "💠"),
-        "bmp" => ("BMP 點陣圖".to_string(), "🖼"),
-        "tiff" | "tif" => ("TIFF 圖片".to_string(), "📸"),
-        "avif" => ("AVIF 圖片".to_string(), "🌟"),
-        _ => (format!("{} 圖片", ext.to_uppercase()), "🖼"),
-    }
-}
-
-/// 判斷特定副檔名是否為程式碼/設定檔類型
-pub fn is_code_extension(ext: &str) -> bool {
-    let syntax_set = get_syntax_set();
-    if syntax_set.find_syntax_by_extension(ext).is_some() {
-        return true;
-    }
-    matches!(
-        ext.to_lowercase().as_str(),
-        "rs" | "py" | "js" | "jsx" | "ts" | "tsx" | "json" | "json5" | "jsonc" | "toml" | "yaml" | "yml"
-            | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "cs" | "go" | "java" | "kt" | "kts"
-            | "html" | "htm" | "xhtml" | "css" | "scss" | "sass" | "sql" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" | "ps" | "bat"
-            | "cmd" | "xml" | "lua" | "php" | "rb" | "swift" | "dart" | "vue" | "svelte"
-            | "csv" | "tsv" | "ini" | "conf" | "env" | "dockerfile" | "graphql" | "gql"
-            | "diff" | "patch" | "log" | "r" | "scala" | "zig" | "proto"
-    )
-}
-
-/// 取得語言的美觀顯示名稱與 Emoji 徽章
-pub fn get_language_badge(ext: &str) -> (String, &'static str) {
-    match ext.to_lowercase().as_str() {
-        "rs" => ("Rust".to_string(), "🦀"),
-        "py" => ("Python".to_string(), "🐍"),
-        "js" | "mjs" | "cjs" => ("JavaScript".to_string(), "⚡"),
-        "jsx" => ("React JSX".to_string(), "⚛"),
-        "ts" => ("TypeScript".to_string(), "🔷"),
-        "tsx" => ("React TSX".to_string(), "⚛"),
-        "json" | "json5" | "jsonc" => ("JSON".to_string(), "📦"),
-        "toml" => ("TOML".to_string(), "⚙"),
-        "yaml" | "yml" => ("YAML".to_string(), "📄"),
-        "csv" => ("CSV 表格".to_string(), "📊"),
-        "tsv" => ("TSV 表格".to_string(), "📊"),
-        "c" => ("C".to_string(), "📘"),
-        "cpp" | "cc" | "cxx" | "hpp" => ("C++".to_string(), "💠"),
-        "cs" => ("C#".to_string(), "🟣"),
-        "go" => ("Go".to_string(), "🐹"),
-        "java" => ("Java".to_string(), "☕"),
-        "kt" | "kts" => ("Kotlin".to_string(), "🎯"),
-        "html" | "htm" | "xhtml" => ("HTML".to_string(), "🌐"),
-        "css" => ("CSS".to_string(), "🎨"),
-        "scss" | "sass" => ("SCSS".to_string(), "🎨"),
-        "sql" => ("SQL".to_string(), "🗄"),
-        "sh" | "bash" | "zsh" | "fish" => ("Shell".to_string(), "🐚"),
-        "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" | "ps" => ("PowerShell".to_string(), "💻"),
-        "bat" | "cmd" => ("Batch".to_string(), "📜"),
-        "xml" => ("XML".to_string(), "📑"),
-        "lua" => ("Lua".to_string(), "🌙"),
-        "php" => ("PHP".to_string(), "🐘"),
-        "rb" => ("Ruby".to_string(), "💎"),
-        "swift" => ("Swift".to_string(), "🐦"),
-        "dart" => ("Dart".to_string(), "🎯"),
-        "vue" => ("Vue".to_string(), "💚"),
-        "svelte" => ("Svelte".to_string(), "🧡"),
-        "dockerfile" => ("Dockerfile".to_string(), "🐳"),
-        "graphql" | "gql" => ("GraphQL".to_string(), "🔺"),
-        "ini" | "conf" | "env" => ("Config".to_string(), "⚙"),
-        "diff" | "patch" => ("Diff".to_string(), "🔄"),
-        "log" => ("Log 記錄".to_string(), "📋"),
-        "zig" => ("Zig".to_string(), "⚡"),
-        "r" => ("R 語言".to_string(), "📈"),
-        "scala" => ("Scala".to_string(), "🔴"),
-        "proto" => ("Protobuf".to_string(), "📦"),
-        _ => (ext.to_uppercase(), "💻"),
-    }
-}
-
-/// 單元章節大綱項目
-#[derive(Debug, Clone)]
-pub struct TocItem {
-    pub level: u8,
-    pub title: String,
-    #[allow(dead_code)]
-    pub line_idx: usize,
-}
-
-/// 解析 Markdown 內容提取 H1~H6 章節標題
-pub fn extract_markdown_toc(content: &str) -> Vec<TocItem> {
-    let mut toc = Vec::new();
-    let mut in_code_block = false;
-
-    for (line_idx, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
-            continue;
-        }
-
-        if trimmed.starts_with('#') {
-            let hash_count = trimmed.chars().take_while(|&c| c == '#').count();
-            if hash_count <= 6 {
-                let rest = trimmed[hash_count..].trim();
-                if !rest.is_empty() {
-                    let clean_title = rest
-                        .replace("**", "")
-                        .replace('*', "")
-                        .replace('`', "")
-                        .replace("~~", "");
-                    toc.push(TocItem {
-                        level: hash_count as u8,
-                        title: clean_title,
-                        line_idx,
-                    });
-                }
-            }
-        }
-    }
-    toc
-}
-
-/// CSV / TSV 資料表格結構體
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct CsvTableData {
-    pub headers: Vec<String>,
-    pub rows: Vec<Vec<String>>,
-    pub total_rows: usize,
-    pub total_cols: usize,
-}
-
-/// 解析 CSV 或 TSV 檔案內容 (支援雙引號轉義與逗號/Tab 欄位分隔)
-pub fn parse_csv_or_tsv(content: &str, separator: char) -> CsvTableData {
-    let mut all_rows = Vec::new();
-
-    for line in content.lines() {
-        let line = line.trim_end();
-        if line.is_empty() {
-            continue;
-        }
-
-        let mut row = Vec::new();
-        let mut current_field = String::new();
-        let mut in_quotes = false;
-        let mut chars = line.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '"' {
-                if in_quotes && chars.peek() == Some(&'"') {
-                    current_field.push('"');
-                    chars.next();
-                } else {
-                    in_quotes = !in_quotes;
-                }
-            } else if ch == separator && !in_quotes {
-                row.push(current_field.trim().to_string());
-                current_field.clear();
-            } else {
-                current_field.push(ch);
-            }
-        }
-        row.push(current_field.trim().to_string());
-        all_rows.push(row);
-    }
-
-    if all_rows.is_empty() {
-        return CsvTableData {
-            headers: Vec::new(),
-            rows: Vec::new(),
-            total_rows: 0,
-            total_cols: 0,
-        };
-    }
-
-    let headers = all_rows.remove(0);
-    let total_cols = headers.len().max(all_rows.iter().map(|r| r.len()).max().unwrap_or(0));
-    let total_rows = all_rows.len();
-
-    CsvTableData {
-        headers,
-        rows: all_rows,
-        total_rows,
-        total_cols,
-    }
-}
-
 /// 渲染現代斑馬紋資料表格
+#[allow(clippy::too_many_arguments)]
 pub fn render_csv_table(
     ui: &mut Ui,
     theme: AppTheme,
@@ -2266,10 +1378,19 @@ pub fn render_csv_table(
     search_query: &str,
     active_match_index: Option<usize>,
     match_counter: &mut usize,
+    search_jump: bool,
 ) {
     if table.headers.is_empty() && table.rows.is_empty() {
         ui.label("表格內容為空");
         return;
+    }
+
+    ui.label(format!(
+        "{} 筆資料 · {} 欄",
+        table.total_rows, table.total_cols
+    ));
+    if let Some(error) = &table.error {
+        ui.colored_label(theme.accent_color(), format!("CSV 解析失敗：{error}"));
     }
 
     let header_bg = theme.card_bg_color();
@@ -2312,6 +1433,7 @@ pub fn render_csv_table(
                             color: theme.accent_color(),
                             ..Default::default()
                         };
+                        let base = *match_counter;
                         append_highlighted_text(
                             &mut job,
                             header,
@@ -2324,14 +1446,28 @@ pub fn render_csv_table(
                             active_match_index,
                             match_counter,
                         );
-                        ui.label(job);
+                        let local = active_match_index
+                            .and_then(|i| (base..*match_counter).contains(&i).then(|| i - base));
+                        crate::search::searchable_label(
+                            ui,
+                            job,
+                            search_query,
+                            local,
+                            search_jump,
+                            Sense::hover(),
+                            true,
+                        );
                     });
             }
             ui.end_row();
 
             // 資料行 (Data Rows with Zebra Striping)
             for (row_idx, row) in table.rows.iter().enumerate() {
-                let row_bg = if row_idx % 2 == 0 { even_row_bg } else { odd_row_bg };
+                let row_bg = if row_idx % 2 == 0 {
+                    even_row_bg
+                } else {
+                    odd_row_bg
+                };
 
                 for col_idx in 0..table.total_cols {
                     let cell_text = row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
@@ -2348,6 +1484,7 @@ pub fn render_csv_table(
                                 line_height: Some(18.0 * font_scale),
                                 ..Default::default()
                             };
+                            let base = *match_counter;
                             append_highlighted_text(
                                 &mut job,
                                 cell_text,
@@ -2360,7 +1497,18 @@ pub fn render_csv_table(
                                 active_match_index,
                                 match_counter,
                             );
-                            ui.label(job);
+                            let local = active_match_index.and_then(|i| {
+                                (base..*match_counter).contains(&i).then(|| i - base)
+                            });
+                            crate::search::searchable_label(
+                                ui,
+                                job,
+                                search_query,
+                                local,
+                                search_jump,
+                                Sense::hover(),
+                                true,
+                            );
                         });
                 }
                 ui.end_row();
@@ -2368,267 +1516,12 @@ pub fn render_csv_table(
         });
 }
 
-/// JSON 零依賴極速排版美化 (Pretty Print with 2 Spaces，串流零多餘拷貝)
-pub fn format_json(input: &str) -> Result<String, String> {
-    let mut result = String::with_capacity(input.len() + input.len() / 2);
-    let mut indent_level: usize = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if in_string {
-            result.push(ch);
-            if escape_next {
-                escape_next = false;
-            } else if ch == '\\' {
-                escape_next = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => {
-                in_string = true;
-                result.push('"');
-            }
-            '{' | '[' => {
-                result.push(ch);
-                // 檢查是否緊接著閉合括號
-                while let Some(&next_ch) = chars.peek() {
-                    if next_ch.is_whitespace() {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if let Some(&next_ch) = chars.peek() {
-                    if (ch == '{' && next_ch == '}') || (ch == '[' && next_ch == ']') {
-                        // 空物件/陣列保持單行 {} 或 []
-                        continue;
-                    }
-                }
-                indent_level += 1;
-                result.push('\n');
-                append_indent_spaces(&mut result, indent_level);
-            }
-            '}' | ']' => {
-                indent_level = indent_level.saturating_sub(1);
-                if !result.ends_with('\n') && !result.ends_with('{') && !result.ends_with('[') {
-                    result.push('\n');
-                    append_indent_spaces(&mut result, indent_level);
-                }
-                result.push(ch);
-            }
-            ',' => {
-                result.push(',');
-                result.push('\n');
-                append_indent_spaces(&mut result, indent_level);
-            }
-            ':' => {
-                result.push(':');
-                result.push(' ');
-            }
-            c if c.is_whitespace() => {
-                // 忽略字串外部空白
-            }
-            c => {
-                result.push(c);
-            }
-        }
-    }
-    Ok(result)
-}
-
-#[inline(always)]
-fn append_indent_spaces(buf: &mut String, level: usize) {
-    for _ in 0..level {
-        buf.push_str("  ");
-    }
-}
-
-/// JSON 零依賴壓縮為單行 (Minify，串流高效版)
-pub fn minify_json(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut in_string = false;
-    let mut escape_next = false;
-    for ch in input.chars() {
-        if in_string {
-            result.push(ch);
-            if escape_next {
-                escape_next = false;
-            } else if ch == '\\' {
-                escape_next = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-        } else {
-            match ch {
-                '"' => {
-                    in_string = true;
-                    result.push(ch);
-                }
-                c if c.is_whitespace() => {}
-                c => result.push(c),
-            }
-        }
-    }
-    result
-}
-
-/// 判斷特定副檔名是否為 PDF 文件
-pub fn is_pdf_extension(ext: &str) -> bool {
-    ext.eq_ignore_ascii_case("pdf")
-}
-
-/// 自 PDF 二進制資料中即時擷取純文字與分頁結構，轉換為 Markdown 格式
-pub fn extract_text_from_pdf_bytes(bytes: &[u8]) -> Result<(String, usize), String> {
-    let doc = lopdf::Document::load_mem(bytes).map_err(|e| format!("PDF 解析失敗: {}", e))?;
-    let page_numbers: Vec<u32> = doc.get_pages().keys().cloned().collect();
-    let mut sorted_pages = page_numbers;
-    sorted_pages.sort();
-
-    let total_pages = sorted_pages.len();
-    if total_pages == 0 {
-        return Ok(("（此 PDF 文件為空或無頁面）".to_string(), 0));
-    }
-
-    let mut pages_text = Vec::new();
-    for &page_num in &sorted_pages {
-        let text = doc.extract_text(&[page_num]).unwrap_or_default();
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            pages_text.push(format!("### 📄 第 {} / {} 頁\n\n{}\n", page_num, total_pages, trimmed));
-        }
-    }
-
-    if pages_text.is_empty() {
-        Ok((
-            format!("### 📄 PDF 快速預覽 (共 {} 頁)\n\n> ⚠ 此 PDF 文件的頁面可能為純掃描圖檔或加密內容，未包含可提取的內嵌文字字串。", total_pages),
-            total_pages,
-        ))
-    } else {
-        Ok((pages_text.join("\n---\n\n"), total_pages))
-    }
-}
-
-/// Markdown / 文本統計數據
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TextStats {
-    pub cjk_chars: usize,
-    pub words: usize,
-    pub total_chars: usize,
-    #[allow(dead_code)]
-    pub lines: usize,
-    pub reading_time_mins: usize,
-}
-
-/// 快速計算中英文統計字數與預估閱讀時間
-pub fn calculate_text_stats(text: &str) -> TextStats {
-    let mut cjk_chars = 0;
-    let mut words = 0;
-    let mut total_chars = 0;
-    let mut in_word = false;
-
-    for ch in text.chars() {
-        if !ch.is_whitespace() {
-            total_chars += 1;
-        }
-
-        // CJK 統一表意文字、注音、假名、諺文與常用 CJK 標點
-        let is_cjk = matches!(ch as u32,
-            0x4E00..=0x9FFF | // CJK 統一表意符號
-            0x3400..=0x4DBF | // CJK 擴展 A
-            0x20000..=0x2A6DF | // CJK 擴展 B
-            0x3040..=0x309F | // 日文平假名
-            0x30A0..=0x30FF | // 日文片假名
-            0xAC00..=0xD7AF | // 韓文音節
-            0x3100..=0x312F | // 注音符號
-            0x3000..=0x303F   // CJK 符號與標點
-        );
-
-        if is_cjk {
-            cjk_chars += 1;
-            if in_word {
-                words += 1;
-                in_word = false;
-            }
-        } else if ch.is_alphanumeric() {
-            in_word = true;
-        } else if in_word {
-            words += 1;
-            in_word = false;
-        }
-    }
-
-    if in_word {
-        words += 1;
-    }
-
-    let lines = text.lines().count();
-
-    // 閱讀時間計算：中文字約每分鐘 350 字，英文字約每分鐘 220 字
-    let total_reading_units = (cjk_chars as f32) + (words as f32) * 1.5;
-    let reading_time_mins = (total_reading_units / 350.0).ceil() as usize;
-
-    TextStats {
-        cjk_chars,
-        words,
-        total_chars,
-        lines,
-        reading_time_mins: reading_time_mins.max(1),
-    }
-}
-
-/// 將 Markdown 內容依照投影片分隔線 (`---` 或 `***` 或 `___`) 解析為獨立簡報頁面
-pub fn extract_slides(content: &str) -> Vec<String> {
-    if content.trim().is_empty() {
-        return vec!["# 📽 簡報模式\n\n此文件暫無內容。".to_string()];
-    }
-
-    let lines: Vec<&str> = content.lines().collect();
-    // 檢查並跳過開頭的 YAML frontmatter (--- ... ---)
-    let mut start_idx = 0;
-    if !lines.is_empty() && lines[0].trim() == "---" {
-        if let Some(pos) = lines[1..].iter().position(|l| l.trim() == "---") {
-            start_idx = pos + 2;
-        }
-    }
-
-    let mut slides = Vec::new();
-    let mut current_slide = Vec::new();
-
-    for line in &lines[start_idx..] {
-        let trimmed = line.trim();
-        // 判斷是否為投影片分隔線 (--- 或 *** 或 ___)
-        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-            let slide_text = current_slide.join("\n").trim().to_string();
-            if !slide_text.is_empty() {
-                slides.push(slide_text);
-            }
-            current_slide.clear();
-        } else {
-            current_slide.push(*line);
-        }
-    }
-
-    let last_slide = current_slide.join("\n").trim().to_string();
-    if !last_slide.is_empty() {
-        slides.push(last_slide);
-    }
-
-    if slides.is_empty() {
-        vec![content.trim().to_string()]
-    } else {
-        slides
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsers::{
+        calculate_text_stats, extract_markdown_toc, extract_slides, parse_csv_or_tsv,
+    };
 
     #[test]
     fn test_extract_markdown_toc() {
@@ -2704,11 +1597,15 @@ Thank you!
 
     #[test]
     fn test_parse_csv_and_tsv() {
-        let csv_data = "Name,Role,City\nAlice,\"Software Engineer, Lead\",Taipei\nBob,Designer,Tokyo";
+        let csv_data =
+            "Name,Role,City\nAlice,\"Software Engineer, Lead\",Taipei\nBob,Designer,Tokyo";
         let parsed_csv = parse_csv_or_tsv(csv_data, ',');
         assert_eq!(parsed_csv.headers, vec!["Name", "Role", "City"]);
         assert_eq!(parsed_csv.rows.len(), 2);
-        assert_eq!(parsed_csv.rows[0], vec!["Alice", "Software Engineer, Lead", "Taipei"]);
+        assert_eq!(
+            parsed_csv.rows[0],
+            vec!["Alice", "Software Engineer, Lead", "Taipei"]
+        );
         assert_eq!(parsed_csv.rows[1], vec!["Bob", "Designer", "Tokyo"]);
 
         let tsv_data = "ID\tScore\tGrade\n101\t95.5\tA+\n102\t88.0\tA";
@@ -2725,7 +1622,7 @@ Thank you!
         assert!(formatted.contains('\n'));
         assert!(formatted.contains("\"name\": \"flash-md\""));
 
-        let minified = minify_json(&formatted);
+        let minified = minify_json(&formatted).unwrap();
         assert!(!minified.contains('\n'));
         assert!(minified.contains("\"features\":[\"preview\",\"mindmap\"]"));
     }
@@ -2791,18 +1688,46 @@ Thank you!
     }
 
     #[test]
-    fn test_large_file_code_viewer_safety() {
-        // 模擬 10,000 行超大程式碼
-        let mut large_code = String::new();
-        for i in 0..10_000 {
-            large_code.push_str(&format!("const line_{} = 'value_{}';\n", i, i));
+    fn markdown_search_crosses_inline_styles_and_cached_code_blocks() {
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let renderer =
+                        MarkdownRenderer::new(AppTheme::Dark, 1.0, "hello", Some(1), None, None);
+                    let result = renderer.render(ui, "hel**lo**\n\n```rust\nlet hello = 1;\n```");
+                    assert_eq!(result.match_count, 2);
+                });
+            });
         }
+    }
 
-        let lines_count = syntect::util::LinesWithEndings::from(&large_code).count();
-        assert_eq!(lines_count, 10_000);
+    #[test]
+    fn code_cache_refreshes_same_length_edits_and_search_finds_beyond_preview() {
+        let ctx = egui::Context::default();
+        let large = "let a = 1;\n".repeat(3100) + "let needle = 2;\n";
+        for (code, query, expected) in [
+            ("let old = 1;", "old", 1),
+            ("let new = 1;", "old", 0),
+            (large.as_str(), "needle", 1),
+        ] {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    assert_eq!(
+                        render_code_viewer(
+                            ui,
+                            AppTheme::Dark,
+                            1.0,
+                            code,
+                            "rust",
+                            query,
+                            Some(0),
+                            false
+                        ),
+                        expected
+                    );
+                });
+            });
+        }
     }
 }
-
-
-
-

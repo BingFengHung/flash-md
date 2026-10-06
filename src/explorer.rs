@@ -1,25 +1,39 @@
 use log::{debug, info, warn};
 use std::path::PathBuf;
-use windows::core::{w, VARIANT};
+use windows::core::{PCWSTR, VARIANT};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, IDispatch, IServiceProvider, CLSCTX_LOCAL_SERVER,
-    COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IDispatch, IServiceProvider,
+    CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Shell::{
-    IFolderView, IShellBrowser, IShellFolderViewDual, IShellItemArray, IShellWindows, ShellWindows,
-    SHGetPathFromIDListW, SIGDN_FILESYSPATH, SVGIO_CHECKED, SVGIO_SELECTION, SWC_DESKTOP,
-    SWFO_NEEDDISPATCH,
+    IFolderView, IShellBrowser, IShellFolderViewDual, IShellItemArray, IShellWindows,
+    SHGetPathFromIDListW, ShellWindows, SIGDN_FILESYSPATH, SVGIO_CHECKED, SVGIO_SELECTION,
+    SWC_DESKTOP, SWFO_NEEDDISPATCH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow,
-    GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT, GUITHREADINFO,
-    HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE,
-    SW_SHOW,
+    GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT,
+    GUITHREADINFO, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, WS_EX_TOPMOST,
 };
 use windows_core::Interface;
+
+static APP_WINDOW_TITLE: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+
+pub fn set_app_window_title(title: &str) {
+    let _ = APP_WINDOW_TITLE.set(title.encode_utf16().chain(std::iter::once(0)).collect());
+}
+
+fn is_explorer_class(class: &str) -> bool {
+    matches!(class, "CabinetWClass" | "ShellTabWindowClass")
+}
+
+fn same_foreground_scope(candidate_root: isize, foreground_root: isize) -> bool {
+    foreground_root != 0 && candidate_root == foreground_root
+}
 
 static APP_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
@@ -35,7 +49,7 @@ pub fn get_app_hwnd() -> Option<HWND> {
     } else {
         // 嘗試以視窗標題尋找 flash-md HWND
         unsafe {
-            if let Ok(hwnd) = FindWindowW(None, w!("flash-md - 快捷鍵 Markdown 預覽")) {
+            if let Ok(hwnd) = FindWindowW(None, PCWSTR(APP_WINDOW_TITLE.get()?.as_ptr())) {
                 if hwnd.0 != 0 as _ {
                     APP_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
                     return Some(hwnd);
@@ -71,7 +85,8 @@ pub fn show_and_focus_app_window() {
             }
             let _ = BringWindowToTop(hwnd);
 
-            // 3. 瞬間切換為 TOPMOST 彈至最前端，再還原為一般層級
+            let was_topmost = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0;
+            // 3. 瞬間切換為 TOPMOST 彈至最前端，保留使用者原本的置頂狀態
             let _ = SetWindowPos(
                 hwnd,
                 HWND_TOPMOST,
@@ -83,7 +98,11 @@ pub fn show_and_focus_app_window() {
             );
             let _ = SetWindowPos(
                 hwnd,
-                HWND_NOTOPMOST,
+                if was_topmost {
+                    HWND_TOPMOST
+                } else {
+                    HWND_NOTOPMOST
+                },
                 0,
                 0,
                 0,
@@ -115,8 +134,11 @@ pub fn hide_app_window() {
 pub fn get_selected_file_from_explorer() -> Option<PathBuf> {
     unsafe {
         // 初始化 COM 元件 (STA 執行緒模式)
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_err() {
+            return None;
+        }
         let result = get_selected_file_internal();
+        CoUninitialize();
         result
     }
 }
@@ -150,26 +172,27 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
         class_str, root_class_str, foreground_hwnd, root_foreground
     );
 
-    // 建立 ShellWindows 實例
-    let shell_windows: IShellWindows = match CoCreateInstance(
-        &ShellWindows,
-        None,
-        CLSCTX_LOCAL_SERVER,
-    ) {
-        Ok(sw) => sw,
-        Err(e) => {
-            warn!("無法建立 IShellWindows: {:?}", e);
-            return None;
-        }
-    };
-
-    // 1. 如果前景為 Windows 桌面 (Progman 或 WorkerW 或 ShellWindow)
     let is_desktop = class_str == "Progman"
         || class_str == "WorkerW"
         || root_class_str == "Progman"
         || root_class_str == "WorkerW"
         || foreground_hwnd == shell_hwnd
         || root_foreground == shell_hwnd;
+    if !is_desktop && !is_explorer_class(&class_str) && !is_explorer_class(&root_class_str) {
+        return None;
+    }
+
+    // 建立 ShellWindows 實例
+    let shell_windows: IShellWindows =
+        match CoCreateInstance(&ShellWindows, None, CLSCTX_LOCAL_SERVER) {
+            Ok(sw) => sw,
+            Err(e) => {
+                warn!("無法建立 IShellWindows: {:?}", e);
+                return None;
+            }
+        };
+
+    // 1. 如果前景為 Windows 桌面 (Progman 或 WorkerW 或 ShellWindow)
 
     if is_desktop {
         debug!("前景為 Windows 桌面，嘗試查詢桌面選取項目...");
@@ -221,6 +244,11 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
             if let Ok(hwnd_val) = browser.HWND() {
                 let win_hwnd = HWND(hwnd_val.0 as _);
                 let root_win = GetAncestor(win_hwnd, GA_ROOT);
+                if !same_foreground_scope(root_win.0 as isize, root_foreground.0 as isize)
+                    && win_hwnd != foreground_hwnd
+                {
+                    continue;
+                }
                 let is_os_visible = IsWindowVisible(win_hwnd).as_bool();
 
                 let mut win_pid = 0u32;
@@ -229,11 +257,16 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
                 let mut score = 0;
 
                 // 1. 符合當前焦點控制項 (例如作用中分頁或焦點檔案清單)
-                if focus_hwnd.0 != 0 as _ && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd)) {
+                if focus_hwnd.0 != 0 as _
+                    && (win_hwnd == focus_hwnd || is_child_or_same(focus_hwnd, win_hwnd))
+                {
                     score += 2000;
                 }
                 // 2. 前景視窗或其子父視窗
-                if win_hwnd == foreground_hwnd || is_child_or_same(foreground_hwnd, win_hwnd) || is_child_or_same(win_hwnd, foreground_hwnd) {
+                if win_hwnd == foreground_hwnd
+                    || is_child_or_same(foreground_hwnd, win_hwnd)
+                    || is_child_or_same(win_hwnd, foreground_hwnd)
+                {
                     score += 1500;
                 }
                 // 3. 相同 Root 視窗 (同一個檔案總管視窗內部的分頁或父框架)
@@ -260,7 +293,7 @@ unsafe fn get_selected_file_internal() -> Option<PathBuf> {
     }
 
     // 依權重降冪排序，最符合前景焦點的視窗排在最前面
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
 
     for (score, item_disp) in &candidates {
         debug!("嘗試查詢候選視窗 (評分: {})...", score);
@@ -316,8 +349,10 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
     };
 
     // SID_STopLevelBrowser = {4C96BE40-915C-11CF-99D3-00AA004AE837}
-    let sid_s_top_level_browser = windows::core::GUID::from_u128(0x4C96BE40_915C_11CF_99D3_00AA004AE837);
-    let shell_browser: IShellBrowser = match service_provider.QueryService(&sid_s_top_level_browser) {
+    let sid_s_top_level_browser =
+        windows::core::GUID::from_u128(0x4C96BE40_915C_11CF_99D3_00AA004AE837);
+    let shell_browser: IShellBrowser = match service_provider.QueryService(&sid_s_top_level_browser)
+    {
         Ok(sb) => sb,
         Err(_) => return None,
     };
@@ -336,12 +371,19 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
                     if let Ok(array_count) = item_array.GetCount() {
                         for i in 0..array_count {
                             if let Ok(shell_item) = item_array.GetItemAt(i) {
-                                if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
-                                    if let Ok(raw_path) = display_name.to_string() {
+                                if let Ok(display_name) =
+                                    shell_item.GetDisplayName(SIGDN_FILESYSPATH)
+                                {
+                                    let raw_path = display_name.to_string();
+                                    CoTaskMemFree(Some(display_name.0 as _));
+                                    if let Ok(raw_path) = raw_path {
                                         if !raw_path.is_empty() {
                                             let path = normalize_explorer_path(&raw_path);
                                             if path.exists() {
-                                                info!("✅ [IFolderView Selection] 成功取得檔案: {:?}", path);
+                                                info!(
+                                                    "✅ [IFolderView Selection] 成功取得檔案: {:?}",
+                                                    path
+                                                );
                                                 return Some(path);
                                             }
                                         }
@@ -361,12 +403,19 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
                     if let Ok(array_count) = item_array.GetCount() {
                         for i in 0..array_count {
                             if let Ok(shell_item) = item_array.GetItemAt(i) {
-                                if let Ok(display_name) = shell_item.GetDisplayName(SIGDN_FILESYSPATH) {
-                                    if let Ok(raw_path) = display_name.to_string() {
+                                if let Ok(display_name) =
+                                    shell_item.GetDisplayName(SIGDN_FILESYSPATH)
+                                {
+                                    let raw_path = display_name.to_string();
+                                    CoTaskMemFree(Some(display_name.0 as _));
+                                    if let Ok(raw_path) = raw_path {
                                         if !raw_path.is_empty() {
                                             let path = normalize_explorer_path(&raw_path);
                                             if path.exists() {
-                                                info!("✅ [IFolderView Checked] 成功取得檔案: {:?}", path);
+                                                info!(
+                                                    "✅ [IFolderView Checked] 成功取得檔案: {:?}",
+                                                    path
+                                                );
                                                 return Some(path);
                                             }
                                         }
@@ -384,8 +433,13 @@ unsafe fn extract_via_shell_browser(disp: &IDispatch) -> Option<PathBuf> {
             if focused_index >= 0 {
                 if let Ok(pidl) = folder_view.Item(focused_index) {
                     let mut path_buf = [0u16; 260];
-                    if SHGetPathFromIDListW(pidl, &mut path_buf).as_bool() {
-                        let len = path_buf.iter().position(|&c| c == 0).unwrap_or(path_buf.len());
+                    let has_path = SHGetPathFromIDListW(pidl, &mut path_buf).as_bool();
+                    CoTaskMemFree(Some(pidl as _));
+                    if has_path {
+                        let len = path_buf
+                            .iter()
+                            .position(|&c| c == 0)
+                            .unwrap_or(path_buf.len());
                         let raw_path = String::from_utf16_lossy(&path_buf[..len]);
                         if !raw_path.is_empty() {
                             let path = normalize_explorer_path(&raw_path);
@@ -417,7 +471,10 @@ unsafe fn extract_from_folder_view_dual(folder_view: &IShellFolderViewDual) -> O
                             if !raw_path.is_empty() {
                                 let path = normalize_explorer_path(&raw_path);
                                 if path.exists() {
-                                    info!("✅ 成功自 SelectedItems 取得檔案: {:?} (原始: {})", path, raw_path);
+                                    info!(
+                                        "✅ 成功自 SelectedItems 取得檔案: {:?} (原始: {})",
+                                        path, raw_path
+                                    );
                                     return Some(path);
                                 }
                             }
@@ -432,7 +489,10 @@ unsafe fn extract_from_folder_view_dual(folder_view: &IShellFolderViewDual) -> O
                         let raw_path = path_bstr.to_string();
                         if !raw_path.is_empty() {
                             let path = normalize_explorer_path(&raw_path);
-                            info!("✅ 成功自 SelectedItems 取得項目: {:?} (原始: {})", path, raw_path);
+                            info!(
+                                "✅ 成功自 SelectedItems 取得項目: {:?} (原始: {})",
+                                path, raw_path
+                            );
                             return Some(path);
                         }
                     }
@@ -448,7 +508,10 @@ unsafe fn extract_from_folder_view_dual(folder_view: &IShellFolderViewDual) -> O
             if !raw_path.is_empty() {
                 let path = normalize_explorer_path(&raw_path);
                 if path.exists() {
-                    info!("✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})", path, raw_path);
+                    info!(
+                        "✅ 成功自 FocusedItem 取得檔案: {:?} (原始: {})",
+                        path, raw_path
+                    );
                     return Some(path);
                 }
             }
@@ -541,4 +604,18 @@ pub fn url_decode(input: &str) -> String {
         bytes.push(b);
     }
     String::from_utf8_lossy(&bytes).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn foreground_gate_rejects_other_apps_and_background_explorer_windows() {
+        assert!(is_explorer_class("CabinetWClass"));
+        assert!(is_explorer_class("ShellTabWindowClass"));
+        assert!(!is_explorer_class("Chrome_WidgetWin_1"));
+        assert!(!same_foreground_scope(123, 456));
+        assert!(!same_foreground_scope(0, 0));
+        assert!(same_foreground_scope(123, 123));
+    }
 }

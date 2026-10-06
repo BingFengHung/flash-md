@@ -1,15 +1,21 @@
+mod documents;
+mod shortcuts;
+mod updates;
+
 use crate::config::{AppConfig, SaveMode};
-use crate::explorer::{get_selected_file_from_explorer, hide_app_window, show_and_focus_app_window};
+use crate::document::{DocumentKind, PendingAction, UnsavedChoice};
+use crate::explorer::{hide_app_window, show_and_focus_app_window};
+use crate::files::{load_document, LoadedDocument};
 use crate::hotkey::HotkeyEvent;
 use crate::markdown::{
-    calculate_text_stats, get_image_badge, get_language_badge, is_code_extension,
-    is_image_extension, is_pdf_extension, render_code_viewer, MarkdownRenderer,
+    get_image_badge, get_language_badge, is_code_extension, is_image_extension, render_code_viewer,
+    MarkdownRenderer,
 };
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
 use crate::updater::{
-    check_latest_release, perform_self_update, restart_with_new_version,
-    CURRENT_VERSION, ReleaseInfo,
+    check_latest_release, perform_self_update, restart_with_new_version, ReleaseInfo, UpdateEvent,
+    CURRENT_VERSION,
 };
 use crate::views::status_bar::render_nav_button;
 use crate::watcher::{FileWatcher, WatcherEvent};
@@ -18,7 +24,6 @@ use egui::{
     Align, Color32, Context, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
     TextEdit, Vec2,
 };
-use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,7 +41,15 @@ pub enum ViewMode {
 }
 
 pub struct MdPreviewApp {
+    pub document_kind: DocumentKind,
+    pub pending_action: Option<PendingAction>,
+    pub close_confirmed: bool,
+    pub content_revision: u64,
+    pub search_match_count: usize,
+    pub search_jump_requested: bool,
+    pub siblings: Vec<PathBuf>,
     pub current_file: Option<PathBuf>,
+    pub watched_file: Option<PathBuf>,
     pub content: String,
     pub original_content: String,
     pub is_modified: bool,
@@ -72,8 +85,8 @@ pub struct MdPreviewApp {
 
     pub available_update: Option<ReleaseInfo>,
     pub is_updating: bool,
-    pub update_tx: Sender<Option<ReleaseInfo>>,
-    pub update_rx: Receiver<Option<ReleaseInfo>>,
+    pub update_tx: Sender<UpdateEvent>,
+    pub update_rx: Receiver<UpdateEvent>,
 
     pub file_watcher: FileWatcher,
     pub hotkey_rx: Receiver<HotkeyEvent>,
@@ -96,39 +109,31 @@ pub struct MdPreviewApp {
 }
 
 impl MdPreviewApp {
-    pub fn new(
-        cc: &eframe::CreationContext<'_>,
-        initial_file: Option<PathBuf>,
+    #[allow(clippy::too_many_arguments)]
+    fn empty(
+        config: AppConfig,
         is_standalone: bool,
+        visible: bool,
+        file_watcher: FileWatcher,
         hotkey_rx: Receiver<HotkeyEvent>,
         watcher_rx: Receiver<WatcherEvent>,
         tray_rx: Receiver<TrayMenuAction>,
-        file_watcher: FileWatcher,
         ctx_holder: Arc<Mutex<Option<Context>>>,
     ) -> Self {
-        // 註冊 egui Context 到全域 holder，供快捷鍵與系統匣隨時喚醒
-        if let Ok(mut guard) = ctx_holder.lock() {
-            *guard = Some(cc.egui_ctx.clone());
-        }
-
-        // 安裝 egui_extras 內建的所有圖片與 SVG 向量圖載入器
-        egui_extras::install_image_loaders(&cc.egui_ctx);
-
-        // 載入 Windows 繁體中文與 Emoji 系統字型 (徹底解決方塊字問題)
-        setup_system_cjk_fonts(&cc.egui_ctx);
-
-        let config = AppConfig::load();
         let theme = config.theme;
-        theme.apply_to_ctx(&cc.egui_ctx);
         let font_scale = config.font_scale;
         let always_on_top = config.always_on_top;
-
         let (update_tx, update_rx) = unbounded();
-
-        let is_visible = initial_file.is_some() || is_standalone;
-
-        let mut app = Self {
+        Self {
+            document_kind: DocumentKind::Text,
+            pending_action: None,
+            close_confirmed: false,
+            content_revision: 0,
+            search_match_count: 0,
+            search_jump_requested: false,
+            siblings: Vec::new(),
             current_file: None,
+            watched_file: None,
             content: String::new(),
             original_content: String::new(),
             is_modified: false,
@@ -147,7 +152,7 @@ impl MdPreviewApp {
             theme,
             font_scale,
             always_on_top,
-            visible: is_visible,
+            visible,
             is_standalone,
             search_open: false,
             search_query: String::new(),
@@ -177,21 +182,67 @@ impl MdPreviewApp {
             is_slides_fullscreen: false,
             mindmap_state: Default::default(),
             mindmap_root: None,
-        };
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        initial_file: Option<PathBuf>,
+        is_standalone: bool,
+        hotkey_rx: Receiver<HotkeyEvent>,
+        watcher_rx: Receiver<WatcherEvent>,
+        tray_rx: Receiver<TrayMenuAction>,
+        file_watcher: FileWatcher,
+        ctx_holder: Arc<Mutex<Option<Context>>>,
+    ) -> Self {
+        // 註冊 egui Context 到全域 holder，供快捷鍵與系統匣隨時喚醒
+        if let Ok(mut guard) = ctx_holder.lock() {
+            *guard = Some(cc.egui_ctx.clone());
+        }
+
+        // 安裝 egui_extras 內建的所有圖片與 SVG 向量圖載入器
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+
+        // 載入 Windows 繁體中文與 Emoji 系統字型 (徹底解決方塊字問題)
+        setup_system_cjk_fonts(&cc.egui_ctx);
+
+        let config = AppConfig::load();
+        let theme = config.theme;
+        theme.apply_to_ctx(&cc.egui_ctx);
+        let always_on_top = config.always_on_top;
+        cc.egui_ctx
+            .send_viewport_cmd(egui::ViewportCommand::WindowLevel(if always_on_top {
+                egui::WindowLevel::AlwaysOnTop
+            } else {
+                egui::WindowLevel::Normal
+            }));
+
+        let is_visible = initial_file.is_some() || is_standalone;
+        let mut app = Self::empty(
+            config,
+            is_standalone,
+            is_visible,
+            file_watcher,
+            hotkey_rx,
+            watcher_rx,
+            tray_rx,
+            ctx_holder.clone(),
+        );
 
         if !is_visible {
-            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Visible(false));
             hide_app_window();
         }
 
         // 啟動時在背景默默檢查是否有新版本發布
-        let bg_tx = update_tx.clone();
+        let bg_tx = app.update_tx.clone();
         let bg_ctx_holder = ctx_holder.clone();
         thread::spawn(move || {
             let rel = check_latest_release();
-            let has_update = rel.is_some();
-            let _ = bg_tx.send(rel);
-            if has_update {
+            let _ = bg_tx.send(UpdateEvent::Checked(rel));
+            {
                 if let Ok(guard) = bg_ctx_holder.lock() {
                     if let Some(ref ctx) = *guard {
                         ctx.request_repaint();
@@ -205,447 +256,6 @@ impl MdPreviewApp {
         }
 
         app
-    }
-
-    pub fn check_update_manually(&mut self) {
-        self.set_toast("正在檢查 GitHub 最新版本... ⏳".to_string());
-        let tx = self.update_tx.clone();
-        let ctx_holder = self.ctx_holder.clone();
-        thread::spawn(move || {
-            let rel = check_latest_release();
-            let _ = tx.send(rel);
-            if let Ok(guard) = ctx_holder.lock() {
-                if let Some(ref ctx) = *guard {
-                    ctx.request_repaint();
-                }
-            }
-        });
-    }
-
-    pub fn trigger_self_update(&mut self) {
-        if let Some(release) = self.available_update.clone() {
-            if self.is_updating {
-                return;
-            }
-            self.is_updating = true;
-            self.set_toast(format!("正在下載並自動升級至 {}... ⏳", release.tag_name));
-            let ctx_holder = self.ctx_holder.clone();
-            let current_file_path = self.current_file.clone();
-            let is_standalone = self.is_standalone;
-
-            thread::spawn(move || {
-                match perform_self_update(&release) {
-                    Ok(_) => {
-                        info!("更新完成！即將自動無縫重啟新版本...");
-                        if let Ok(guard) = ctx_holder.lock() {
-                            if let Some(ref ctx) = *guard {
-                                ctx.request_repaint();
-                            }
-                        }
-                        // 稍作緩衝讓介面完成最後繪製
-                        thread::sleep(Duration::from_millis(600));
-
-                        let mut args = Vec::new();
-                        if is_standalone {
-                            if let Some(ref p) = current_file_path {
-                                args.push(p.to_string_lossy().to_string());
-                            }
-                        }
-                        restart_with_new_version(&args);
-                        std::process::exit(0);
-                    }
-                    Err(e) => {
-                        error!("更新失敗: {}", e);
-                        if let Ok(guard) = ctx_holder.lock() {
-                            if let Some(ref ctx) = *guard {
-                                ctx.request_repaint();
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
-    pub fn load_file(&mut self, path: &Path) {
-        info!("嘗試載入檔案: {:?}", path);
-        self.reset_scroll_to_top = true;
-        self.current_scroll_offset = 0.0_f32;
-        self.search_match_index = 0;
-        self.target_scroll_offset = None;
-        self.target_anchor = None;
-        self.is_editing = false;
-        self.is_slides_mode = false;
-        self.current_slide_index = 0;
-        self.is_modified = false;
-        self.last_edit_instant = None;
-        self.mindmap_root = None;
-        self.mindmap_state = Default::default();
-
-        if path.is_dir() {
-            self.set_toast(format!("已選取資料夾: {:?}", path.file_name().unwrap_or_default()));
-            self.visible = true;
-            show_and_focus_app_window();
-            return;
-        }
-
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        if path.exists() {
-            if is_image_extension(&ext) {
-                if let Ok(bytes) = fs::read(path) {
-                    let path_str = path.to_string_lossy().to_string();
-                    let uri = format!("file:///{}", path_str.replace('\\', "/"));
-                    self.image_uri = Some(uri);
-                    self.image_bytes = Some(bytes.clone());
-                    self.image_zoom = 1.0;
-                    self.image_fit_mode = true;
-                    self.view_mode = ViewMode::Image { format: ext.clone() };
-
-                    if ext == "svg" {
-                        self.content = String::from_utf8_lossy(&bytes).to_string();
-                        self.original_content = self.content.clone();
-                        self.line_count = self.content.lines().count();
-                    } else {
-                        self.content.clear();
-                        self.original_content.clear();
-                        self.line_count = 0;
-                    }
-
-                    self.current_file = Some(path.to_path_buf());
-
-                    if let Ok(metadata) = fs::metadata(path) {
-                        let len = metadata.len();
-                        self.file_size_str = if len < 1024 {
-                            format!("{} B", len)
-                        } else if len < 1024 * 1024 {
-                            format!("{:.1} KB", len as f64 / 1024.0)
-                        } else {
-                            format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                        };
-
-                        if let Ok(mod_time) = metadata.modified() {
-                            let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
-                            self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
-                        }
-                    }
-
-                    self.file_watcher.watch_file(path);
-                    self.visible = true;
-                    show_and_focus_app_window();
-                    let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                    let (name, emoji) = get_image_badge(&ext);
-                    self.set_toast(format!("⚡ 已開啟: {} ({} {})", fname, emoji, name));
-                    return;
-                }
-            } else if is_pdf_extension(&ext) {
-                if let Ok(bytes) = fs::read(path) {
-                    if let Ok((pdf_md, page_count)) = crate::markdown::extract_text_from_pdf_bytes(&bytes) {
-                        self.image_uri = None;
-                        self.image_bytes = None;
-                        self.view_mode = ViewMode::Markdown;
-                        self.line_count = pdf_md.lines().count();
-                        self.content = pdf_md.clone();
-                        self.original_content = pdf_md;
-                        self.current_file = Some(path.to_path_buf());
-
-                        if let Ok(metadata) = fs::metadata(path) {
-                            let len = metadata.len();
-                            self.file_size_str = if len < 1024 {
-                                format!("{} B", len)
-                            } else if len < 1024 * 1024 {
-                                format!("{:.1} KB", len as f64 / 1024.0)
-                            } else {
-                                format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                            };
-
-                            if let Ok(mod_time) = metadata.modified() {
-                                let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
-                                self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
-                            }
-                        }
-
-                        self.file_watcher.watch_file(path);
-                        self.visible = true;
-                        show_and_focus_app_window();
-                        let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                        self.set_toast(format!("⚡ 已開啟 PDF 快速文字預覽: {} (共 {} 頁)", fname, page_count));
-                        return;
-                    }
-                }
-            } else if let Ok(text) = fs::read_to_string(path) {
-                self.image_uri = None;
-                self.image_bytes = None;
-                if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
-                    self.view_mode = ViewMode::Markdown;
-                } else if ext == "csv" {
-                    self.view_mode = ViewMode::Table { separator: ',' };
-                } else if ext == "tsv" {
-                    self.view_mode = ViewMode::Table { separator: '\t' };
-                } else if is_code_extension(&ext) {
-                    self.view_mode = ViewMode::Code { lang: ext.clone() };
-                } else {
-                    self.view_mode = ViewMode::PlainText;
-                }
-
-                self.line_count = text.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1;
-                self.content = text;
-                self.original_content = self.content.clone();
-                self.current_file = Some(path.to_path_buf());
-
-                if let Ok(metadata) = fs::metadata(path) {
-                    let len = metadata.len();
-                    self.file_size_str = if len < 1024 {
-                        format!("{} B", len)
-                    } else if len < 1024 * 1024 {
-                        format!("{:.1} KB", len as f64 / 1024.0)
-                    } else {
-                        format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                    };
-
-                    if let Ok(mod_time) = metadata.modified() {
-                        let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
-                        self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
-                    }
-                }
-
-                self.file_watcher.watch_file(path);
-                self.visible = true;
-                show_and_focus_app_window();
-                let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-                let mode_desc = match self.view_mode {
-                    ViewMode::Markdown => "Markdown 渲染".to_string(),
-                    ViewMode::Mindmap => "🧠 心智圖模式".to_string(),
-                    ViewMode::Table { separator } => {
-                        if separator == '\t' {
-                            "TSV 資料表格 📊".to_string()
-                        } else {
-                            "CSV 資料表格 📊".to_string()
-                        }
-                    }
-                    ViewMode::Code { ref lang } => {
-                        let (name, emoji) = get_language_badge(lang);
-                        format!("{} {} 語法高亮", emoji, name)
-                    }
-                    ViewMode::PlainText => "純文字模式".to_string(),
-                    ViewMode::Image { ref format } => format!("{} 圖片預覽", format),
-                };
-                self.set_toast(format!("⚡ 已開啟: {} ({})", fname, mode_desc));
-                return;
-            }
-        }
-
-        let path_str = path.to_string_lossy().to_string();
-        if let Some(zip_idx) = path_str.to_lowercase().find(".zip\\") {
-            let zip_file_part = &path_str[..zip_idx + 4];
-            let inner_entry = &path_str[zip_idx + 5..];
-            let zip_path = PathBuf::from(zip_file_part);
-
-            if zip_path.is_file() {
-                let inner_entry_str = inner_entry.replace('\\', "/");
-                let inner_ext = Path::new(&inner_entry_str)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-
-                if is_image_extension(&inner_ext) {
-                    if let Ok(bytes) = read_bytes_from_zip(&zip_path, &inner_entry_str) {
-                        let uri = format!("bytes://{}", inner_entry_str);
-                        self.image_uri = Some(uri);
-                        self.image_bytes = Some(bytes.clone());
-                        self.image_zoom = 1.0;
-                        self.image_fit_mode = true;
-                        self.view_mode = ViewMode::Image { format: inner_ext.clone() };
-
-                        if inner_ext == "svg" {
-                            self.content = String::from_utf8_lossy(&bytes).to_string();
-                            self.original_content = self.content.clone();
-                            self.line_count = self.content.lines().count();
-                        } else {
-                            self.content.clear();
-                            self.original_content.clear();
-                            self.line_count = 0;
-                        }
-
-                        let len = bytes.len();
-                        self.file_size_str = if len < 1024 {
-                            format!("{} B", len)
-                        } else if len < 1024 * 1024 {
-                            format!("{:.1} KB", len as f64 / 1024.0)
-                        } else {
-                            format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                        };
-                        self.last_modified_str = "ZIP 壓縮檔".to_string();
-                        self.current_file = Some(path.to_path_buf());
-                        self.visible = true;
-                        show_and_focus_app_window();
-
-                        let fname = Path::new(&inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(&inner_entry_str);
-                        let (name, emoji) = get_image_badge(&inner_ext);
-                        self.set_toast(format!("⚡ 已自 ZIP 即時預覽: {} ({} {}) 📦", fname, emoji, name));
-                        return;
-                    }
-                } else if is_pdf_extension(&inner_ext) {
-                    if let Ok(bytes) = read_bytes_from_zip(&zip_path, &inner_entry_str) {
-                        if let Ok((pdf_md, page_count)) = crate::markdown::extract_text_from_pdf_bytes(&bytes) {
-                            self.image_uri = None;
-                            self.image_bytes = None;
-                            self.view_mode = ViewMode::Markdown;
-                            self.line_count = pdf_md.lines().count();
-                            self.content = pdf_md.clone();
-                            self.original_content = pdf_md;
-                            let len = bytes.len();
-                            self.file_size_str = if len < 1024 {
-                                format!("{} B", len)
-                            } else if len < 1024 * 1024 {
-                                format!("{:.1} KB", len as f64 / 1024.0)
-                            } else {
-                                format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                            };
-                            self.last_modified_str = "ZIP 壓縮檔".to_string();
-                            self.current_file = Some(path.to_path_buf());
-                            self.visible = true;
-                            show_and_focus_app_window();
-
-                            let fname = Path::new(&inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(&inner_entry_str);
-                            self.set_toast(format!("⚡ 已自 ZIP 預覽 PDF: {} (共 {} 頁) 📦", fname, page_count));
-                            return;
-                        }
-                    }
-                } else {
-                    if let Ok(bytes) = read_bytes_from_zip(&zip_path, &inner_entry_str) {
-                        self.image_uri = None;
-                        self.image_bytes = None;
-                        let text = String::from_utf8_lossy(&bytes).to_string();
-                        if matches!(inner_ext.as_str(), "md" | "markdown" | "mdown" | "mkd") {
-                            self.view_mode = ViewMode::Markdown;
-                        } else if inner_ext == "csv" {
-                            self.view_mode = ViewMode::Table { separator: ',' };
-                        } else if inner_ext == "tsv" {
-                            self.view_mode = ViewMode::Table { separator: '\t' };
-                        } else if is_code_extension(&inner_ext) {
-                            self.view_mode = ViewMode::Code { lang: inner_ext.clone() };
-                        } else {
-                            self.view_mode = ViewMode::PlainText;
-                        }
-
-                        self.line_count = text.lines().count();
-                        let len = text.len();
-                        self.file_size_str = if len < 1024 {
-                            format!("{} B", len)
-                        } else if len < 1024 * 1024 {
-                            format!("{:.1} KB", len as f64 / 1024.0)
-                        } else {
-                            format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                        };
-                        self.last_modified_str = "ZIP 壓縮檔".to_string();
-                        self.content = text.clone();
-                        self.original_content = text;
-                        self.current_file = Some(path.to_path_buf());
-                        self.visible = true;
-                        show_and_focus_app_window();
-
-                        let fname = Path::new(&inner_entry_str).file_name().and_then(|f| f.to_str()).unwrap_or(&inner_entry_str);
-                        self.set_toast(format!("⚡ 已自 ZIP 即時預覽: {} 📦", fname));
-                        return;
-                    }
-                }
-            }
-        }
-
-        error!("無法開啟檔案 {:?}", path);
-        self.set_toast(format!("無法開啟檔案: {:?}", path.file_name().unwrap_or_default()));
-        self.visible = true;
-        show_and_focus_app_window();
-    }
-
-    pub fn save_current_file(&mut self, is_auto: bool) {
-        if let Some(ref path) = self.current_file {
-            if path.exists() {
-                match fs::write(path, &self.content) {
-                    Ok(_) => {
-                        self.original_content = self.content.clone();
-                        self.is_modified = false;
-                        self.line_count = self.content.lines().count();
-                        if let Ok(metadata) = fs::metadata(path) {
-                            let len = metadata.len();
-                            self.file_size_str = if len < 1024 {
-                                format!("{} B", len)
-                            } else if len < 1024 * 1024 {
-                                format!("{:.1} KB", len as f64 / 1024.0)
-                            } else {
-                                format!("{:.2} MB", len as f64 / (1024.0 * 1024.0))
-                            };
-                            if let Ok(mod_time) = metadata.modified() {
-                                let datetime: chrono::DateTime<chrono::Local> = mod_time.into();
-                                self.last_modified_str = datetime.format("%Y-%m-%d %H:%M").to_string();
-                            }
-                        }
-                        if is_auto {
-                            self.set_toast("💾 已自動防抖保存".to_string());
-                        } else {
-                            self.set_toast("💾 檔案已成功保存！".to_string());
-                        }
-                    }
-                    Err(e) => {
-                        self.set_toast(format!("❌ 保存檔案失敗: {}", e));
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn toggle_edit_mode(&mut self) {
-        if matches!(self.view_mode, ViewMode::Image { .. }) && self.content.is_empty() {
-            self.set_toast("ℹ 二進制圖片不支援文字編輯".to_string());
-            return;
-        }
-        self.is_editing = !self.is_editing;
-        if self.is_editing {
-            self.set_toast("✏ 已進入全螢幕就地編輯模式 (Ctrl+S 保存，E 退出)".to_string());
-        } else {
-            self.set_toast("👁 已切換至美化預覽模式".to_string());
-        }
-    }
-
-    fn render_editor(&mut self, ui: &mut egui::Ui) {
-        let out = crate::views::editor::render_editor(ui, self.theme, self.font_scale, &mut self.content);
-        if out.changed {
-            self.line_count = out.new_line_count;
-            self.is_modified = self.content != self.original_content;
-            self.last_edit_instant = Some(std::time::Instant::now());
-        }
-    }
-
-    fn render_slides_mode(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
-        let out = crate::views::presentation::render_slides_mode(
-            ui,
-            self.theme,
-            self.font_scale,
-            &self.content,
-            base_dir,
-            &mut self.current_slide_index,
-            self.is_slides_fullscreen,
-        );
-
-        if out.toggle_fullscreen {
-            self.is_slides_fullscreen = !self.is_slides_fullscreen;
-            self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
-        }
-        if out.exit_slides {
-            self.is_slides_mode = false;
-            if self.is_slides_fullscreen {
-                self.is_slides_fullscreen = false;
-                self.set_fullscreen_state(ctx, false);
-            }
-            self.set_toast("👁 已退出簡報投影模式".to_string());
-        }
     }
 
     /// 安全切換全螢幕狀態並強制維護 Windows 前景層級 (避免 Windows 樣式轉移時視窗掉落至檔案總管背後)
@@ -664,699 +274,19 @@ impl MdPreviewApp {
         ctx.request_repaint();
     }
 
-    pub fn reload_current_file(&mut self) {
-        if self.is_modified {
-            return;
-        }
-        if let Some(path) = self.current_file.clone() {
-            if let Ok(text) = fs::read_to_string(&path) {
-                self.line_count = text.lines().count();
-                self.content = text.clone();
-                self.original_content = text;
-                self.is_modified = false;
-                self.set_toast("檔案已自動即時同步更新 ⚡".to_string());
-            }
-        }
-    }
-
-    pub fn handle_hotkey_preview(&mut self, maybe_path: Option<PathBuf>) {
-        // 若事件未帶路徑，嘗試二次即時查詢檔案總管
-        let target_path = maybe_path.or_else(get_selected_file_from_explorer);
-
-        if let Some(selected_path) = target_path {
-            info!("快捷鍵觸發，載入檔案: {:?}", selected_path);
-            if self.visible && self.current_file.as_deref() == Some(&selected_path) {
-                // 如果已經在預覽同一檔案且視窗開啟中，則隱藏 (Quick Look 體驗)
-                self.visible = false;
-                hide_app_window();
-            } else {
-                self.load_file(&selected_path);
-                self.visible = true;
-                show_and_focus_app_window();
-            }
-        } else {
-            // 沒有在檔案總管選取特定檔案
-            if self.visible {
-                // 若當前已經開啟，再次按下快捷鍵則隱藏收起視窗
-                self.visible = false;
-                hide_app_window();
-            } else {
-                // 若為隱藏狀態，且沒有選取任何檔案，重置為純淨的空狀態 (絕不殘留舊檔案！)
-                self.current_file = None;
-                self.content.clear();
-                self.image_uri = None;
-                self.image_bytes = None;
-                self.line_count = 0;
-                self.file_size_str.clear();
-                self.last_modified_str.clear();
-                self.visible = true;
-                show_and_focus_app_window();
-                self.set_toast("⚡ 已開啟 flash-md！(在檔案總管點選檔案後按 Alt+Space 可直接預覽)".to_string());
-            }
-        }
-    }
-
     pub fn set_toast(&mut self, msg: String) {
         self.status_toast = Some((msg, std::time::Instant::now()));
     }
 
     /// 切換至同目錄下的上一個 / 下一個檔案 (依檔名自然排序)
-    pub fn navigate_sibling_file(&mut self, forward: bool) {
-        let current_path = match self.current_file.clone() {
-            Some(p) => p,
-            None => return,
-        };
-
-        let parent_dir = match current_path.parent() {
-            Some(p) if p.exists() => p,
-            _ => return,
-        };
-
-        // 讀取同目錄下的所有實體檔案
-        let mut files: Vec<PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(parent_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        // 排除隱藏檔與暫存檔
-                        if !name.starts_with('.') && !name.starts_with("~$") {
-                            files.push(path);
-                        }
-                    }
-                }
-            }
-        }
-
-        if files.is_empty() {
-            return;
-        }
-
-        // 依檔名不分大小寫排序
-        files.sort_by(|a, b| {
-            let name_a = a.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-            let name_b = b.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-            name_a.cmp(&name_b)
-        });
-
-        let current_idx = files.iter().position(|p| p == &current_path);
-
-        let target_idx = match current_idx {
-            Some(idx) => {
-                if forward {
-                    if idx + 1 < files.len() {
-                        idx + 1
-                    } else {
-                        0 // 循環至第一筆
-                    }
-                } else {
-                    if idx > 0 {
-                        idx - 1
-                    } else {
-                        files.len() - 1 // 循環至最後一筆
-                    }
-                }
-            }
-            None => 0,
-        };
-
-        if let Some(target_path) = files.get(target_idx) {
-            let target_path_clone = target_path.clone();
-            let total_count = files.len();
-            let display_idx = target_idx + 1;
-
-            self.load_file(&target_path_clone);
-
-            let file_name = target_path_clone
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            self.set_toast(format!("[{}/{}] ⚡ 已切換: {}", display_idx, total_count, file_name));
-        }
-    }
-
-    /// 取得當前檔案在同目錄下的序號資訊，例如 (3, 18) 代表第 3 個，共 18 個檔案
-    pub fn get_sibling_info(&self) -> Option<(usize, usize)> {
-        let current_path = self.current_file.as_ref()?;
-        let parent_dir = current_path.parent()?;
-        if !parent_dir.exists() {
-            return None;
-        }
-
-        let mut files: Vec<PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(parent_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if !name.starts_with('.') && !name.starts_with("~$") {
-                            files.push(path);
-                        }
-                    }
-                }
-            }
-        }
-
-        if files.is_empty() {
-            return None;
-        }
-
-        files.sort_by(|a, b| {
-            let name_a = a.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-            let name_b = b.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-            name_a.cmp(&name_b)
-        });
-
-        let idx = files.iter().position(|p| p == current_path)?;
-        Some((idx + 1, files.len()))
-    }
-
-    /// 取得目前文字中符合搜尋關鍵字的所有出現行號清單
-    pub fn get_search_matches(&self) -> Vec<usize> {
-        let q = self.search_query.trim();
-        if q.is_empty() || self.content.is_empty() {
-            return Vec::new();
-        }
-        let q_lower = q.to_lowercase();
-        let mut matches = Vec::new();
-        for (line_idx, line) in self.content.lines().enumerate() {
-            let line_lower = line.to_lowercase();
-            let mut start = 0;
-            while let Some(pos) = line_lower[start..].find(&q_lower) {
-                matches.push(line_idx);
-                start += pos + q_lower.len();
-            }
-        }
-        matches
-    }
-
-    /// 依方向導航搜尋結果 (next: true 為下一筆，false 為上一筆)
-    pub fn navigate_search_match(&mut self, next: bool) {
-        let matches = self.get_search_matches();
-        if matches.is_empty() {
-            return;
-        }
-
-        if next {
-            self.search_match_index = (self.search_match_index + 1) % matches.len();
-        } else {
-            self.search_match_index = if self.search_match_index == 0 {
-                matches.len() - 1
-            } else {
-                self.search_match_index - 1
-            };
-        }
-
-        let target_line = matches[self.search_match_index];
-        self.scroll_to_line(target_line);
-    }
-
-    /// 將視圖滾動至指定行號並居中
-    pub fn scroll_to_line(&mut self, line_idx: usize) {
-        let line_height = match self.view_mode {
-            ViewMode::Markdown => 24.0 * self.font_scale,
-            ViewMode::Table { .. } => 26.0 * self.font_scale,
-            ViewMode::Code { .. } => 21.0 * self.font_scale,
-            ViewMode::PlainText => 22.0 * self.font_scale,
-            ViewMode::Mindmap | ViewMode::Image { .. } => return,
-        };
-
-        let target_y = (line_idx as f32) * line_height;
-        // 預留頂部 180px 空間，使搜尋結果落在視窗上半部黃金視覺區域
-        let target_offset = (target_y - 180.0).max(0.0);
-        self.target_scroll_offset = Some(target_offset);
-    }
-
-    fn open_file_dialog(&mut self) {
-        if let Some(path) = rfd_open_file() {
-            self.load_file(&path);
-        }
-    }
-
-    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let input = ctx.input(|i| i.clone());
-
-        // ESC: 隱藏或關閉視窗 (若簡報模式/設定/搜尋列/編輯模式開啟則優先關閉或退出)
-        if input.key_pressed(egui::Key::Escape) {
-            if self.is_slides_mode {
-                self.is_slides_mode = false;
-                if self.is_slides_fullscreen {
-                    self.is_slides_fullscreen = false;
-                    self.set_fullscreen_state(ctx, false);
-                }
-                self.set_toast("👁 已退出簡報投影模式".to_string());
-            } else if self.settings_open {
-                self.settings_open = false;
-            } else if self.is_editing {
-                self.is_editing = false;
-                self.set_toast("👁 已退出編輯模式，回到預覽".to_string());
-            } else if self.search_open {
-                self.search_open = false;
-                self.search_query.clear();
-                self.search_match_index = 0;
-            } else if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
-                self.set_fullscreen_state(ctx, false);
-                self.set_toast("🗗 已退出全螢幕模式".to_string());
-            } else {
-                self.visible = false;
-                hide_app_window();
-                if self.is_standalone {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-        }
-
-        // Ctrl + S: 手動保存檔案
-        if input.modifiers.command && input.key_pressed(egui::Key::S) {
-            self.save_current_file(false);
-        }
-
-        // Ctrl + E: 切換就地編輯模式與預覽模式
-        if input.modifiers.command && input.key_pressed(egui::Key::E) {
-            self.toggle_edit_mode();
-        }
-
-        // F3 / Shift + F3: 搜尋結果上一筆 / 下一筆跳轉
-        if input.key_pressed(egui::Key::F3) {
-            if !self.search_open {
-                self.search_open = true;
-                self.search_focus_requested = true;
-            } else if input.modifiers.shift {
-                self.navigate_search_match(false);
-            } else {
-                self.navigate_search_match(true);
-            }
-        }
-
-        // 鍵盤導航與平滑捲動操作 (非文字編輯/搜尋輸入/簡報模式下觸發)
-        if !self.is_editing && !self.search_open && !self.is_slides_mode {
-            // E: 就地編輯模式切換快速鍵
-            if input.key_pressed(egui::Key::E) && !input.modifiers.command && !input.modifiers.alt {
-                self.toggle_edit_mode();
-            }
-            // / : Vim 搜尋快捷鍵 (開啟搜尋並聚焦輸入框)
-            if input.key_pressed(egui::Key::Slash) {
-                self.search_open = true;
-                self.search_focus_requested = true;
-            }
-
-            // n / N : Vim 搜尋跳轉 (n 下一筆，N / Shift+n 上一筆)
-            if input.key_pressed(egui::Key::N) && !input.modifiers.command && !input.modifiers.alt {
-                if input.modifiers.shift {
-                    self.navigate_search_match(false);
-                } else {
-                    self.navigate_search_match(true);
-                }
-            }
-
-            // ← / → 或 h / l (Vim): 切換同目錄上一個 / 下一個檔案
-            if self.current_file.is_some() {
-                if input.key_pressed(egui::Key::ArrowLeft)
-                    || (input.key_pressed(egui::Key::H) && !input.modifiers.command && !input.modifiers.alt)
-                {
-                    self.navigate_sibling_file(false);
-                } else if input.key_pressed(egui::Key::ArrowRight)
-                    || (input.key_pressed(egui::Key::L) && !input.modifiers.command && !input.modifiers.alt)
-                {
-                    self.navigate_sibling_file(true);
-                }
-            }
-
-            // ↑ / ↓ 或 j / k (Vim): 捲動瀏覽當前文件內容 (支援單擊、長按連續平滑捲動、Vim g/G 置頂置底、PageUp/PageDown/Space 翻頁)
-            let mut is_down = input.key_pressed(egui::Key::ArrowDown) || input.key_down(egui::Key::ArrowDown);
-            let mut is_up = input.key_pressed(egui::Key::ArrowUp) || input.key_down(egui::Key::ArrowUp);
-            let mut is_j = (input.key_pressed(egui::Key::J) || input.key_down(egui::Key::J)) && !input.modifiers.command && !input.modifiers.alt && !input.modifiers.shift;
-            let mut is_k = (input.key_pressed(egui::Key::K) || input.key_down(egui::Key::K)) && !input.modifiers.command && !input.modifiers.alt && !input.modifiers.shift;
-            let mut is_g = input.key_pressed(egui::Key::G) && !input.modifiers.command && !input.modifiers.alt && !input.modifiers.shift;
-            let mut is_big_g = (input.key_pressed(egui::Key::G) && input.modifiers.shift && !input.modifiers.command && !input.modifiers.alt)
-                || input.key_pressed(egui::Key::End);
-            let mut is_page_down = input.key_pressed(egui::Key::PageDown) || (input.modifiers.command && input.key_pressed(egui::Key::D));
-            let mut is_page_up = input.key_pressed(egui::Key::PageUp) || (input.modifiers.command && input.key_pressed(egui::Key::U));
-            let mut is_space = input.key_pressed(egui::Key::Space) && !input.modifiers.alt && !input.modifiers.command;
-            let is_shift = input.modifiers.shift;
-
-            // 雙重保險：檢查所有原始輸入事件 (Text events 如使用者鍵入 'j', 'k', 'g', 'G')
-            for ev in &input.events {
-                match ev {
-                    egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                        if !modifiers.command && !modifiers.alt {
-                            if *key == egui::Key::ArrowDown { is_down = true; }
-                            if *key == egui::Key::ArrowUp { is_up = true; }
-                            if *key == egui::Key::J && !modifiers.shift { is_j = true; }
-                            if *key == egui::Key::K && !modifiers.shift { is_k = true; }
-                            if *key == egui::Key::G && !modifiers.shift { is_g = true; }
-                            if *key == egui::Key::G && modifiers.shift { is_big_g = true; }
-                            if *key == egui::Key::PageDown { is_page_down = true; }
-                            if *key == egui::Key::PageUp { is_page_up = true; }
-                            if *key == egui::Key::Home { is_g = true; }
-                            if *key == egui::Key::End { is_big_g = true; }
-                        }
-                    }
-                    egui::Event::Text(s) => {
-                        if !input.modifiers.command && !input.modifiers.alt {
-                            if s == "j" { is_j = true; }
-                            if s == "k" { is_k = true; }
-                            if s == "g" { is_g = true; }
-                            if s == "G" { is_big_g = true; }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            let mut scroll_triggered = false;
-
-            if input.key_pressed(egui::Key::Home) || is_g {
-                // 置頂
-                self.current_scroll_offset = 0.0_f32;
-                self.target_scroll_offset = Some(0.0_f32);
-                self.reset_scroll_to_top = true;
-                scroll_triggered = true;
-            } else if is_big_g {
-                // 置底
-                self.current_scroll_offset = 999999.0_f32;
-                self.target_scroll_offset = Some(999999.0_f32);
-                scroll_triggered = true;
-            } else if is_down || is_j {
-                // 向下捲動 (單行)
-                let step = 48.0_f32 * self.font_scale;
-                self.current_scroll_offset += step;
-                self.target_scroll_offset = Some(self.current_scroll_offset);
-                scroll_triggered = true;
-            } else if is_up || is_k {
-                // 向上捲動 (單行)
-                let step = 48.0_f32 * self.font_scale;
-                self.current_scroll_offset = (self.current_scroll_offset - step).max(0.0_f32);
-                self.target_scroll_offset = Some(self.current_scroll_offset);
-                scroll_triggered = true;
-            } else if is_page_down {
-                // 向下翻頁
-                let step = 420.0_f32 * self.font_scale;
-                self.current_scroll_offset += step;
-                self.target_scroll_offset = Some(self.current_scroll_offset);
-                scroll_triggered = true;
-            } else if is_page_up {
-                // 向上翻頁
-                let step = 420.0_f32 * self.font_scale;
-                self.current_scroll_offset = (self.current_scroll_offset - step).max(0.0_f32);
-                self.target_scroll_offset = Some(self.current_scroll_offset);
-                scroll_triggered = true;
-            } else if is_space {
-                // 空白鍵翻頁
-                let step = 420.0_f32 * self.font_scale;
-                if is_shift {
-                    self.current_scroll_offset = (self.current_scroll_offset - step).max(0.0_f32);
-                } else {
-                    self.current_scroll_offset += step;
-                }
-                self.target_scroll_offset = Some(self.current_scroll_offset);
-                scroll_triggered = true;
-            }
-
-            if scroll_triggered {
-                ctx.request_repaint();
-            }
-        }
-
-        // F5 或 P: 切換全螢幕簡報投影模式 (非編輯/搜尋輸入狀態下)
-        if !self.is_editing && !self.search_open && matches!(self.view_mode, ViewMode::Markdown) {
-            if input.key_pressed(egui::Key::F5)
-                || (input.key_pressed(egui::Key::P) && !input.modifiers.command && !input.modifiers.alt && !ctx.wants_keyboard_input())
-                || (input.modifiers.command && input.key_pressed(egui::Key::P))
-            {
-                self.is_slides_mode = !self.is_slides_mode;
-                if self.is_slides_mode {
-                    self.current_slide_index = 0;
-                    self.is_slides_fullscreen = true;
-                    self.set_fullscreen_state(ctx, true);
-                    self.set_toast("📽 已進入全螢幕簡報投影模式 (F5/Esc 退出，左右鍵翻頁)".to_string());
-                } else {
-                    if self.is_slides_fullscreen {
-                        self.is_slides_fullscreen = false;
-                        self.set_fullscreen_state(ctx, false);
-                    }
-                    self.set_toast("👁 已退出簡報投影模式".to_string());
-                }
-            }
-        }
-
-        // 簡報投影模式專屬鍵盤導航 (左右/Page/Space/Enter/翻頁/全螢幕)
-        if self.is_slides_mode {
-            let total_slides = crate::markdown::extract_slides(&self.content).len();
-            if input.key_pressed(egui::Key::ArrowRight)
-                || input.key_pressed(egui::Key::PageDown)
-                || input.key_pressed(egui::Key::Space)
-                || input.key_pressed(egui::Key::Enter)
-                || (input.key_pressed(egui::Key::L) && !input.modifiers.command && !input.modifiers.alt)
-            {
-                if self.current_slide_index + 1 < total_slides {
-                    self.current_slide_index += 1;
-                    ctx.request_repaint();
-                }
-            }
-            if input.key_pressed(egui::Key::ArrowLeft)
-                || input.key_pressed(egui::Key::PageUp)
-                || input.key_pressed(egui::Key::Backspace)
-                || (input.key_pressed(egui::Key::H) && !input.modifiers.command && !input.modifiers.alt)
-            {
-                if self.current_slide_index > 0 {
-                    self.current_slide_index -= 1;
-                    ctx.request_repaint();
-                }
-            }
-            if input.key_pressed(egui::Key::Home) {
-                self.current_slide_index = 0;
-                ctx.request_repaint();
-            }
-            if input.key_pressed(egui::Key::End) {
-                self.current_slide_index = total_slides.saturating_sub(1);
-                ctx.request_repaint();
-            }
-            if input.key_pressed(egui::Key::F) && !input.modifiers.command && !input.modifiers.alt {
-                self.is_slides_fullscreen = !self.is_slides_fullscreen;
-                self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
-            }
-        }
-
-        // F11: 全域切換全螢幕模式 (一般預覽與簡報模式均支援)
-        if input.key_pressed(egui::Key::F11) {
-            if self.is_slides_mode {
-                self.is_slides_fullscreen = !self.is_slides_fullscreen;
-                self.set_fullscreen_state(ctx, self.is_slides_fullscreen);
-            } else {
-                let is_fs = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                let next_fs = !is_fs;
-                self.set_fullscreen_state(ctx, next_fs);
-                self.set_toast(if next_fs { "⛶ 已進入全螢幕模式 (F11 退出)".to_string() } else { "🗗 已退出全螢幕模式".to_string() });
-            }
-        }
-
-        // Ctrl + F: 啟動搜尋列並自動聚焦輸入框
-        if input.modifiers.command && input.key_pressed(egui::Key::F) {
-            if !self.search_open {
-                self.search_open = true;
-            }
-            self.search_focus_requested = true;
-        }
-
-        // Ctrl + T: 開啟/收起 Markdown 目錄大綱側邊欄
-        if input.modifiers.command && input.key_pressed(egui::Key::T) {
-            if matches!(self.view_mode, ViewMode::Markdown) {
-                self.toc_open = !self.toc_open;
-                self.set_toast(if self.toc_open { "已開啟目錄大綱 📑".to_string() } else { "已收起目錄大綱".to_string() });
-            }
-        }
-
-        // F6: 快速切換 Markdown 與 互動心智圖模式
-        if !self.is_editing && input.key_pressed(egui::Key::F6) {
-            if matches!(self.view_mode, ViewMode::Mindmap) {
-                self.view_mode = ViewMode::Markdown;
-                self.set_toast("已切換回 Markdown 渲染模式 📄".to_string());
-            } else if matches!(self.view_mode, ViewMode::Markdown) && !self.content.is_empty() {
-                self.view_mode = ViewMode::Mindmap;
-                self.set_toast("已切換至 🧠 互動心智圖模式".to_string());
-            }
-        }
-
-        // Ctrl + Shift + O: 在 Windows 檔案總管中高亮定位目前檔案
-        if input.modifiers.command && input.modifiers.shift && input.key_pressed(egui::Key::O) {
-            self.locate_current_file_in_explorer();
-        }
-
-        // Ctrl + O: 在外部預設編輯器開啟
-        if input.modifiers.command && !input.modifiers.shift && input.key_pressed(egui::Key::O) {
-            if let Some(ref path) = self.current_file {
-                let _ = open::that(path);
-            }
-        }
-
-        // Ctrl + M: 切換 Markdown 預覽 / 程式碼語法高亮 / 斑馬紋表格 / 純文字模式 / 圖片檢視模式
-        if input.modifiers.command && input.key_pressed(egui::Key::M) {
-            let ext = self
-                .current_file
-                .as_ref()
-                .and_then(|p| p.extension())
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-
-            self.view_mode = match self.view_mode {
-                ViewMode::Markdown => {
-                    if matches!(ext.as_str(), "md" | "markdown" | "mdown" | "mkdn") || (!self.content.is_empty() && self.content.lines().any(|l| l.trim().starts_with('#'))) {
-                        ViewMode::Mindmap
-                    } else if is_image_extension(&ext) {
-                        ViewMode::Image { format: ext }
-                    } else if ext == "csv" {
-                        ViewMode::Table { separator: ',' }
-                    } else if ext == "tsv" {
-                        ViewMode::Table { separator: '\t' }
-                    } else if is_code_extension(&ext) {
-                        ViewMode::Code { lang: ext }
-                    } else {
-                        ViewMode::PlainText
-                    }
-                }
-                ViewMode::Mindmap => {
-                    if is_image_extension(&ext) {
-                        ViewMode::Image { format: ext }
-                    } else if ext == "csv" {
-                        ViewMode::Table { separator: ',' }
-                    } else if ext == "tsv" {
-                        ViewMode::Table { separator: '\t' }
-                    } else if is_code_extension(&ext) {
-                        ViewMode::Code { lang: ext }
-                    } else {
-                        ViewMode::PlainText
-                    }
-                }
-                ViewMode::Table { separator } => {
-                    ViewMode::Code { lang: if separator == '\t' { "tsv".to_string() } else { "csv".to_string() } }
-                }
-                ViewMode::Code { .. } => {
-                    if is_image_extension(&ext) {
-                        ViewMode::Image { format: ext }
-                    } else if ext == "csv" {
-                        ViewMode::Table { separator: ',' }
-                    } else if ext == "tsv" {
-                        ViewMode::Table { separator: '\t' }
-                    } else {
-                        ViewMode::PlainText
-                    }
-                }
-                ViewMode::PlainText => {
-                    if is_image_extension(&ext) {
-                        ViewMode::Image { format: ext }
-                    } else if ext == "csv" {
-                        ViewMode::Table { separator: ',' }
-                    } else if ext == "tsv" {
-                        ViewMode::Table { separator: '\t' }
-                    } else {
-                        ViewMode::Markdown
-                    }
-                }
-                ViewMode::Image { .. } => {
-                    if ext == "svg" || !self.content.is_empty() {
-                        ViewMode::Code { lang: "xml".to_string() }
-                    } else {
-                        ViewMode::PlainText
-                    }
-                }
-            };
-
-            self.reset_scroll_to_top = true;
-            self.current_scroll_offset = 0.0_f32;
-
-            self.set_toast(match self.view_mode {
-                ViewMode::Markdown => "已切換至 Markdown 渲染模式 📄".to_string(),
-                ViewMode::Mindmap => "已切換至 🧠 互動心智圖模式".to_string(),
-                ViewMode::Table { separator } => {
-                    if separator == '\t' {
-                        "已切換至 TSV 資料表格模式 📊".to_string()
-                    } else {
-                        "已切換至 CSV 資料表格模式 📊".to_string()
-                    }
-                }
-                ViewMode::Code { ref lang } => {
-                    let (name, emoji) = get_language_badge(lang);
-                    format!("已切換至 {} {} 語法高亮模式", emoji, name)
-                }
-                ViewMode::PlainText => "已切換至純文字模式 📝".to_string(),
-                ViewMode::Image { ref format } => {
-                    let (name, emoji) = get_image_badge(format);
-                    format!("已切換至 {} {} 預覽模式", emoji, name)
-                }
-            });
-        }
-
-        // Ctrl + Shift + C: 複製全文
-        if input.modifiers.command && input.modifiers.shift && input.key_pressed(egui::Key::C) {
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                let _ = clipboard.set_text(self.content.clone());
-                self.set_toast("已複製全文至剪貼簿 📋".to_string());
-            }
-        }
-
-        // Ctrl + + / Ctrl + - : 縮放字體
-        if input.modifiers.command && (input.key_pressed(egui::Key::Plus) || input.key_pressed(egui::Key::Equals)) {
-            self.font_scale = (self.font_scale + 0.1).min(2.0);
-        }
-        if input.modifiers.command && input.key_pressed(egui::Key::Minus) {
-            self.font_scale = (self.font_scale - 0.1).max(0.6);
-        }
-        if input.modifiers.command && input.key_pressed(egui::Key::Num0) {
-            self.font_scale = 1.0;
-        }
-
-        // Ctrl + P: 置頂切換
-        if input.modifiers.command && input.key_pressed(egui::Key::P) {
-            self.always_on_top = !self.always_on_top;
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                if self.always_on_top {
-                    egui::WindowLevel::AlwaysOnTop
-                } else {
-                    egui::WindowLevel::Normal
-                },
-            ));
-            self.set_toast(if self.always_on_top {
-                "視窗置頂: 已開啟 📌".to_string()
-            } else {
-                "視窗置頂: 已關閉".to_string()
-            });
-        }
-    }
-
-    /// 在 Windows 檔案總管中高亮定位目前檔案
-    pub fn locate_current_file_in_explorer(&mut self) {
-        if let Some(ref path) = self.current_file {
-            let path_str = path.to_string_lossy().to_string();
-            let _ = std::process::Command::new("explorer.exe")
-                .arg(format!("/select,{}", path_str))
-                .spawn();
-            self.set_toast("已在檔案總管中定位檔案 📁".to_string());
-        }
-    }
-
-    /// 一鍵排版美化 JSON / JSON5 / JSONC
-    pub fn format_json_content(&mut self) {
-        if let Ok(formatted) = crate::markdown::format_json(&self.content) {
-            self.content = formatted;
-            self.line_count = self.content.lines().count();
-            self.set_toast("已完成 JSON 排版美化 ⚡".to_string());
-        } else {
-            self.set_toast("JSON 格式無效或解析失敗 ⚠".to_string());
-        }
-    }
-
-    /// 一鍵壓縮 JSON 為單行
-    pub fn minify_json_content(&mut self) {
-        self.content = crate::markdown::minify_json(&self.content);
-        self.line_count = self.content.lines().count();
-        self.set_toast("已壓縮為單行 JSON 📦".to_string());
-    }
-
-    /// 渲染 Markdown TOC 目錄大綱側邊欄，回傳 (是否收起大綱, 選取的目標標題錨點)
+    /// 渲染 Markdown 目錄大綱，回傳收起狀態與目標錨點。
     pub fn render_toc_sidebar(&self, ui: &mut egui::Ui) -> (bool, Option<String>) {
-        crate::views::toc_sidebar::render_toc_sidebar(ui, self.theme, self.font_scale, &self.content)
+        crate::views::toc_sidebar::render_toc_sidebar(
+            ui,
+            self.theme,
+            self.font_scale,
+            &self.content,
+        )
     }
 }
 
@@ -1374,14 +304,8 @@ impl eframe::App for MdPreviewApp {
             }
         }
 
-        // 處理非同步更新檢查結果
-        while let Ok(res) = self.update_rx.try_recv() {
-            if let Some(rel) = res {
-                self.set_toast(format!("🎉 發現新版本 {}！可在頂部點擊升級", rel.tag_name));
-                self.available_update = Some(rel);
-            } else {
-                self.set_toast(format!("✅ 目前已是最新版本 (v{})", CURRENT_VERSION));
-            }
+        while let Ok(event) = self.update_rx.try_recv() {
+            self.handle_update_event(event);
         }
 
         // 處理全域快捷鍵事件
@@ -1397,8 +321,16 @@ impl eframe::App for MdPreviewApp {
         // 處理檔案監視變更事件
         while let Ok(event) = self.watcher_rx.try_recv() {
             match event {
+                WatcherEvent::DirectoryChanged => {
+                    ctx.request_repaint();
+                    self.siblings = self
+                        .current_file
+                        .as_deref()
+                        .map(crate::files::sibling_files)
+                        .unwrap_or_default();
+                }
                 WatcherEvent::FileChanged(path) => {
-                    if self.current_file.as_deref() == Some(&path) {
+                    if self.watched_file.as_deref() == Some(&path) {
                         self.reload_current_file();
                         ctx.request_repaint();
                     }
@@ -1406,13 +338,9 @@ impl eframe::App for MdPreviewApp {
             }
         }
 
-        // 攔截原生視窗關閉 (X) 事件：常駐模式下取消退出，改為隱藏回系統匣
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if !self.is_standalone {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.visible = false;
-                hide_app_window();
-            }
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_confirmed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.request_action(PendingAction::Close);
         }
 
         // 處理系統匣選單事件
@@ -1441,15 +369,30 @@ impl eframe::App for MdPreviewApp {
                     show_and_focus_app_window();
                 }
                 TrayMenuAction::About => {
-                    self.set_toast(format!("flash-md v{} - 快捷鍵 Alt+Space 閃電預覽 ⚡", CURRENT_VERSION));
+                    self.set_toast(format!(
+                        "flash-md v{} - 快捷鍵 Alt+Space 閃電預覽 ⚡",
+                        CURRENT_VERSION
+                    ));
                     self.visible = true;
                     show_and_focus_app_window();
                 }
                 TrayMenuAction::Exit => {
-                    info!("使用者自系統匣退出 flash-md");
-                    std::process::exit(0);
+                    self.request_action(PendingAction::Exit);
                 }
             }
+        }
+
+        if self.pending_action.is_some() {
+            self.render_unsaved_dialog(ctx);
+            return;
+        }
+
+        if self.is_updating {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.heading("正在下載並安裝更新…");
+                ui.spinner();
+            });
+            return;
         }
 
         // 自動防抖保存檢查 (打字停止 800ms 後自動寫回檔案)
@@ -1492,11 +435,9 @@ impl eframe::App for MdPreviewApp {
                     egui::Event::Ime(egui::ImeEvent::Disabled) => {
                         self.is_ime_composing = false;
                     }
-                    egui::Event::Text(ref s) => {
-                        // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
-                        if s.chars().any(|c| c >= '\u{2E80}') {
-                            ime_event_this_frame = true;
-                        }
+                    // 偵測是否包含 CJK 漢字、注音符號或非 ASCII 輸入法字元
+                    egui::Event::Text(ref s) if s.chars().any(|c| c >= '\u{2E80}') => {
+                        ime_event_this_frame = true;
                     }
                     _ => {}
                 }
@@ -1506,22 +447,24 @@ impl eframe::App for MdPreviewApp {
                 self.last_ime_activity = Some(now);
             }
 
-            let should_filter_enter = self.is_ime_composing || was_recent_ime || ime_event_this_frame;
+            let should_filter_enter =
+                self.is_ime_composing || was_recent_ime || ime_event_this_frame;
 
             if should_filter_enter {
                 let mut found_enter = false;
-                i.events.retain(|ev| {
-                    match ev {
-                        egui::Event::Key { key: egui::Key::Enter, .. } => {
-                            found_enter = true;
-                            false
-                        }
-                        egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => {
-                            found_enter = true;
-                            false
-                        }
-                        _ => true,
+                i.events.retain(|ev| match ev {
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        ..
+                    } => {
+                        found_enter = true;
+                        false
                     }
+                    egui::Event::Text(s) if s == "\n" || s == "\r" || s == "\r\n" => {
+                        found_enter = true;
+                        false
+                    }
+                    _ => true,
                 });
                 if found_enter || i.keys_down.contains(&egui::Key::Enter) {
                     enter_was_swallowed = true;
@@ -1557,23 +500,24 @@ impl eframe::App for MdPreviewApp {
         let mut do_self_update = false;
         if let Some(ref release) = self.available_update {
             let release_tag = release.tag_name.clone();
+            let release_notes = release.changelog.clone();
             let is_updating = self.is_updating;
 
             let banner_bg = match self.theme {
-                AppTheme::Dark => Color32::from_rgb(20, 30, 48),    // 質感暗夜深藍底
+                AppTheme::Dark => Color32::from_rgb(20, 30, 48), // 質感暗夜深藍底
                 AppTheme::Light => Color32::from_rgb(238, 246, 255), // 清爽透亮淺藍底
             };
             let banner_border = match self.theme {
-                AppTheme::Dark => Color32::from_rgb(56, 189, 248),   // 科技青藍
+                AppTheme::Dark => Color32::from_rgb(56, 189, 248), // 科技青藍
                 AppTheme::Light => Color32::from_rgb(186, 230, 253), // 柔和淺天藍
             };
             let text_color = match self.theme {
-                AppTheme::Dark => Color32::from_rgb(224, 242, 254),  // 明亮淺白藍
-                AppTheme::Light => Color32::from_rgb(12, 74, 110),   // 高對比深海軍藍 (極度清晰可讀)
+                AppTheme::Dark => Color32::from_rgb(224, 242, 254), // 明亮淺白藍
+                AppTheme::Light => Color32::from_rgb(12, 74, 110),  // 高對比深海軍藍 (極度清晰可讀)
             };
             let btn_primary_bg = match self.theme {
-                AppTheme::Dark => Color32::from_rgb(14, 165, 233),   // 亮天藍
-                AppTheme::Light => Color32::from_rgb(2, 132, 199),   // 深天藍
+                AppTheme::Dark => Color32::from_rgb(14, 165, 233), // 亮天藍
+                AppTheme::Light => Color32::from_rgb(2, 132, 199), // 深天藍
             };
             let btn_dismiss_bg = match self.theme {
                 AppTheme::Dark => Color32::from_rgb(30, 41, 59),
@@ -1590,9 +534,15 @@ impl eframe::App for MdPreviewApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         let banner_text = if is_updating {
-                            format!("⏳ 正在自動下載升級至 {} 並無縫重啟，請稍候...", release_tag)
+                            format!(
+                                "⏳ 正在自動下載升級至 {} 並無縫重啟，請稍候...",
+                                release_tag
+                            )
                         } else {
-                            format!("🎉 發現全新版本 {} (目前為 v{})！", release_tag, CURRENT_VERSION)
+                            format!(
+                                "🎉 發現全新版本 {} (目前為 v{})！",
+                                release_tag, CURRENT_VERSION
+                            )
                         };
 
                         ui.label(
@@ -1600,7 +550,8 @@ impl eframe::App for MdPreviewApp {
                                 .color(text_color)
                                 .strong()
                                 .size(12.5),
-                        );
+                        )
+                        .on_hover_text(&release_notes);
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if !is_updating {
@@ -1893,7 +844,7 @@ impl eframe::App for MdPreviewApp {
                                             format!("🖼 圖片資訊\n• 格式: {}\n• 檔案大小: {}\n• 修改時間: {}", format.to_uppercase(), self.file_size_str, self.last_modified_str),
                                         )
                                     } else if matches!(self.view_mode, ViewMode::Markdown) {
-                                        let stats = calculate_text_stats(&self.content);
+                                        let stats = crate::parsers::cached_stats(ctx, &self.content);
                                         let words_str = if stats.cjk_chars > 0 && stats.words > 0 {
                                             format!("{} 中文 / {} 字", stats.cjk_chars, stats.words)
                                         } else if stats.cjk_chars > 0 {
@@ -1954,25 +905,20 @@ impl eframe::App for MdPreviewApp {
                     }
 
                     // 搜尋按鈕 (僅文字/程式碼模式可用)
-                    if !matches!(self.view_mode, ViewMode::Image { .. }) {
-                        if render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F 或 /)").clicked() {
+                    if !matches!(self.view_mode, ViewMode::Image { .. }) && render_nav_button(ui, self.theme, "🔍 搜尋", self.search_open, "搜尋關鍵字 (Ctrl + F 或 /)").clicked() {
                             self.search_open = !self.search_open;
                             if self.search_open {
                                 self.search_focus_requested = true;
                             }
-                        }
                     }
 
                     // Markdown 大綱側邊欄開關按鈕
-                    if matches!(self.view_mode, ViewMode::Markdown) {
-                        if render_nav_button(ui, self.theme, "📑 大綱", self.toc_open, "開啟/收起章節目錄大綱 (Ctrl + T)").clicked() {
+                    if matches!(self.view_mode, ViewMode::Markdown) && render_nav_button(ui, self.theme, "📑 大綱", self.toc_open, "開啟/收起章節目錄大綱 (Ctrl + T)").clicked() {
                             self.toc_open = !self.toc_open;
-                        }
                     }
 
                     // Markdown 簡報投影模式切換按鈕
-                    if matches!(self.view_mode, ViewMode::Markdown) && !self.is_editing {
-                        if render_nav_button(ui, self.theme, "📽 簡報", self.is_slides_mode, "切換全螢幕簡報投影模式 (F5 或 P)").clicked() {
+                    if matches!(self.view_mode, ViewMode::Markdown) && !self.is_editing && render_nav_button(ui, self.theme, "📽 簡報", self.is_slides_mode, "切換全螢幕簡報投影模式 (F5 或 P)").clicked() {
                             self.is_slides_mode = !self.is_slides_mode;
                             if self.is_slides_mode {
                                 self.current_slide_index = 0;
@@ -1986,7 +932,6 @@ impl eframe::App for MdPreviewApp {
                                 }
                                 self.set_toast("👁 已退出簡報投影模式".to_string());
                             }
-                        }
                     }
 
                     // Markdown 互動心智圖切換按鈕
@@ -2129,15 +1074,12 @@ impl eframe::App for MdPreviewApp {
                             self.search_focus_requested = false;
                         }
 
-                        let matches = self.get_search_matches();
-                        let match_count = matches.len();
+                        let match_count = self.search_match_count;
 
                         // 當搜尋字串變更時，自動跳轉至第一筆相符項目
                         if search_input_resp.changed() {
                             self.search_match_index = 0;
-                            if let Some(&first_line) = matches.first() {
-                                self.scroll_to_line(first_line);
-                            }
+                            self.search_jump_requested = true;
                         }
 
                         // 在搜尋框內按下 Enter 或 Shift + Enter 進行上一筆/下一筆跳轉
@@ -2267,35 +1209,66 @@ impl eframe::App for MdPreviewApp {
                                         .size(11.5),
                                 );
 
-                                if ui.small_button(" ↔ ").on_hover_text("自適應視窗大小").clicked() {
+                                if ui
+                                    .small_button(" ↔ ")
+                                    .on_hover_text("自適應視窗大小")
+                                    .clicked()
+                                {
                                     self.image_fit_mode = true;
                                 }
-                                if ui.small_button(" 1:1 ").on_hover_text("原始尺寸 100% (Ctrl + 0)").clicked() {
+                                if ui
+                                    .small_button(" 1:1 ")
+                                    .on_hover_text("原始尺寸 100% (Ctrl + 0)")
+                                    .clicked()
+                                {
                                     self.image_zoom = 1.0;
                                     self.image_fit_mode = false;
                                 }
-                                if ui.small_button(" + ").on_hover_text("放大 (Ctrl + +)").clicked() {
+                                if ui
+                                    .small_button(" + ")
+                                    .on_hover_text("放大 (Ctrl + +)")
+                                    .clicked()
+                                {
                                     self.image_zoom = (self.image_zoom * 1.2).min(10.0);
                                     self.image_fit_mode = false;
                                 }
-                                if ui.small_button(" − ").on_hover_text("縮小 (Ctrl + -)").clicked() {
+                                if ui
+                                    .small_button(" − ")
+                                    .on_hover_text("縮小 (Ctrl + -)")
+                                    .clicked()
+                                {
                                     self.image_zoom = (self.image_zoom / 1.2).max(0.1);
                                     self.image_fit_mode = false;
                                 }
                             } else {
                                 ui.label(
-                                    RichText::new(format!("{}%", (self.font_scale * 100.0).round() as u32))
-                                        .color(self.theme.text_secondary())
-                                        .size(11.5),
+                                    RichText::new(format!(
+                                        "{}%",
+                                        (self.font_scale * 100.0).round() as u32
+                                    ))
+                                    .color(self.theme.text_secondary())
+                                    .size(11.5),
                                 );
 
-                                if ui.small_button(" + ").on_hover_text("放大字體 (Ctrl + +)").clicked() {
+                                if ui
+                                    .small_button(" + ")
+                                    .on_hover_text("放大字體 (Ctrl + +)")
+                                    .clicked()
+                                {
                                     self.font_scale = (self.font_scale + 0.1).min(2.5);
                                 }
-                                if ui.small_button(" − ").on_hover_text("縮小字體 (Ctrl + -)").clicked() {
+                                if ui
+                                    .small_button(" − ")
+                                    .on_hover_text("縮小字體 (Ctrl + -)")
+                                    .clicked()
+                                {
                                     self.font_scale = (self.font_scale - 0.1).max(0.6);
                                 }
-                                if ui.small_button(" 1:1 ").on_hover_text("重設字體 (Ctrl + 0)").clicked() {
+                                if ui
+                                    .small_button(" 1:1 ")
+                                    .on_hover_text("重設字體 (Ctrl + 0)")
+                                    .clicked()
+                                {
                                     self.font_scale = 1.0;
                                 }
                             }
@@ -2308,7 +1281,8 @@ impl eframe::App for MdPreviewApp {
         let mut toc_target_anchor = None;
 
         // 如果開啟大綱模式且處於 Markdown 檢視，先掛載獨立可調整寬度的左側側邊欄 (SidePanel)
-        if self.toc_open && matches!(self.view_mode, ViewMode::Markdown) && !self.content.is_empty() {
+        if self.toc_open && matches!(self.view_mode, ViewMode::Markdown) && !self.content.is_empty()
+        {
             egui::SidePanel::left("toc_side_panel")
                 .resizable(true)
                 .default_width(260.0 * self.font_scale)
@@ -2344,6 +1318,9 @@ impl eframe::App for MdPreviewApp {
         } else {
             Margin::symmetric(24.0, 16.0)
         };
+
+        let previous_match_count = self.search_match_count;
+        self.search_match_count = 0;
 
         // 主預覽渲染檢視區域 (Markdown / 全語言程式碼語法高亮 / 斑馬紋表格 / 純文字 / 圖片向量圖 / 全螢幕就地編輯)
         egui::CentralPanel::default()
@@ -2386,7 +1363,7 @@ impl eframe::App for MdPreviewApp {
                             let scroll_out = scroll.show(ui, |ui| {
                                 let anchor_to_jump = self.target_anchor.clone();
                                 let base_dir = self.current_file.as_ref().and_then(|p| p.parent());
-                                let renderer = MarkdownRenderer::new(
+                                let mut renderer = MarkdownRenderer::new(
                                     self.theme,
                                     self.font_scale,
                                     &self.search_query,
@@ -2394,7 +1371,10 @@ impl eframe::App for MdPreviewApp {
                                     anchor_to_jump.as_deref(),
                                     base_dir,
                                 );
-                                if let Some(clicked_anchor) = renderer.render(ui, &self.content) {
+                                renderer.search_jump = self.search_jump_requested;
+                                let rendered = renderer.render(ui, &self.content);
+                                self.search_match_count = rendered.match_count;
+                                if let Some(clicked_anchor) = rendered.clicked_anchor {
                                     self.target_anchor = Some(clicked_anchor);
                                     ctx.request_repaint();
                                 } else if self.target_anchor.is_some() {
@@ -2427,7 +1407,7 @@ impl eframe::App for MdPreviewApp {
                             }
 
                             let scroll_out = scroll.show(ui, |ui| {
-                                let table_data = crate::markdown::parse_csv_or_tsv(&self.content, separator);
+                                let table_data = crate::parsers::cached_csv(ctx, &self.content, separator);
                                 let mut match_counter = 0;
                                 crate::markdown::render_csv_table(
                                     ui,
@@ -2437,7 +1417,9 @@ impl eframe::App for MdPreviewApp {
                                     &self.search_query,
                                     active_match_idx,
                                     &mut match_counter,
+                                    self.search_jump_requested,
                                 );
+                                self.search_match_count = match_counter;
                             });
                             self.current_scroll_offset = scroll_out.state.offset.y;
                         }
@@ -2449,7 +1431,7 @@ impl eframe::App for MdPreviewApp {
                             }
 
                             let scroll_out = scroll.show(ui, |ui| {
-                                render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query, active_match_idx);
+                                self.search_match_count = render_code_viewer(ui, self.theme, self.font_scale, &self.content, lang, &self.search_query, active_match_idx, self.search_jump_requested);
                             });
                             self.current_scroll_offset = scroll_out.state.offset.y;
                         }
@@ -2482,19 +1464,17 @@ impl eframe::App for MdPreviewApp {
 
                                 let plaintext_expand_id = egui::Id::new((
                                     "plaintext_expand",
-                                    self.content.as_ptr() as usize,
-                                    self.content.len(),
+                                    self.content_revision,
                                 ));
-                                let plaintext_is_expanded = ctx
+                                let plaintext_is_expanded = !self.search_query.trim().is_empty() || ctx
                                     .data(|d| d.get_temp::<bool>(plaintext_expand_id).unwrap_or(false));
                                 let total_plaintext_lines = self.content.split_inclusive('\n').count();
                                 let plaintext_is_truncated = !plaintext_is_expanded
                                     && total_plaintext_lines > 5000;
 
                                 let cache_id = ui.make_persistent_id(format!(
-                                    "plaintext_job_{:p}_{}_{}_{}_{:?}_{:?}_{}",
-                                    self.content.as_ptr(),
-                                    self.content.len(),
+                                    "plaintext_job_{}_{}_{}_{:?}_{:?}_{}",
+                                    self.content_revision,
                                     (font_scale * 100.0) as u32,
                                     self.search_query,
                                     active_match_idx,
@@ -2549,7 +1529,8 @@ impl eframe::App for MdPreviewApp {
                                     }
                                 });
 
-                                ui.label(text_job);
+                                self.search_match_count = crate::search::find_matches(&text_job.text, &self.search_query).len();
+                                crate::search::searchable_label(ui, text_job, &self.search_query, active_match_idx, self.search_jump_requested, egui::Sense::hover(), false);
                                 if plaintext_is_truncated {
                                     ui.add_space(8.0);
                                     ui.horizontal_wrapped(|ui| {
@@ -2619,6 +1600,13 @@ impl eframe::App for MdPreviewApp {
         self.reset_scroll_to_top = false;
         self.target_scroll_offset = None;
         self.keyboard_scroll_delta = 0.0;
+        if previous_match_count != self.search_match_count {
+            self.search_match_index = self
+                .search_match_index
+                .min(self.search_match_count.saturating_sub(1));
+            ctx.request_repaint();
+        }
+        self.search_jump_requested = false;
     }
 }
 
@@ -2658,13 +1646,12 @@ impl MdPreviewApp {
     }
 }
 
-
 fn rfd_open_file() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         use std::process::Command;
         let output = Command::new("powershell")
-            .args(&[
+            .args([
                 "-NoProfile",
                 "-Command",
                 r#"[System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") | Out-Null; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Filter = "Markdown & Code Files (*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt)|*.md;*.rs;*.py;*.js;*.ts;*.json;*.toml;*.yaml;*.cpp;*.go;*.txt|All files (*.*)|*.*"; if($d.ShowDialog() -eq "OK"){ Write-Output $d.FileName }"#,
@@ -2681,64 +1668,127 @@ fn rfd_open_file() -> Option<PathBuf> {
     None
 }
 
-/// 自 ZIP 壓縮檔內直接即時讀取文字檔案內容 (無需使用者手動解壓縮)
-#[allow(dead_code)]
-fn read_text_from_zip(zip_path: &Path, entry_name: &str) -> Result<String, String> {
-    let zip_str = zip_path.to_string_lossy().replace('\'', "''");
-    let entry_clean = entry_name.replace('/', "\\").replace('\'', "''");
-    let entry_filename = Path::new(entry_name)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| entry_name.to_string())
-        .replace('\'', "''");
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let script = format!(
-        r#"[System.Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null; $z = [System.IO.Compression.ZipFile]::OpenRead('{}'); $e = $z.Entries | Where-Object {{ $_.FullName.Replace('/','\') -eq '{}' -or $_.Name -eq '{}' }} | Select-Object -First 1; if ($e) {{ $s = $e.Open(); $r = New-Object System.IO.StreamReader($s, [System.Text.Encoding]::UTF8); $t = $r.ReadToEnd(); $r.Close(); $s.Close(); Write-Output $t }}; $z.Dispose();"#,
-        zip_str, entry_clean, entry_filename
-    );
+    fn app() -> MdPreviewApp {
+        let (_, hotkey_rx) = unbounded();
+        let (watcher_tx, watcher_rx) = unbounded();
+        let (_, tray_rx) = unbounded();
+        let holder = Arc::new(Mutex::new(Some(Context::default())));
+        let watcher = FileWatcher::new(watcher_tx, holder.clone());
+        MdPreviewApp::empty(
+            AppConfig::default(),
+            true,
+            true,
+            watcher,
+            hotkey_rx,
+            watcher_rx,
+            tray_rx,
+            holder,
+        )
+    }
 
-    let output = std::process::Command::new("powershell")
-        .args(&["-NoProfile", "-Command", &script])
-        .output()
-        .map_err(|e| format!("執行 PowerShell 讀取 ZIP 失敗: {}", e))?;
+    #[test]
+    fn opening_or_reloading_a_failed_file_preserves_the_current_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current.md");
+        fs::write(&path, "original").unwrap();
+        let mut app = app();
+        app.open_document(&path);
+        app.open_document(&dir.path().join("missing.md"));
+        assert_eq!(app.current_file.as_deref(), Some(path.as_path()));
+        assert_eq!(app.content, "original");
+        app.content = "unsaved draft".to_string();
+        app.is_modified = true;
+        fs::write(&path, "external change").unwrap();
+        app.reload_current_file();
+        assert_eq!(app.content, "unsaved draft");
+        assert!(app.is_modified);
+    }
 
-    if output.status.success() {
-        let content = String::from_utf8_lossy(&output.stdout).to_string();
-        if !content.is_empty() {
-            Ok(content)
-        } else {
-            Err("壓縮檔內找不到指定檔案或檔案內容為空".to_string())
-        }
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    #[test]
+    fn cancel_keeps_draft_and_failed_save_keeps_pending_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current.md");
+        let next = dir.path().join("next.md");
+        fs::write(&path, "original").unwrap();
+        fs::write(&next, "next").unwrap();
+        let mut app = app();
+        app.open_document(&path);
+        app.content = "draft".to_string();
+        app.is_modified = true;
+        app.load_file(&next);
+        assert!(app.pending_action.is_some());
+        assert_eq!(app.content, "draft");
+        app.resolve_pending_action(UnsavedChoice::Cancel);
+        assert!(app.pending_action.is_none());
+        assert!(app.is_modified);
+        app.load_file(&next);
+        fs::write(&path, "external").unwrap();
+        app.resolve_pending_action(UnsavedChoice::Save);
+        assert!(app.pending_action.is_some());
+        assert_eq!(app.content, "draft");
+        assert!(app.is_modified);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "external");
+        app.resolve_pending_action(UnsavedChoice::Discard);
+        assert_eq!(app.current_file, Some(next));
+        assert_eq!(app.content, "next");
+        assert!(!app.is_modified);
+    }
+
+    #[test]
+    fn save_and_continue_writes_the_draft_before_switching() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current.md");
+        let next = dir.path().join("next.md");
+        fs::write(&path, "original").unwrap();
+        fs::write(&next, "next").unwrap();
+        let mut app = app();
+        app.open_document(&path);
+        app.content = "draft".to_string();
+        app.is_modified = true;
+        app.load_file(&next);
+        app.resolve_pending_action(UnsavedChoice::Save);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "draft");
+        assert_eq!(app.current_file, Some(next));
+        assert!(app.pending_action.is_none());
+        assert!(!app.is_modified);
+    }
+
+    #[test]
+    fn image_reload_changes_bytes_and_derived_caches_are_invalidated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("image.png");
+        fs::write(&path, b"old image").unwrap();
+        let mut app = app();
+        app.open_document(&path);
+        let uri = app.image_uri.clone();
+        let revision = app.content_revision;
+        fs::write(&path, b"new image").unwrap();
+        app.reload_current_file();
+        assert_ne!(app.image_uri, uri);
+        assert_eq!(app.image_bytes.as_deref(), Some(b"new image".as_slice()));
+        assert!(app.content_revision > revision);
+        app.mindmap_root = Some(crate::views::mindmap::parse_markdown_to_mindmap(
+            "# old", "old",
+        ));
+        app.invalidate_content();
+        assert!(app.mindmap_root.is_none());
+    }
+
+    #[test]
+    fn updater_failure_unlocks_the_ui_and_allows_retry() {
+        let mut app = app();
+        app.is_updating = true;
+        app.handle_update_event(UpdateEvent::Installed(Err("download failed".to_string())));
+        assert!(!app.is_updating);
+        assert!(app
+            .status_toast
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("download failed"));
     }
 }
-
-/// 自 ZIP 壓縮檔內直接即時讀取二進制檔案數據 (圖片/SVG/圖示)
-fn read_bytes_from_zip(zip_path: &Path, entry_name: &str) -> Result<Vec<u8>, String> {
-    let zip_str = zip_path.to_string_lossy().replace('\'', "''");
-    let entry_clean = entry_name.replace('/', "\\").replace('\'', "''");
-    let entry_filename = Path::new(entry_name)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| entry_name.to_string())
-        .replace('\'', "''");
-
-    let script = format!(
-        r#"[System.Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem") | Out-Null; $z = [System.IO.Compression.ZipFile]::OpenRead('{}'); $e = $z.Entries | Where-Object {{ $_.FullName.Replace('/','\') -eq '{}' -or $_.Name -eq '{}' }} | Select-Object -First 1; if ($e) {{ $s = $e.Open(); $ms = New-Object System.IO.MemoryStream; $s.CopyTo($ms); [System.Console]::OpenStandardOutput().Write($ms.ToArray(), 0, $ms.Length); $s.Close(); $ms.Close(); }}; $z.Dispose();"#,
-        zip_str, entry_clean, entry_filename
-    );
-
-    let output = std::process::Command::new("powershell")
-        .args(&["-NoProfile", "-Command", &script])
-        .output()
-        .map_err(|e| format!("執行 PowerShell 讀取 ZIP 失敗: {}", e))?;
-
-    if output.status.success() && !output.stdout.is_empty() {
-        Ok(output.stdout)
-    } else {
-        Err("ZIP 壓縮檔內找不到指定圖片檔案".to_string())
-    }
-}
-
-
