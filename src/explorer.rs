@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetGUIThreadInfo, GetParent, GetShellWindow, GetWindowLongPtrW, GetWindowThreadProcessId,
     IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow, GA_ROOT,
     GUITHREADINFO, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, WS_EX_TOPMOST,
+    SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WS_EX_TOPMOST,
 };
 use windows_core::Interface;
 
@@ -130,21 +130,29 @@ pub fn hide_app_window() {
     }
 }
 
+/// Wake the hidden event loop without stealing Explorer's foreground focus.
+pub fn wake_app_window() {
+    if let Some(hwnd) = get_app_hwnd() {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
+    }
+}
+
 /// 取得目前前景視窗（Windows 檔案總管或桌面）中所選取的檔案路徑
-pub fn get_selected_file_from_explorer() -> Option<PathBuf> {
+pub fn get_selected_file_from_explorer(foreground: isize) -> Option<PathBuf> {
     unsafe {
         // 初始化 COM 元件 (STA 執行緒模式)
         if CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_err() {
             return None;
         }
-        let result = get_selected_file_internal();
+        let result = get_selected_file_internal(HWND(foreground as _));
         CoUninitialize();
         result
     }
 }
 
-unsafe fn get_selected_file_internal() -> Option<PathBuf> {
-    let foreground_hwnd = GetForegroundWindow();
+unsafe fn get_selected_file_internal(foreground_hwnd: HWND) -> Option<PathBuf> {
     if foreground_hwnd.0 == 0 as _ {
         return None;
     }

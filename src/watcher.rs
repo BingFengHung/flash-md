@@ -15,6 +15,7 @@ pub enum WatcherEvent {
 pub struct FileWatcher {
     watcher: Option<RecommendedWatcher>,
     current_path: Option<PathBuf>,
+    target_path: Arc<Mutex<Option<PathBuf>>>,
     event_sender: Sender<WatcherEvent>,
     ctx_holder: Arc<Mutex<Option<Context>>>,
 }
@@ -27,6 +28,7 @@ impl FileWatcher {
         Self {
             watcher: None,
             current_path: None,
+            target_path: Arc::new(Mutex::new(None)),
             event_sender,
             ctx_holder,
         }
@@ -37,10 +39,23 @@ impl FileWatcher {
             return;
         }
 
+        if self.watcher.is_some()
+            && self
+                .current_path
+                .as_ref()
+                .is_some_and(|current| current.parent() == path.parent())
+        {
+            self.current_path = Some(path.to_path_buf());
+            if let Ok(mut target) = self.target_path.lock() {
+                *target = self.current_path.clone();
+            }
+            return;
+        }
+
         self.unwatch();
 
         let path_buf = path.to_path_buf();
-        let target_path = path_buf.clone();
+        let target_path = self.target_path.clone();
         let sender = self.event_sender.clone();
         let ctx_holder = self.ctx_holder.clone();
 
@@ -49,10 +64,21 @@ impl FileWatcher {
                 if let Ok(event) = res {
                     match event.kind {
                         EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
-                            let _ = sender.send(WatcherEvent::DirectoryChanged);
-                            if event.paths.iter().any(|p| p == &target_path) {
-                                debug!("檔案變更通知: {:?}", target_path);
-                                let _ = sender.send(WatcherEvent::FileChanged(target_path.clone()));
+                            let directory_changed = directory_entries_changed(&event.kind);
+                            if directory_changed {
+                                let _ = sender.send(WatcherEvent::DirectoryChanged);
+                            }
+                            let target = target_path
+                                .lock()
+                                .ok()
+                                .and_then(|target| target.clone())
+                                .filter(|target| event.paths.contains(target));
+                            let file_changed = target.is_some();
+                            if let Some(target) = target {
+                                debug!("檔案變更通知: {:?}", target);
+                                let _ = sender.send(WatcherEvent::FileChanged(target));
+                            }
+                            if directory_changed || file_changed {
                                 if let Ok(guard) = ctx_holder.lock() {
                                     if let Some(ref ctx) = *guard {
                                         ctx.request_repaint();
@@ -79,6 +105,9 @@ impl FileWatcher {
             } else {
                 info!("開始監視檔案變更: {:?}", path);
                 self.watcher = Some(watcher);
+                if let Ok(mut target) = self.target_path.lock() {
+                    *target = Some(path_buf.clone());
+                }
                 self.current_path = Some(path_buf);
             }
         }
@@ -94,5 +123,39 @@ impl FileWatcher {
         }
         self.watcher = None;
         self.current_path = None;
+        if let Ok(mut target) = self.target_path.lock() {
+            *target = None;
+        }
+    }
+}
+
+fn directory_entries_changed(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Create(_)
+            | EventKind::Remove(_)
+            | EventKind::Modify(notify::event::ModifyKind::Name(_))
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
+
+    #[test]
+    fn directory_snapshot_changes_for_entries_not_content_modifications() {
+        assert!(directory_entries_changed(&EventKind::Create(
+            CreateKind::File
+        )));
+        assert!(directory_entries_changed(&EventKind::Remove(
+            RemoveKind::File
+        )));
+        assert!(directory_entries_changed(&EventKind::Modify(
+            ModifyKind::Name(RenameMode::Both)
+        )));
+        assert!(!directory_entries_changed(&EventKind::Modify(
+            ModifyKind::Any
+        )));
     }
 }

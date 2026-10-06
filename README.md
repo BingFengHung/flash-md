@@ -10,6 +10,13 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 ---
 
+## v1.0.105 preview fixes
+
+- Markdown tables measure stable column widths before painting, wrap long cells, align left/center/right, and keep every cell in a row at the same height. Narrow windows scroll horizontally instead of squeezing columns.
+- Outline jumps are sent after nested tables finish rendering, so headings, duplicate titles and explicit IDs scroll to the correct section.
+- Alt+Space captures the foreground window at keydown, queries on one worker, ignores stale results and wakes the preview without stealing focus before loading. Sibling navigation reuses the directory cache and watcher; entry changes refresh the cache once per frame, and each opened document starts with fresh scroll state.
+- Regression tests cover painted table geometry, narrow windows, actual heading scroll offsets, delayed hotkey queries and cached sibling navigation.
+
 ## v1.0.104 fixes
 
 - Images, PDFs and files inside ZIP archives are read-only previews. Only text and SVG source can be saved. Unsaved changes prompt for Save, Discard or Cancel before switching files, closing, exiting or updating. Conflicting external edits keep your draft and stop the overwrite.

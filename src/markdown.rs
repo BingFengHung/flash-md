@@ -1,6 +1,9 @@
 mod code;
 mod mermaid;
+#[cfg(test)]
+mod navigation_tests;
 mod pdf;
+mod table;
 
 use code::find_syntax_by_lang;
 pub use code::{
@@ -79,6 +82,7 @@ pub fn is_anchor_match(heading_slug: &str, anchor: &str) -> bool {
 pub struct RenderOutput {
     pub clicked_anchor: Option<String>,
     pub match_count: usize,
+    pub anchor_found: bool,
 }
 
 pub struct MarkdownRenderer<'a> {
@@ -128,9 +132,15 @@ impl<'a> MarkdownRenderer<'a> {
             context.process_event(ui, event);
         }
         context.flush_inline(ui);
+        // Nested horizontal table areas consume both scroll axes. Submit the
+        // heading target only after every nested area has finished rendering.
+        if let Some(rect) = context.anchor_rect {
+            ui.scroll_to_rect(rect, Some(egui::Align::TOP));
+        }
         RenderOutput {
             clicked_anchor: context.clicked_anchor,
             match_count: context.match_counter,
+            anchor_found: context.anchor_rect.is_some(),
         }
     }
 }
@@ -153,6 +163,7 @@ struct RenderContext<'a> {
     target_anchor: Option<&'a str>,
     base_dir: Option<&'a std::path::Path>,
     clicked_anchor: Option<String>,
+    anchor_rect: Option<egui::Rect>,
     match_counter: usize,
     search_jump: bool,
     heading_counts: std::collections::HashMap<String, usize>,
@@ -388,6 +399,7 @@ impl<'a> RenderContext<'a> {
             target_anchor,
             base_dir,
             clicked_anchor: None,
+            anchor_rect: None,
             match_counter: 0,
             search_jump: false,
             heading_counts: Default::default(),
@@ -432,11 +444,11 @@ impl<'a> RenderContext<'a> {
         }
     }
 
-    fn label_job(&mut self, ui: &mut Ui, mut job: LayoutJob, sense: Sense) -> egui::Response {
+    fn highlight_job(&mut self, job: &mut LayoutJob) -> Option<usize> {
         let base = self.match_counter;
         let (bg, fg, active_bg, active_fg) = self.hl_colors();
         crate::search::highlight_job(
-            &mut job,
+            job,
             self.search_query,
             self.active_match_index,
             &mut self.match_counter,
@@ -445,11 +457,15 @@ impl<'a> RenderContext<'a> {
             active_bg,
             active_fg,
         );
-        let local = self.active_match_index.and_then(|index| {
+        self.active_match_index.and_then(|index| {
             (base..self.match_counter)
                 .contains(&index)
                 .then(|| index - base)
-        });
+        })
+    }
+
+    fn label_job(&mut self, ui: &mut Ui, mut job: LayoutJob, sense: Sense) -> egui::Response {
+        let local = self.highlight_job(&mut job);
         crate::search::searchable_label(
             ui,
             job,
@@ -601,7 +617,9 @@ impl<'a> RenderContext<'a> {
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 let lower = html.to_lowercase();
-                if lower.contains("<img") {
+                if self.in_table && matches!(lower.trim(), "<br>" | "<br/>" | "<br />") {
+                    self.push_text("\n");
+                } else if lower.contains("<img") {
                     if let Some(src) = extract_attr_str(&html, "src=") {
                         let alt = extract_attr_str(&html, "alt=").unwrap_or_default();
                         self.render_image(ui, &src, &alt);
@@ -978,8 +996,8 @@ impl<'a> RenderContext<'a> {
             crate::parsers::unique_heading_slug(&clean_heading, &mut self.heading_counts);
         let slug = self.heading_id.take().unwrap_or(generated_slug);
         if let Some(target) = self.target_anchor {
-            if is_anchor_match(&slug, target) {
-                heading_resp.scroll_to_me(Some(egui::Align::TOP));
+            if self.anchor_rect.is_none() && is_anchor_match(&slug, target) {
+                self.anchor_rect = Some(heading_resp.rect);
             }
         }
 
@@ -1252,119 +1270,6 @@ impl<'a> RenderContext<'a> {
 
                 self.label_job(ui, layout_job, Sense::hover());
             });
-    }
-
-    fn render_table(&mut self, ui: &mut Ui) {
-        if self.table_headers.is_empty() && self.table_rows.is_empty() {
-            return;
-        }
-
-        let num_cols = self
-            .table_headers
-            .len()
-            .max(self.table_rows.iter().map(|r| r.len()).max().unwrap_or(0));
-
-        if num_cols == 0 {
-            return;
-        }
-
-        let border_color = self.theme.border_color();
-        let header_bg = self.theme.card_bg_color();
-        let even_row_bg = self.theme.bg_color();
-        let odd_row_bg = match self.theme {
-            AppTheme::Dark => Color32::from_rgba_unmultiplied(255, 255, 255, 6),
-            AppTheme::Light => Color32::from_rgba_unmultiplied(0, 0, 0, 8),
-        };
-
-        let headers = self.table_headers.clone();
-        let rows = self.table_rows.clone();
-
-        ui.add_space(4.0_f32);
-        egui::ScrollArea::horizontal()
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                Frame::none()
-                    .fill(self.theme.card_bg_color())
-                    .rounding(Rounding::same(6.0_f32))
-                    .stroke(Stroke::new(1.0_f32, border_color))
-                    .inner_margin(Margin::same(6.0_f32))
-                    .show(ui, |ui| {
-                        egui::Grid::new(ui.next_auto_id())
-                            .striped(false)
-                            .min_col_width(70.0_f32 * self.font_scale)
-                            .spacing(Vec2::new(
-                                12.0_f32 * self.font_scale,
-                                6.0_f32 * self.font_scale,
-                            ))
-                            .show(ui, |ui| {
-                                // Header
-                                if !self.table_headers.is_empty() {
-                                    for header in &headers {
-                                        Frame::none()
-                                            .fill(header_bg)
-                                            .stroke(Stroke::new(1.0_f32, border_color))
-                                            .rounding(Rounding::same(4.0_f32))
-                                            .inner_margin(Margin::symmetric(
-                                                10.0_f32 * self.font_scale,
-                                                6.0_f32 * self.font_scale,
-                                            ))
-                                            .show(ui, |ui| {
-                                                let mut job = LayoutJob::default();
-                                                let base_fmt = egui::TextFormat {
-                                                    font_id: FontId::proportional(
-                                                        13.5_f32 * self.font_scale,
-                                                    ),
-                                                    color: self.theme.accent_color(),
-                                                    valign: egui::Align::BOTTOM,
-                                                    ..Default::default()
-                                                };
-                                                job.append(header, 0.0, base_fmt);
-                                                self.label_job(ui, job, Sense::hover());
-                                            });
-                                    }
-                                    ui.end_row();
-                                }
-
-                                // Rows
-                                for (row_idx, row) in rows.iter().enumerate() {
-                                    let row_bg = if row_idx % 2 == 0 {
-                                        even_row_bg
-                                    } else {
-                                        odd_row_bg
-                                    };
-
-                                    for col_idx in 0..num_cols {
-                                        let cell =
-                                            row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
-                                        Frame::none()
-                                            .fill(row_bg)
-                                            .stroke(Stroke::new(0.5_f32, border_color))
-                                            .rounding(Rounding::same(4.0_f32))
-                                            .inner_margin(Margin::symmetric(
-                                                10.0_f32 * self.font_scale,
-                                                6.0_f32 * self.font_scale,
-                                            ))
-                                            .show(ui, |ui| {
-                                                let mut job = LayoutJob::default();
-                                                let base_fmt = egui::TextFormat {
-                                                    font_id: FontId::proportional(
-                                                        13.0_f32 * self.font_scale,
-                                                    ),
-                                                    color: self.theme.text_primary(),
-                                                    line_height: Some(19.0_f32 * self.font_scale),
-                                                    valign: egui::Align::BOTTOM,
-                                                    ..Default::default()
-                                                };
-                                                job.append(cell, 0.0, base_fmt);
-                                                self.label_job(ui, job, Sense::hover());
-                                            });
-                                    }
-                                    ui.end_row();
-                                }
-                            });
-                    });
-            });
-        ui.add_space(6.0_f32);
     }
 }
 

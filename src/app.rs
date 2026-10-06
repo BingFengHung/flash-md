@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ViewMode {
     Markdown,
     Mindmap,
@@ -98,6 +98,7 @@ pub struct MdPreviewApp {
     pub reset_scroll_to_top: bool,
     pub keyboard_scroll_delta: f32,
     pub current_scroll_offset: f32,
+    pub preview_generation: u64,
     pub reading_progress: f32,
     pub is_ime_composing: bool,
     pub last_ime_activity: Option<std::time::Instant>,
@@ -174,6 +175,7 @@ impl MdPreviewApp {
             reset_scroll_to_top: false,
             keyboard_scroll_delta: 0.0,
             current_scroll_offset: 0.0,
+            preview_generation: 0,
             reading_progress: 0.0,
             is_ime_composing: false,
             last_ime_activity: None,
@@ -311,31 +313,39 @@ impl eframe::App for MdPreviewApp {
         // 處理全域快捷鍵事件
         while let Ok(event) = self.hotkey_rx.try_recv() {
             match event {
-                HotkeyEvent::TriggerPreviewWithFile(maybe_path) => {
-                    self.handle_hotkey_preview(maybe_path);
-                    ctx.request_repaint();
+                HotkeyEvent::TriggerPreviewWithFile { request_id, path } => {
+                    if crate::hotkey::is_current_request(request_id) {
+                        self.handle_hotkey_preview(path);
+                        ctx.request_repaint();
+                    }
                 }
             }
         }
 
         // 處理檔案監視變更事件
+        let mut refresh_directory = false;
+        let mut reload_document = false;
         while let Ok(event) = self.watcher_rx.try_recv() {
             match event {
-                WatcherEvent::DirectoryChanged => {
-                    ctx.request_repaint();
-                    self.siblings = self
-                        .current_file
-                        .as_deref()
-                        .map(crate::files::sibling_files)
-                        .unwrap_or_default();
+                WatcherEvent::DirectoryChanged => refresh_directory = true,
+                WatcherEvent::FileChanged(path) if self.watched_file.as_deref() == Some(&path) => {
+                    reload_document = true;
                 }
-                WatcherEvent::FileChanged(path) => {
-                    if self.watched_file.as_deref() == Some(&path) {
-                        self.reload_current_file();
-                        ctx.request_repaint();
-                    }
-                }
+                _ => {}
             }
+        }
+        if refresh_directory {
+            self.siblings = self
+                .current_file
+                .as_deref()
+                .map(crate::files::sibling_files)
+                .unwrap_or_default();
+        }
+        if reload_document {
+            self.reload_current_file();
+        }
+        if refresh_directory || reload_document {
+            ctx.request_repaint();
         }
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.close_confirmed {
@@ -1355,7 +1365,12 @@ impl eframe::App for MdPreviewApp {
                     match self.view_mode {
                         ViewMode::Markdown => {
                             // Markdown 富文字渲染模式 (支援即時搜尋關鍵字高亮、搜尋項目自動跳轉、滾輪重置回頂部、鍵盤方向鍵上下捲動與動態閱讀進度條)
-                            let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::vertical()
+                                .id_salt(("markdown", self.current_file.as_deref(), self.preview_generation))
+                                .auto_shrink([false, false]);
+                            if self.target_anchor.is_some() {
+                                scroll = scroll.animated(false);
+                            }
                             if let Some(target) = scroll_target {
                                 scroll = scroll.vertical_scroll_offset(target);
                             }
@@ -1377,8 +1392,9 @@ impl eframe::App for MdPreviewApp {
                                 if let Some(clicked_anchor) = rendered.clicked_anchor {
                                     self.target_anchor = Some(clicked_anchor);
                                     ctx.request_repaint();
-                                } else if self.target_anchor.is_some() {
+                                } else if rendered.anchor_found {
                                     self.target_anchor = None;
+                                    ctx.request_repaint();
                                 }
                             });
 
@@ -1401,7 +1417,9 @@ impl eframe::App for MdPreviewApp {
                         }
                         ViewMode::Table { separator } => {
                             // 現代斑馬紋資料表格模式 (支援 CSV 與 TSV 欄位解析、搜尋高亮與滾動)
-                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::both()
+                                .id_salt(("document", self.current_file.as_deref(), self.preview_generation, &self.view_mode))
+                                .auto_shrink([false, false]);
                             if let Some(target) = scroll_target {
                                 scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
                             }
@@ -1425,7 +1443,9 @@ impl eframe::App for MdPreviewApp {
                         }
                         ViewMode::Code { ref lang } => {
                             // 程式碼全語法高亮模式 (支援行號、關鍵字高亮、縮排、即時搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動)
-                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::both()
+                                .id_salt(("document", self.current_file.as_deref(), self.preview_generation, &self.view_mode))
+                                .auto_shrink([false, false]);
                             if let Some(target) = scroll_target {
                                 scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
                             }
@@ -1437,7 +1457,9 @@ impl eframe::App for MdPreviewApp {
                         }
                         ViewMode::PlainText => {
                             // 純文字檢視模式 (針對 .txt 或其他純文字檔，原汁原味顯示並支援搜尋高亮與跳轉定位、滾輪重置與鍵盤捲動，快取 LayoutJob 零拷貝)
-                            let mut scroll = ScrollArea::both().auto_shrink([false, false]);
+                            let mut scroll = ScrollArea::both()
+                                .id_salt(("document", self.current_file.as_deref(), self.preview_generation, &self.view_mode))
+                                .auto_shrink([false, false]);
                             if let Some(target) = scroll_target {
                                 scroll = scroll.scroll_offset(Vec2::new(0.0_f32, target));
                             }
@@ -1590,7 +1612,9 @@ impl eframe::App for MdPreviewApp {
                         }
                         ViewMode::Image { .. } => {
                             // 圖片與 SVG 向量圖檢視模式 (支援縮放、滾輪、適應視窗)
-                            self.render_image_viewer(ui);
+                            ui.push_id(("image", self.preview_generation), |ui| {
+                                self.render_image_viewer(ui);
+                            });
                         }
                     }
                 }
@@ -1790,5 +1814,48 @@ mod tests {
             .unwrap()
             .0
             .contains("download failed"));
+    }
+
+    #[test]
+    fn hotkey_switching_documents_resets_view_and_keeps_drafts_guarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.md");
+        let second = dir.path().join("second.md");
+        fs::write(&first, "# First").unwrap();
+        fs::write(&second, "# Second").unwrap();
+        let mut app = app();
+        app.handle_hotkey_preview(Some(first.clone()));
+        let generation = app.preview_generation;
+        app.current_scroll_offset = 500.0_f32;
+        app.target_anchor = Some("first".to_string());
+        app.handle_hotkey_preview(Some(second.clone()));
+        assert_eq!(app.content, "# Second");
+        assert_eq!(app.current_file.as_deref(), Some(second.as_path()));
+        assert_eq!(app.current_scroll_offset, 0.0_f32);
+        assert!(app.target_anchor.is_none());
+        assert!(app.preview_generation > generation);
+        assert!(app.visible);
+        app.content = "draft".to_string();
+        app.is_modified = true;
+        app.handle_hotkey_preview(Some(first));
+        assert_eq!(app.content, "draft");
+        assert!(app.pending_action.is_some());
+    }
+
+    #[test]
+    fn sibling_navigation_uses_the_existing_directory_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("a.md");
+        let second = dir.path().join("c.md");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+        let mut app = app();
+        app.open_document(&first);
+        // New entries are picked up by DirectoryChanged, not a scan on every key.
+        fs::write(dir.path().join("b.md"), "new entry").unwrap();
+        app.navigate_sibling_file(true);
+        assert_eq!(app.current_file.as_deref(), Some(second.as_path()));
+        assert_eq!(app.content, "second");
+        assert_eq!(app.siblings.len(), 2);
     }
 }

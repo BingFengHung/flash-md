@@ -21,7 +21,13 @@ impl MdPreviewApp {
     }
 
     pub(super) fn apply_document(&mut self, loaded: LoadedDocument, reset_view: bool) {
+        let refresh_siblings = self
+            .current_file
+            .as_ref()
+            .is_none_or(|previous| previous.parent() != loaded.path.parent())
+            || !self.siblings.contains(&loaded.path);
         if reset_view {
+            self.preview_generation = self.preview_generation.wrapping_add(1);
             self.view_mode = if loaded.image_bytes.is_some() {
                 ViewMode::Image {
                     format: loaded.extension.clone(),
@@ -68,11 +74,13 @@ impl MdPreviewApp {
         self.image_bytes = loaded.image_bytes;
         self.refresh_image_uri(&loaded.extension);
         self.invalidate_content();
-        self.siblings = self
-            .current_file
-            .as_deref()
-            .map(crate::files::sibling_files)
-            .unwrap_or_default();
+        if refresh_siblings {
+            self.siblings = self
+                .current_file
+                .as_deref()
+                .map(crate::files::sibling_files)
+                .unwrap_or_default();
+        }
         self.watched_file = Some(loaded.watch_path.clone());
         self.file_watcher.watch_file(&loaded.watch_path);
     }
@@ -358,7 +366,7 @@ impl MdPreviewApp {
         let Some(current) = self.current_file.as_ref() else {
             return;
         };
-        let files = crate::files::sibling_files(current);
+        let files = &self.siblings;
         if files.is_empty() {
             return;
         }
@@ -368,7 +376,8 @@ impl MdPreviewApp {
         } else {
             (index + files.len() - 1) % files.len()
         };
-        self.load_file(&files[next]);
+        let path = files[next].clone();
+        self.load_file(&path);
     }
 
     pub fn get_sibling_info(&self) -> Option<(usize, usize)> {

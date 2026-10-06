@@ -1,6 +1,7 @@
 use egui::text::{CCursor, LayoutJob, LayoutSection};
 use egui::{Align, Color32, Response, Sense, Ui};
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Map normalized matches back to original UTF-8 byte ranges, including
 /// characters whose lowercase form expands to more than one character.
@@ -121,16 +122,27 @@ pub fn searchable_label(
     } else {
         f32::INFINITY
     };
+    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    searchable_galley(ui, galley, query, active_local, jump, sense)
+}
+
+pub fn searchable_galley(
+    ui: &mut Ui,
+    galley: Arc<egui::Galley>,
+    query: &str,
+    active_local: Option<usize>,
+    jump: bool,
+    sense: Sense,
+) -> Response {
     let match_start = if jump {
         active_local.and_then(|index| {
-            find_matches(&job.text, query)
+            find_matches(galley.text(), query)
                 .get(index)
                 .map(|range| range.start)
         })
     } else {
         None
     };
-    let galley = ui.fonts(|fonts| fonts.layout_job(job));
     let response = ui.add(egui::Label::new(galley.clone()).sense(sense));
     if let Some(start) = match_start {
         let chars = galley.text()[..start].chars().count();
