@@ -12,6 +12,7 @@ mod loader;
 mod markdown;
 mod parsers;
 mod search;
+mod text_metrics;
 mod textures;
 mod theme;
 mod tray;

@@ -53,13 +53,38 @@ pub fn highlight_job(
     let matches = find_matches(&job.text, query);
     let base = *counter;
     *counter += matches.len();
+    let matches: Vec<_> = matches
+        .into_iter()
+        .enumerate()
+        .map(|(index, range)| (base + index, range))
+        .collect();
+    highlight_ranges(
+        job,
+        &matches,
+        active,
+        (normal_bg, normal_fg, active_bg, active_fg),
+    );
+}
+
+/// Color already-indexed source matches, retaining their global match number
+/// when only a visible line of a virtual document is laid out.
+pub fn highlight_ranges(
+    job: &mut LayoutJob,
+    matches: &[(usize, Range<usize>)],
+    active: Option<usize>,
+    colors: (Color32, Color32, Color32, Color32),
+) {
     if matches.is_empty() {
         return;
     }
     let mut sections = Vec::new();
     for section in &job.sections {
         let mut position = section.byte_range.start;
-        for (index, range) in matches.iter().enumerate() {
+        let first = matches.partition_point(|(_, range)| range.end <= section.byte_range.start);
+        for (index, range) in matches[first..]
+            .iter()
+            .take_while(|(_, range)| range.start < section.byte_range.end)
+        {
             let start = range.start.max(section.byte_range.start);
             let end = range.end.min(section.byte_range.end);
             if start >= end {
@@ -77,9 +102,9 @@ pub fn highlight_job(
                 });
             }
             let mut format = section.format.clone();
-            let selected = active == Some(base + index);
-            format.background = if selected { active_bg } else { normal_bg };
-            format.color = if selected { active_fg } else { normal_fg };
+            let selected = active == Some(*index);
+            format.background = if selected { colors.2 } else { colors.0 };
+            format.color = if selected { colors.3 } else { colors.1 };
             sections.push(LayoutSection {
                 leading_space: if start == section.byte_range.start {
                     section.leading_space

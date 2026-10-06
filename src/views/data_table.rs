@@ -2,13 +2,8 @@ use crate::parsers::CsvTableData;
 use crate::theme::AppTheme;
 use egui::text::{CCursor, LayoutJob};
 use egui::{Color32, FontId, Rect, Rounding, Sense, Stroke, Ui, Vec2};
+use std::collections::HashMap;
 use std::sync::Arc;
-
-#[derive(Clone)]
-struct Cell {
-    job: LayoutJob,
-    galley: Arc<egui::Galley>,
-}
 
 #[cfg(test)]
 mod tests {
@@ -90,13 +85,87 @@ mod tests {
             });
         });
     }
+
+    #[test]
+    fn lazy_cells_keep_the_same_widths_and_row_heights_as_full_layout() {
+        let source = format!("key,note,extra\nAVATAR,short,\nwide,\"{}\",tail\nJoe,\"first\nsecond\nthird\",end\nAmy", "AV 中文 Wa emoji 😀 long text ".repeat(40));
+        let data = crate::parsers::parse_csv_or_tsv(&source, ',');
+        let ctx = egui::Context::default();
+        crate::theme::setup_system_cjk_fonts(&ctx);
+        let mut previous = None;
+        for (pixels, scale) in [(1.0, 1.0), (1.25, 1.0), (1.25, 1.35)] {
+            ctx.set_pixels_per_point(pixels);
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let table = prepare_table(ui, &data, AppTheme::Dark, scale);
+                    if let Some(old) = previous.take() {
+                        assert!(!Arc::ptr_eq(&old, &table));
+                    }
+                    for column in 0..data.total_cols {
+                        let width = (0..=data.rows.len())
+                            .map(|row| {
+                                ui.fonts(|fonts| {
+                                    fonts.layout_no_wrap(
+                                        cell_text(&data, row, column).into(),
+                                        FontId::proportional(13.5 * scale),
+                                        Color32::WHITE,
+                                    )
+                                })
+                                .size()
+                                .x
+                            })
+                            .fold(0.0, f32::max);
+                        let expected = (width + 20.0 * scale).clamp(96.0 * scale, 320.0 * scale);
+                        assert!((table.widths[column] - expected).abs() < 0.01);
+                    }
+                    for row in 0..=data.rows.len() {
+                        let height = (0..data.total_cols)
+                            .map(|column| {
+                                let galley = ui.fonts(|fonts| {
+                                    fonts.layout_job(cell_job(
+                                        cell_text(&data, row, column),
+                                        row,
+                                        table.widths[column],
+                                        AppTheme::Dark,
+                                        scale,
+                                    ))
+                                });
+                                assert!(
+                                    (cell_galley(
+                                        ui,
+                                        &table,
+                                        &data,
+                                        row,
+                                        column,
+                                        AppTheme::Dark,
+                                        scale
+                                    )
+                                    .size()
+                                    .y - galley.size().y)
+                                        .abs()
+                                        < 0.01
+                                );
+                                galley.size().y
+                            })
+                            .fold(19.0 * scale, f32::max)
+                            + 12.0 * scale;
+                        assert!(
+                            (table.offsets[row + 1] - table.offsets[row] - height).abs() < 0.01
+                        );
+                    }
+                    assert!(table.wrapped.len() < data.total_cols * (data.rows.len() + 1));
+                    previous = Some(table);
+                });
+            });
+        }
+    }
 }
 
 #[derive(Clone)]
 struct TableLayout {
     widths: Vec<f32>,
     offsets: Vec<f32>,
-    rows: Vec<Vec<Cell>>,
+    wrapped: HashMap<(usize, usize), Arc<egui::Galley>>,
 }
 
 #[derive(Clone, Default)]
@@ -106,11 +175,16 @@ struct TableMatches {
 }
 
 fn prepare_table(ui: &Ui, data: &CsvTableData, theme: AppTheme, scale: f32) -> Arc<TableLayout> {
-    let key = (data.fingerprint, scale.to_bits(), theme as u8);
+    let key = (
+        data.fingerprint,
+        scale.to_bits(),
+        theme as u8,
+        ui.ctx().pixels_per_point().to_bits(),
+    );
     let id = egui::Id::new("flash-md-csv-layout");
     if let Some((old, value)) = ui
         .ctx()
-        .data(|store| store.get_temp::<((u64, u32, u8), Arc<TableLayout>)>(id))
+        .data(|store| store.get_temp::<((u64, u32, u8, u32), Arc<TableLayout>)>(id))
     {
         if old == key {
             return value;
@@ -119,72 +193,114 @@ fn prepare_table(ui: &Ui, data: &CsvTableData, theme: AppTheme, scale: f32) -> A
     let font = FontId::proportional(13.5_f32 * scale);
     let padding = Vec2::new(10.0_f32, 6.0_f32) * scale;
     let source = || std::iter::once(&data.headers).chain(data.rows.iter());
-    let widths: Vec<_> = (0..data.total_cols)
-        .map(|column| {
-            let natural = source()
-                .filter_map(|row| row.get(column))
-                .map(|text| {
-                    ui.fonts(|fonts| {
-                        fonts
-                            .layout_no_wrap(text.clone(), font.clone(), Color32::WHITE)
-                            .size()
-                            .x
-                    })
-                })
-                .fold(0.0_f32, f32::max);
-            (natural + 2.0_f32 * padding.x).clamp(96.0_f32 * scale, 320.0_f32 * scale)
-        })
-        .collect();
-    let mut offsets = vec![0.0_f32];
-    let rows = source()
-        .enumerate()
-        .map(|(row, values)| {
-            let cells: Vec<_> = widths
-                .iter()
+    let mut metrics = crate::text_metrics::TextMetrics::new(ui, font);
+    let mut widths = vec![0.0_f32; data.total_cols];
+    let natural: Vec<Vec<f32>> = source()
+        .map(|row| {
+            widths
+                .iter_mut()
                 .enumerate()
-                .map(|(column, width)| {
-                    let mut job = LayoutJob::default();
-                    job.wrap.max_width = width - 2.0_f32 * padding.x;
-                    job.wrap.break_anywhere = true;
-                    job.append(
-                        values.get(column).map(String::as_str).unwrap_or(""),
-                        0.0_f32,
-                        egui::TextFormat {
-                            font_id: font.clone(),
-                            color: if row == 0 {
-                                theme.accent_color()
-                            } else {
-                                theme.text_primary()
-                            },
-                            line_height: Some(19.0_f32 * scale),
-                            ..Default::default()
-                        },
-                    );
-                    let galley = ui.fonts(|fonts| fonts.layout_job(job.clone()));
-                    Cell { job, galley }
+                .map(|(column, max)| {
+                    let value =
+                        metrics.width(row.get(column).map(String::as_str).unwrap_or(""), false);
+                    *max = max.max(value.round());
+                    value
                 })
-                .collect();
-            let height = cells
-                .iter()
-                .map(|cell| cell.galley.size().y)
-                .fold(19.0_f32 * scale, f32::max)
-                + 2.0_f32 * padding.y;
-            offsets.push(offsets.last().copied().unwrap() + height);
-            cells
+                .collect()
         })
         .collect();
+    for width in &mut widths {
+        *width = (*width + 2.0 * padding.x).clamp(96.0 * scale, 320.0 * scale);
+    }
+    let single_height = ui
+        .fonts(|fonts| fonts.layout_job(cell_job("X", 0, widths[0], theme, scale)))
+        .size()
+        .y;
+    let mut offsets = vec![0.0_f32];
+    let mut wrapped = HashMap::new();
+    for (row, values) in source().enumerate() {
+        let mut height = single_height.max(19.0 * scale);
+        for (column, width) in widths.iter().enumerate() {
+            let text = values.get(column).map(String::as_str).unwrap_or("");
+            if text.contains('\n') || natural[row][column] > width - 2.0 * padding.x {
+                let galley =
+                    ui.fonts(|fonts| fonts.layout_job(cell_job(text, row, *width, theme, scale)));
+                height = height.max(galley.size().y);
+                wrapped.insert((row, column), galley);
+            }
+        }
+        offsets.push(offsets.last().copied().unwrap() + height + 2.0 * padding.y);
+    }
     let value = Arc::new(TableLayout {
         widths,
         offsets,
-        rows,
+        wrapped,
     });
     ui.ctx()
         .data_mut(|store| store.insert_temp(id, (key, value.clone())));
     value
 }
 
-fn table_matches(ui: &Ui, table: &TableLayout, fingerprint: u64, query: &str) -> Arc<TableMatches> {
-    let key = (fingerprint, query.to_string());
+fn cell_job(text: &str, row: usize, width: f32, theme: AppTheme, scale: f32) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = width - 20.0 * scale;
+    job.wrap.break_anywhere = true;
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: FontId::proportional(13.5 * scale),
+            color: if row == 0 {
+                theme.accent_color()
+            } else {
+                theme.text_primary()
+            },
+            line_height: Some(19.0 * scale),
+            ..Default::default()
+        },
+    );
+    job
+}
+
+fn cell_text(data: &CsvTableData, row: usize, column: usize) -> &str {
+    if row == 0 {
+        &data.headers
+    } else {
+        &data.rows[row - 1]
+    }
+    .get(column)
+    .map(String::as_str)
+    .unwrap_or("")
+}
+
+fn cell_galley(
+    ui: &Ui,
+    table: &TableLayout,
+    data: &CsvTableData,
+    row: usize,
+    column: usize,
+    theme: AppTheme,
+    scale: f32,
+) -> Arc<egui::Galley> {
+    table
+        .wrapped
+        .get(&(row, column))
+        .cloned()
+        .unwrap_or_else(|| {
+            ui.fonts(|fonts| {
+                fonts.layout_job(cell_job(
+                    cell_text(data, row, column),
+                    row,
+                    table.widths[column],
+                    theme,
+                    scale,
+                ))
+            })
+        })
+}
+
+fn table_matches(ui: &Ui, data: &CsvTableData, query: &str) -> Arc<TableMatches> {
+    let key = (data.fingerprint, query.to_string());
     let id = egui::Id::new("flash-md-csv-matches");
     if let Some((old, value)) = ui
         .ctx()
@@ -195,14 +311,12 @@ fn table_matches(ui: &Ui, table: &TableLayout, fingerprint: u64, query: &str) ->
         }
     }
     let mut value = TableMatches::default();
-    for (row, cells) in table.rows.iter().enumerate() {
+    for cells in std::iter::once(&data.headers).chain(data.rows.iter()) {
         let mut bases = Vec::new();
+        let row = value.bases.len();
         for (column, cell) in cells.iter().enumerate() {
             bases.push(value.locations.len());
-            for (local, _) in crate::search::find_matches(&cell.job.text, query)
-                .iter()
-                .enumerate()
-            {
+            for (local, _) in crate::search::find_matches(cell, query).iter().enumerate() {
                 value.locations.push((row, column, local));
             }
         }
@@ -238,7 +352,7 @@ pub fn render_csv_table(
         ui.colored_label(theme.accent_color(), format!("CSV 解析失敗：{error}"));
     }
     let table = prepare_table(ui, data, theme, font_scale);
-    let matches = table_matches(ui, &table, data.fingerprint, search_query);
+    let matches = table_matches(ui, data, search_query);
     let base = *match_counter;
     *match_counter += matches.locations.len();
     let local_active = active_match_index.and_then(|index| index.checked_sub(base));
@@ -257,7 +371,7 @@ pub fn render_csv_table(
     let end = table
         .offsets
         .partition_point(|offset| *offset < end_y)
-        .min(table.rows.len());
+        .min(data.rows.len() + 1);
     let colors = match theme {
         AppTheme::Dark => (
             Color32::from_rgba_unmultiplied(234, 179, 8, 110),
@@ -292,7 +406,7 @@ pub fn render_csv_table(
             .rect_filled(row_rect, Rounding::ZERO, background);
         ui.painter().rect_stroke(row_rect, Rounding::ZERO, border);
         let mut x = row_rect.left();
-        for (column, cell) in table.rows[row].iter().enumerate() {
+        for column in 0..table.widths.len() {
             let cell_rect = Rect::from_min_size(
                 egui::pos2(x, row_rect.top()),
                 Vec2::new(table.widths[column], row_rect.height()),
@@ -300,10 +414,20 @@ pub fn render_csv_table(
             if cell_rect.intersects(clip) {
                 let inner = cell_rect.shrink2(padding);
                 let galley = if search_query.trim().is_empty() {
-                    cell.galley.clone()
+                    cell_galley(ui, &table, data, row, column, theme, font_scale)
                 } else {
-                    let mut job = cell.job.clone();
-                    let mut counter = base + matches.bases[row][column];
+                    let mut job = cell_job(
+                        cell_text(data, row, column),
+                        row,
+                        table.widths[column],
+                        theme,
+                        font_scale,
+                    );
+                    let mut counter = base
+                        + matches.bases[row]
+                            .get(column)
+                            .copied()
+                            .unwrap_or(matches.locations.len());
                     crate::search::highlight_job(
                         &mut job,
                         search_query,
@@ -332,20 +456,17 @@ pub fn render_csv_table(
         if let Some(&(row, column, local)) =
             local_active.and_then(|index| matches.locations.get(index))
         {
-            let cell = &table.rows[row][column];
-            let range = &crate::search::find_matches(&cell.job.text, search_query)[local];
-            let cursor = cell
-                .galley
-                .from_ccursor(CCursor::new(cell.job.text[..range.start].chars().count()));
+            let text = cell_text(data, row, column);
+            let range = &crate::search::find_matches(text, search_query)[local];
+            let galley = cell_galley(ui, &table, data, row, column, theme, font_scale);
+            let cursor = galley.from_ccursor(CCursor::new(text[..range.start].chars().count()));
             let origin = rect.min
                 + Vec2::new(
                     table.widths[..column].iter().sum::<f32>() + padding.x,
                     table.offsets[row] + padding.y,
                 );
             ui.scroll_to_rect(
-                cell.galley
-                    .pos_from_cursor(&cursor)
-                    .translate(origin.to_vec2()),
+                galley.pos_from_cursor(&cursor).translate(origin.to_vec2()),
                 Some(egui::Align::Center),
             );
         }

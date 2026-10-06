@@ -652,6 +652,98 @@ fn json_toolbar_does_not_offer_standard_json_rewrites_for_json_lines_or_comments
 }
 
 #[test]
+fn virtual_code_search_reveals_a_distant_unicode_match_on_both_axes() {
+    let (mut app, ctx) = model();
+    setup_system_cjk_fonts(&ctx);
+    ctx.set_pixels_per_point(1.25);
+    app.font_scale = 1.35;
+    let source = "let value = 1;\r\n".repeat(5000) + &"padding ".repeat(400) + "目的NEEDLE\r\n";
+    content(
+        &mut app,
+        source,
+        "fixture.rs",
+        ViewMode::Code { lang: "rs".into() },
+    );
+    app.search_query = "目的needle".into();
+    app.search_jump_requested = true;
+    for index in 0..4 {
+        let output = frame(
+            &mut app,
+            &ctx,
+            index as f64 * 0.1,
+            Vec::new(),
+            Modifiers::NONE,
+        );
+        assert_eq!(app.search_match_count, 1);
+        assert!(app.current_scroll_offset > 90_000.0);
+        assert!(
+            texts(&output).len() < 140,
+            "offscreen code lines were painted"
+        );
+        if index > 0 {
+            let visible = output.shapes.iter().any(|shape| {
+                if let egui::epaint::Shape::Text(text) = &shape.shape {
+                    if let Some(start) = text.galley.text().find("目的NEEDLE") {
+                        let cursor = text.galley.from_ccursor(egui::text::CCursor::new(
+                            text.galley.text()[..start].chars().count(),
+                        ));
+                        let rect = text
+                            .galley
+                            .pos_from_cursor(&cursor)
+                            .translate(text.pos.to_vec2());
+                        return shape.clip_rect.contains(rect.center());
+                    }
+                }
+                false
+            });
+            assert!(
+                visible,
+                "distant Unicode match was outside the actual clip rect"
+            );
+        }
+    }
+}
+
+#[test]
+fn virtual_code_copy_button_copies_the_complete_source() {
+    let (mut app, ctx) = model();
+    let source = "let value = 1;\n".repeat(3100) + "// 中文最後一行\n";
+    content(
+        &mut app,
+        source.clone(),
+        "fixture.rs",
+        ViewMode::Code { lang: "rs".into() },
+    );
+    let output = frame(&mut app, &ctx, 0.0, Vec::new(), Modifiers::NONE);
+    let position = texts(&output)
+        .into_iter()
+        .find(|(text, _, _)| text.contains("複製完整代碼"))
+        .unwrap()
+        .1
+        .center();
+    for (time, pressed) in [(0.1, true), (0.2, false)] {
+        let output = frame(
+            &mut app,
+            &ctx,
+            time,
+            vec![
+                Event::PointerMoved(position),
+                Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            Modifiers::NONE,
+        );
+        if !pressed {
+            assert_eq!(output.platform_output.copied_text, source);
+        }
+    }
+}
+
+#[test]
 #[ignore = "Run optimized frame measurements in Windows CI"]
 fn performance_preview_frames() {
     let markdown = format!("# Performance\n\n{}\n| Name | Value |\n| --- | --- |\n{}\n```mermaid\nflowchart TD\n A[Read] --> B[Preview]\n```", "Readable text 中文測試 with **style**.\n\n".repeat(200), "| Data | wrapped content |\n".repeat(30));
@@ -769,6 +861,32 @@ fn performance_preview_frames() {
             if index == 0 {
                 println!("PERF {name} cold_ms={ms:.2}");
             }
+            if name == "csv-10000" || name == "code-5000" {
+                assert!(ms < 75.0, "{name} visible frame regression: {ms:.2} ms");
+            }
+            if name == "code-5000" && index == 0 {
+                let start = std::time::Instant::now();
+                while !crate::markdown::code_highlighting_ready(&ctx, &app.content, "rs", app.theme)
+                {
+                    assert!(start.elapsed().as_secs() < 30, "background syntax timeout");
+                    let frame_start = std::time::Instant::now();
+                    let output = frame(
+                        &mut app,
+                        &ctx,
+                        0.01 + start.elapsed().as_secs_f64(),
+                        Vec::new(),
+                        Modifiers::NONE,
+                    );
+                    let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
+                    let ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+                    assert!(ms < 75.0, "background colors stalled UI: {ms:.2} ms");
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                println!(
+                    "PERF {name} syntax_ready_after_first_frame_ms={:.2}",
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+            }
             if index >= 5 {
                 times.push(ms);
             }
@@ -781,5 +899,38 @@ fn performance_preview_frames() {
             times.len()
         );
         assert!(p95 < 50.0_f64, "{name} warm frame regression: {p95:.2} ms");
+        if name == "csv-10000" || name == "code-5000" {
+            app.search_query = if name == "csv-10000" {
+                "row9999"
+            } else {
+                "value_4999"
+            }
+            .to_string();
+            app.search_match_index = 0;
+            app.search_jump_requested = true;
+            let mut search_times = Vec::new();
+            for index in 0..30 {
+                let start = std::time::Instant::now();
+                let output = frame(
+                    &mut app,
+                    &ctx,
+                    10.0 + index as f64 / 60.0,
+                    Vec::new(),
+                    Modifiers::NONE,
+                );
+                let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
+                let ms = start.elapsed().as_secs_f64() * 1000.0;
+                assert!(ms < 75.0, "{name} distant search stalled: {ms:.2} ms");
+                search_times.push(ms);
+            }
+            assert_eq!(app.search_match_count, 1);
+            assert!(app.current_scroll_offset > 90_000.0);
+            let first = search_times[0];
+            search_times.sort_by(f64::total_cmp);
+            println!(
+                "PERF {name} distant_search_first_ms={first:.2} p95_ms={:.2}",
+                search_times[28]
+            );
+        }
     }
 }

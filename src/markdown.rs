@@ -5,6 +5,8 @@ mod navigation_tests;
 mod pdf;
 mod table;
 
+#[cfg(test)]
+pub(crate) use code::code_highlighting_ready;
 use code::find_syntax_by_lang;
 pub use code::{
     get_image_badge, get_language_badge, is_code_extension, is_image_extension, render_code_viewer,

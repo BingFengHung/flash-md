@@ -69,7 +69,216 @@ pub fn find_syntax_by_lang<'a>(
         .unwrap_or_else(|| syntax_set.find_syntax_plain_text())
 }
 
-/// 支援全語法高亮 + 行號 + 搜尋高亮的獨立程式碼檢視器 (全量 LayoutJob 快取，秒開 100K 行超大檔案)
+mod highlighting;
+
+use std::ops::Range;
+use std::sync::Arc;
+
+#[cfg(test)]
+pub(crate) fn code_highlighting_ready(
+    ctx: &egui::Context,
+    code: &str,
+    language: &str,
+    theme: AppTheme,
+) -> bool {
+    let rows = highlighting::snapshot(
+        ctx,
+        crate::parsers::content_hash(code),
+        code,
+        language,
+        theme,
+    );
+    let limit = if code.len() > 300 * 1024 { 200 } else { 2000 };
+    rows.len() == code.split_inclusive('\n').take(limit).count()
+}
+
+struct CodeLayout {
+    lines: Vec<Range<usize>>,
+    total_lines: usize,
+    row_height: f32,
+    code_width: f32,
+    gutter_width: f32,
+    truncated: bool,
+    expanded: bool,
+}
+
+fn code_layout(ui: &Ui, hash: u64, code: &str, scale: f32, expanded: bool) -> Arc<CodeLayout> {
+    let id = egui::Id::new("flash-md-code-layout");
+    let key = (
+        hash,
+        scale.to_bits(),
+        ui.ctx().pixels_per_point().to_bits(),
+        expanded,
+    );
+    if let Some((old, value)) = ui
+        .ctx()
+        .data(|store| store.get_temp::<((u64, u32, u32, bool), Arc<CodeLayout>)>(id))
+    {
+        if old == key {
+            return value;
+        }
+    }
+    let font = FontId::monospace(13.5 * scale);
+    let mut metrics = crate::text_metrics::TextMetrics::new(ui, font.clone());
+    let limit = if expanded {
+        usize::MAX
+    } else if code.len() > 300 * 1024 {
+        1000
+    } else {
+        3000
+    };
+    let mut start = 0;
+    let mut lines = Vec::new();
+    let mut total_lines = 0;
+    let mut code_width = 0.0_f32;
+    let mut truncated = false;
+    for line in code.split('\n') {
+        total_lines += 1;
+        if lines.len() < limit {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let boundary = if expanded {
+                line.len()
+            } else {
+                line.char_indices()
+                    .nth(1000)
+                    .map_or(line.len(), |(index, _)| index)
+            };
+            let text = &line[..boundary];
+            let mut width = metrics.width(text, true);
+            if boundary < line.len() {
+                truncated = true;
+                width += metrics.width(" … [單行過長已截斷]", true) + 2.0;
+            }
+            code_width = code_width.max(width);
+            lines.push(start..start + line.len());
+        } else {
+            truncated = true;
+        }
+        start += line.len() + 1;
+    }
+    let gutter_width = metrics
+        .width(&total_lines.to_string(), true)
+        .max(metrics.width("00", true))
+        .ceil();
+    let mut sample = LayoutJob::default();
+    sample.append(
+        "X",
+        0.0,
+        egui::TextFormat {
+            font_id: font,
+            line_height: Some(21.0 * scale),
+            ..Default::default()
+        },
+    );
+    let row_height = ui.fonts(|fonts| fonts.layout_job(sample)).size().y;
+    let value = Arc::new(CodeLayout {
+        lines,
+        total_lines,
+        row_height,
+        code_width: code_width.ceil() + 2.0,
+        gutter_width,
+        truncated,
+        expanded,
+    });
+    ui.ctx()
+        .data_mut(|store| store.insert_temp(id, (key, value.clone())));
+    value
+}
+
+struct CodePainter<'a> {
+    code: &'a str,
+    layout: &'a CodeLayout,
+    colors: &'a [Vec<highlighting::ColorSpan>],
+    matches: &'a [Range<usize>],
+    active: Option<usize>,
+    theme: AppTheme,
+    scale: f32,
+}
+
+impl CodePainter<'_> {
+    fn job(&self, line: usize) -> LayoutJob {
+        let source = &self.layout.lines[line];
+        let full_text = &self.code[source.clone()];
+        let end = if self.layout.expanded {
+            full_text.len()
+        } else {
+            full_text
+                .char_indices()
+                .nth(1000)
+                .map_or(full_text.len(), |(index, _)| index)
+        };
+        let text = &full_text[..end];
+        let format = egui::TextFormat {
+            font_id: FontId::monospace(13.5 * self.scale),
+            color: self.theme.text_primary(),
+            line_height: Some(21.0 * self.scale),
+            ..Default::default()
+        };
+        let mut job = LayoutJob::default();
+        let mut position = 0;
+        if let Some(spans) = self.colors.get(line) {
+            for span in spans {
+                let start = span.range.start.min(end);
+                let stop = span.range.end.min(end);
+                if start >= stop {
+                    continue;
+                }
+                if position < start {
+                    job.append(&text[position..start], 0.0, format.clone());
+                }
+                let mut colored = format.clone();
+                colored.color = span.color;
+                job.append(&text[start..stop], 0.0, colored);
+                position = stop;
+            }
+        }
+        if position < end || job.sections.is_empty() {
+            job.append(&text[position..], 0.0, format.clone());
+        }
+        if end < full_text.len() {
+            let mut note = format;
+            note.color = self.theme.text_secondary();
+            job.append(" … [單行過長已截斷]", 0.0, note);
+        }
+        let first = self
+            .matches
+            .partition_point(|range| range.end <= source.start);
+        let local: Vec<_> = self.matches[first..]
+            .iter()
+            .enumerate()
+            .take_while(|(_, range)| range.start < source.start + end)
+            .filter_map(|(index, range)| {
+                let start = range.start.max(source.start) - source.start;
+                let stop = range.end.min(source.start + end) - source.start;
+                (start < stop).then_some((first + index, start..stop))
+            })
+            .collect();
+        let colors = match self.theme {
+            AppTheme::Dark => (
+                Color32::from_rgba_unmultiplied(234, 179, 8, 110),
+                Color32::from_rgb(254, 240, 138),
+                Color32::from_rgb(249, 115, 22),
+                Color32::BLACK,
+            ),
+            AppTheme::Light => (
+                Color32::from_rgb(254, 240, 138),
+                Color32::from_rgb(113, 63, 18),
+                Color32::from_rgb(234, 88, 12),
+                Color32::WHITE,
+            ),
+        };
+        crate::search::highlight_ranges(&mut job, &local, self.active, colors);
+        job
+    }
+
+    fn galley(&self, ui: &Ui, line: usize) -> Arc<egui::Galley> {
+        ui.fonts(|fonts| fonts.layout_job(self.job(line)))
+    }
+}
+
+/// Reserve the complete scroll extent, but lay out only visible source lines.
+/// Syntax parsing runs on a coalescing worker; uncolored text is readable while
+/// colors arrive, and search always indexes the complete original source.
 #[allow(clippy::too_many_arguments)]
 pub fn render_code_viewer(
     ui: &mut Ui,
@@ -82,305 +291,168 @@ pub fn render_code_viewer(
     search_jump: bool,
 ) -> usize {
     let lang_lower = extension_or_lang.to_lowercase();
-
-    let font_id = FontId::monospace(13.5 * font_scale);
-    let gutter_color = theme.text_secondary().gamma_multiply(0.6);
-    let border_color = theme.border_color();
-
-    let (hl_bg, hl_fg, act_bg, act_fg) = match theme {
-        AppTheme::Dark => (
-            Color32::from_rgba_unmultiplied(234, 179, 8, 110),
-            Color32::from_rgb(254, 240, 138),
-            Color32::from_rgb(249, 115, 22),
-            Color32::BLACK,
-        ),
-        AppTheme::Light => (
-            Color32::from_rgb(254, 240, 138),
-            Color32::from_rgb(113, 63, 18),
-            Color32::from_rgb(234, 88, 12),
-            Color32::WHITE,
-        ),
-    };
-
-    // 快取整個檔案的高亮 LayoutJob，避免每幀在 60 FPS 下反覆進行 syntect 正則運算 (零堆疊分配雜湊)
-    // Large files start in a safe, fast preview. Keep the expansion state in
-    // egui's temporary data so the viewer can offer a real way to render the
-    // remaining content without adding UI state to every caller.
-    let expand_id = egui::Id::new(("code_viewer_expand", crate::parsers::content_hash(code)));
-    let is_expanded = !search_query.trim().is_empty()
+    let hash = crate::parsers::content_hash(code);
+    let expand_id = egui::Id::new(("code_viewer_expand", hash));
+    let expanded = !search_query.trim().is_empty()
         || ui
             .ctx()
-            .data(|d| d.get_temp::<bool>(expand_id).unwrap_or(false));
-
-    let cache_id = egui::Id::new((
-        "code_viewer_fast_v3",
-        crate::parsers::content_hash(code),
-        (font_scale * 100.0_f32) as u32,
-        theme as u8,
-        &lang_lower,
-        is_expanded,
-    ));
-
-    let (gutter_job, mut code_job, total_line_count, displayed_line_count, is_truncated) =
-        ui.ctx().data_mut(|d| {
-            if let Some(cached) = d.get_temp::<(LayoutJob, LayoutJob, usize, usize, bool)>(cache_id)
-            {
-                cached.clone()
-            } else {
-                let mut gutter_job = LayoutJob::default();
-                let mut code_job = LayoutJob::default();
-
-                // 1. 極速位元組行數統計 (7MB 僅需 0.3ms，完全不卡主執行緒)
-                let total_lines = code.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1;
-
-                // 2. 依照檔案大小動態決定安全預覽策略
-                let is_huge_file = code.len() > 300 * 1024; // > 300 KB
-                let max_render_lines = if is_expanded {
-                    total_lines
-                } else if is_huge_file {
-                    1000
-                } else {
-                    3000
-                };
-                let max_highlight_lines = if is_huge_file { 200 } else { 2000 };
-                const MAX_LINE_CHAR_LIMIT: usize = 1000;
-
-                let default_text_color = match theme {
-                    AppTheme::Dark => Color32::from_rgb(226, 232, 240),
-                    AppTheme::Light => Color32::from_rgb(30, 41, 59),
-                };
-
-                let syntax_set = get_syntax_set();
-                let theme_set = get_theme_set();
-                let syntect_theme = match theme {
-                    AppTheme::Dark => &theme_set.themes["base16-eighties.dark"],
-                    AppTheme::Light => &theme_set.themes["InspiredGitHub"],
-                };
-                let syntax = find_syntax_by_lang(&lang_lower, syntax_set);
-                let mut highlighter = HighlightLines::new(syntax, syntect_theme);
-
-                let mut displayed_lines = 0;
-                let mut has_line_truncation = false;
-
-                // 3. 僅迭代需要預覽的行數，絕不浪費 CPU 遍歷整個 7MB 字串
-                for line in code.lines().take(max_render_lines) {
-                    displayed_lines += 1;
-
-                    // 超長單行截斷防護 (例如 minified bundle)
-                    let (chunk, is_line_truncated) =
-                        if !is_expanded && line.len() > MAX_LINE_CHAR_LIMIT {
-                            let boundary = line
-                                .char_indices()
-                                .nth(MAX_LINE_CHAR_LIMIT)
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(line.len());
-                            (&line[..boundary], true)
-                        } else {
-                            (line, false)
-                        };
-                    has_line_truncation |= is_line_truncated;
-
-                    let line_with_nl = format!("{}\n", chunk);
-
-                    if displayed_lines <= max_highlight_lines {
-                        let ranges = highlighter
-                            .highlight_line(&line_with_nl, syntax_set)
-                            .unwrap_or_default();
-
-                        for (style, text) in ranges {
-                            let color = Color32::from_rgb(
-                                style.foreground.r,
-                                style.foreground.g,
-                                style.foreground.b,
-                            );
-
-                            let base_fmt = egui::TextFormat {
-                                font_id: font_id.clone(),
-                                color,
-                                line_height: Some(21.0 * font_scale),
-                                ..Default::default()
-                            };
-
-                            code_job.append(text, 0.0, base_fmt);
-                        }
-                    } else {
-                        let base_fmt = egui::TextFormat {
-                            font_id: font_id.clone(),
-                            color: default_text_color,
-                            line_height: Some(21.0 * font_scale),
-                            ..Default::default()
-                        };
-                        code_job.append(&line_with_nl, 0.0, base_fmt);
-                    }
-
-                    if is_line_truncated {
-                        let base_fmt = egui::TextFormat {
-                            font_id: font_id.clone(),
-                            color: theme.text_secondary(),
-                            line_height: Some(21.0 * font_scale),
-                            ..Default::default()
-                        };
-                        code_job.append(" ... [單行過長已截斷]\n", 0.0, base_fmt);
-                    }
-                }
-
-                let gutter_digits = format!("{}", displayed_lines.max(1)).len().max(2);
-                for i in 0..displayed_lines {
-                    let line_num_str = format!("{:>width$}\n", i + 1, width = gutter_digits);
-                    gutter_job.append(
-                        &line_num_str,
-                        0.0,
-                        egui::TextFormat {
-                            font_id: font_id.clone(),
-                            color: gutter_color,
-                            line_height: Some(21.0 * font_scale),
-                            ..Default::default()
-                        },
-                    );
-                }
-
-                let is_truncated =
-                    !is_expanded && (total_lines > displayed_lines || has_line_truncation);
-                let result = (
-                    gutter_job,
-                    code_job,
-                    total_lines,
-                    displayed_lines,
-                    is_truncated,
-                );
-                d.insert_temp(cache_id, result.clone());
-                result
-            }
-        });
-
-    let mut match_count = 0;
-    crate::search::highlight_job(
-        &mut code_job,
-        search_query,
-        active_match_index,
-        &mut match_count,
-        hl_bg,
-        hl_fg,
-        act_bg,
-        act_fg,
-    );
-
-    // 容器卡片外框
+            .data(|store| store.get_temp::<bool>(expand_id).unwrap_or(false));
+    let layout = code_layout(ui, hash, code, font_scale, expanded);
+    let colors = highlighting::snapshot(ui.ctx(), hash, code, &lang_lower, theme);
+    let matches_id = egui::Id::new("flash-md-code-matches");
+    let search_key = (hash, search_query.to_string());
+    let cached = ui
+        .ctx()
+        .data(|store| store.get_temp::<((u64, String), Arc<Vec<Range<usize>>>)>(matches_id));
+    let matches = if let Some((_, matches)) = cached.filter(|(old, _)| *old == search_key) {
+        matches
+    } else {
+        let matches = Arc::new(crate::search::find_matches(code, search_query));
+        ui.ctx()
+            .data_mut(|store| store.insert_temp(matches_id, (search_key, matches.clone())));
+        matches
+    };
+    let painter = CodePainter {
+        code,
+        layout: &layout,
+        colors: &colors,
+        matches: &matches,
+        active: active_match_index,
+        theme,
+        scale: font_scale,
+    };
+    let font = FontId::monospace(13.5 * font_scale);
     Frame::none()
         .fill(theme.card_bg_color())
         .rounding(Rounding::same(8.0))
-        .stroke(Stroke::new(1.0_f32, border_color))
+        .stroke(Stroke::new(1.0, theme.border_color()))
         .inner_margin(Margin::symmetric(16.0, 14.0))
         .show(ui, |ui| {
-            // 程式碼檢視器頂部工具列 (語言識別 + 行數 + 複製按鈕)
             ui.horizontal(|ui| {
                 let (name, emoji) = get_language_badge(&lang_lower);
                 ui.label(
-                    RichText::new(format!("{} {}", emoji, name))
+                    RichText::new(format!("{emoji} {name}"))
                         .font(FontId::monospace(11.5 * font_scale))
                         .color(theme.accent_color())
                         .strong(),
                 );
-                let line_desc = if is_truncated {
-                    format!("•  {} 行 (已預覽前 {} 行)", total_line_count, displayed_line_count)
+                let description = if layout.truncated {
+                    format!(
+                        "• {} 行（預覽前 {} 行）",
+                        layout.total_lines,
+                        layout.lines.len()
+                    )
                 } else {
-                    format!("•  {} 行", total_line_count)
+                    format!("• {} 行", layout.total_lines)
                 };
                 ui.label(
-                    RichText::new(line_desc)
+                    RichText::new(description)
                         .size(11.0 * font_scale)
                         .color(theme.text_secondary()),
                 );
-                if is_truncated {
-                    Frame::none()
-                        .fill(theme.code_bg_color())
-                        .rounding(Rounding::same(3.0))
-                        .inner_margin(Margin::symmetric(5.0, 1.0))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("⚡ 大檔極速防護模式")
-                                    .size(10.0 * font_scale)
-                                    .color(theme.accent_color()),
-                            );
-                        });
-                }
-
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let copy_id = ui.make_persistent_id(format!("viewer_cb_copy_{:p}_{}", code.as_ptr(), code.len()));
-                    let is_copied = ui.ctx().data(|d| {
-                        d.get_temp::<std::time::Instant>(copy_id)
-                            .map(|t| t.elapsed().as_secs_f32() < 2.0_f32)
-                            .unwrap_or(false)
+                    let copy_id = ui.make_persistent_id(("viewer-copy", hash));
+                    let copied = ui.ctx().data(|store| {
+                        store
+                            .get_temp::<std::time::Instant>(copy_id)
+                            .is_some_and(|time| time.elapsed().as_secs_f32() < 2.0)
                     });
-
-                    let btn_text = if is_copied {
-                        RichText::new("✓ 已複製完整代碼")
-                            .color(Color32::from_rgb(34, 197, 94))
-                            .size(11.5 * font_scale)
-                            .strong()
-                    } else {
-                        RichText::new("📋 複製完整代碼")
-                            .color(theme.text_secondary())
-                            .size(11.5 * font_scale)
-                    };
-
-                    if ui.button(btn_text).clicked() {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(code.to_string());
-                        }
-                        ui.ctx().data_mut(|d| d.insert_temp(copy_id, std::time::Instant::now()));
+                    if ui
+                        .button(if copied {
+                            "✓ 已複製完整代碼"
+                        } else {
+                            "📋 複製完整代碼"
+                        })
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(code.to_string());
+                        ui.ctx().data_mut(|store| {
+                            store.insert_temp(copy_id, std::time::Instant::now())
+                        });
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs(2));
                     }
                 });
             });
-
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(6.0);
-
-            ui.horizontal_top(|ui| {
-                // 1. 行號欄 (Line Numbers Gutter)
-                ui.vertical(|ui| {
-                    ui.label(gutter_job);
+            let width = (layout.gutter_width + 18.0 + layout.code_width).max(ui.available_width());
+            let (rect, _) = ui.allocate_exact_size(
+                Vec2::new(width, layout.lines.len() as f32 * layout.row_height),
+                Sense::hover(),
+            );
+            let clip = ui.clip_rect();
+            let first = (((clip.top() - rect.top()).max(0.0) / layout.row_height).floor() as usize)
+                .min(layout.lines.len());
+            let end = (((clip.bottom() - rect.top()).max(0.0) / layout.row_height).ceil() as usize)
+                .min(layout.lines.len());
+            let code_x = rect.left() + layout.gutter_width + 18.0;
+            for line in first..end {
+                let y = rect.top() + line as f32 * layout.row_height;
+                let number = ui.fonts(|fonts| {
+                    fonts.layout_no_wrap(
+                        (line + 1).to_string(),
+                        font.clone(),
+                        theme.text_secondary().gamma_multiply(0.6),
+                    )
                 });
-
-                // 分隔垂直線
-                ui.add_space(8.0);
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, (displayed_line_count as f32) * 21.0 * font_scale), egui::Sense::hover());
-                ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0_f32, border_color));
-                ui.add_space(8.0);
-
-                // 2. 程式碼語法高亮區域 (使用快取的 LayoutJob，瞬時渲染)
-                ui.vertical(|ui| {
-                    crate::search::searchable_label(ui, code_job, search_query, active_match_index, search_jump, Sense::hover(), false);
-                });
-            });
-
-            if is_truncated {
+                ui.painter().galley(
+                    egui::pos2(rect.left() + layout.gutter_width - number.size().x, y),
+                    number,
+                    theme.text_secondary(),
+                );
+                ui.painter().galley(
+                    egui::pos2(code_x, y),
+                    painter.galley(ui, line),
+                    theme.text_primary(),
+                );
+            }
+            let separator = rect.left() + layout.gutter_width + 8.0;
+            ui.painter().vline(
+                separator,
+                rect.y_range(),
+                Stroke::new(1.0, theme.border_color()),
+            );
+            if layout.truncated {
                 ui.add_space(10.0);
-                Frame::none()
-                    .fill(theme.code_bg_color())
-                    .rounding(Rounding::same(6.0))
-                    .stroke(Stroke::new(1.0_f32, theme.accent_color().gamma_multiply(0.4)))
-                    .inner_margin(Margin::symmetric(14.0, 8.0))
-                    .show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "⚡ 檔案較大（共 {} 行），已為您極速安全預覽前 {} 行以維持 60 FPS 順暢體驗。點擊右上角「複製完整代碼」可提取完整內容。",
-                                    total_line_count, displayed_line_count
-                                ))
-                                .color(theme.accent_color())
-                                .size(11.5 * font_scale),
-                            );
-                            if ui.button("載入完整內容").clicked() {
-                                ui.ctx().data_mut(|d| d.insert_temp(expand_id, true));
-                                ui.ctx().request_repaint();
-                            }
-                        });
-                    });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new("目前顯示部分內容；搜尋會涵蓋完整檔案，也可手動展開。")
+                            .color(theme.accent_color())
+                            .size(11.5 * font_scale),
+                    );
+                    if ui.button("載入完整內容").clicked() {
+                        ui.ctx()
+                            .data_mut(|store| store.insert_temp(expand_id, true));
+                        ui.ctx().request_repaint();
+                    }
+                });
+            }
+            // Submit after allocating the whole document so distant matches
+            // can scroll both axes even though their line was not painted.
+            if search_jump {
+                if let Some(range) = active_match_index.and_then(|index| matches.get(index)) {
+                    let line = layout
+                        .lines
+                        .partition_point(|line| line.start <= range.start)
+                        .saturating_sub(1);
+                    if let Some(source) = layout.lines.get(line) {
+                        let galley = painter.galley(ui, line);
+                        let column = code[source.start..range.start.min(source.end)]
+                            .chars()
+                            .count();
+                        let cursor = galley.from_ccursor(egui::text::CCursor::new(column));
+                        let target = galley.pos_from_cursor(&cursor).translate(egui::vec2(
+                            code_x,
+                            rect.top() + line as f32 * layout.row_height,
+                        ));
+                        ui.scroll_to_rect(target, Some(Align::Center));
+                    }
+                }
             }
         });
-    match_count
+    matches.len()
 }
 
 /// 判斷特定副檔名是否為圖片或向量圖類型

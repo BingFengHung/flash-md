@@ -10,6 +10,13 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 
 ---
 
+## v1.0.108 cold preview improvements
+
+- CSV/TSV reuse actual font advances and kerning to measure short cells without generating every text mesh twice. Wrapped and multiline cells keep their real layout heights, and visible cells plus search targets are laid out on demand. DPI and font scale participate in the geometry cache key.
+- Code previews allocate the complete preview extent and lay out only visible lines. Syntax colors arrive from a background worker that coalesces pending documents and rejects stale results; reading, scrolling and searching remain available while colors are prepared.
+- Search indexes the full original source and uses actual galley cursor positions on both axes, including distant Unicode matches beyond the long-line preview limit. The copy button copies the complete original source through egui's clipboard output.
+- Windows CI checks first-frame and distant-search CPU time for 10,000-row CSV and 5,000-line code, and measures warm code frames after background coloring is complete. These CPU checks do not establish physical device or GPU latency.
+
 ## v1.0.107 interaction and format fixes
 
 - Search Enter / Shift+Enter keeps focus and navigates matches. Search from editing, slides or mindmaps returns to the document preview while keeping unsaved content. Wide Markdown table searches reveal the matching column as well as the row.
