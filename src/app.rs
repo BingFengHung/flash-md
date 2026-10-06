@@ -8,7 +8,8 @@ use crate::explorer::{hide_app_window, show_and_focus_app_window};
 use crate::files::{load_document, LoadedDocument};
 use crate::hotkey::HotkeyEvent;
 use crate::markdown::{
-    get_image_badge, get_language_badge, is_code_extension, render_code_viewer, MarkdownRenderer,
+    get_image_badge, get_language_badge, is_code_extension, is_image_extension, render_code_viewer,
+    MarkdownRenderer,
 };
 use crate::theme::{setup_system_cjk_fonts, AppTheme};
 use crate::tray::TrayMenuAction;
@@ -1537,7 +1538,7 @@ impl eframe::App for MdPreviewApp {
                                 });
 
                                 self.search_match_count = crate::search::find_matches(&text_job.text, &self.search_query).len();
-                                crate::search::searchable_label(ui, text_job, &self.search_query, active_match_idx, self.search_jump_requested, egui::Sense::hover());
+                                crate::search::searchable_label(ui, text_job, &self.search_query, active_match_idx, self.search_jump_requested, egui::Sense::hover(), false);
                                 if plaintext_is_truncated {
                                     ui.add_space(8.0);
                                     ui.horizontal_wrapped(|ui| {

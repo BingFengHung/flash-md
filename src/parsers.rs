@@ -26,7 +26,7 @@ pub fn cached_events(ctx: &egui::Context, content: &str) -> Arc<Vec<Event<'stati
                 return events;
             }
         }
-        let events = Arc::new(
+        let events: Arc<Vec<Event<'static>>> = Arc::new(
             Parser::new_ext(content, markdown_options())
                 .map(Event::into_static)
                 .collect(),

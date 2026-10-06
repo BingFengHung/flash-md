@@ -114,8 +114,13 @@ pub fn searchable_label(
     active_local: Option<usize>,
     jump: bool,
     sense: Sense,
+    wrap: bool,
 ) -> Response {
-    job.wrap.max_width = ui.available_width();
+    job.wrap.max_width = if wrap {
+        ui.available_width()
+    } else {
+        f32::INFINITY
+    };
     let match_start = if jump {
         active_local.and_then(|index| {
             find_matches(&job.text, query)
@@ -141,6 +146,22 @@ pub fn searchable_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_and_plain_text_can_keep_physical_lines_while_prose_wraps() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_max_width(80.0);
+                let mut job = LayoutJob::default();
+                job.append(&"long_text ".repeat(30), 0.0, Default::default());
+                let wrapped =
+                    searchable_label(ui, job.clone(), "", None, false, Sense::hover(), true);
+                let unwrapped = searchable_label(ui, job, "", None, false, Sense::hover(), false);
+                assert!(wrapped.rect.height() > unwrapped.rect.height());
+            });
+        });
+    }
 
     #[test]
     fn unicode_matches_preserve_original_byte_boundaries() {

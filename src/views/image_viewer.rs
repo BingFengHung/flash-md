@@ -27,7 +27,7 @@ pub fn render_image_viewer(
         }
 
         let mut scroll = ScrollArea::both()
-            .id_source("image_viewer_scroll_area")
+            .id_salt("image_viewer_scroll_area")
             .auto_shrink([false, false]);
         if reset_scroll_to_top {
             scroll = scroll.scroll_offset(Vec2::ZERO);

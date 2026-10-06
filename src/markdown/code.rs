@@ -351,7 +351,7 @@ pub fn render_code_viewer(
 
                 // 2. 程式碼語法高亮區域 (使用快取的 LayoutJob，瞬時渲染)
                 ui.vertical(|ui| {
-                    crate::search::searchable_label(ui, code_job, search_query, active_match_index, search_jump, Sense::hover());
+                    crate::search::searchable_label(ui, code_job, search_query, active_match_index, search_jump, Sense::hover(), false);
                 });
             });
 

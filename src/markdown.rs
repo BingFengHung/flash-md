@@ -450,7 +450,15 @@ impl<'a> RenderContext<'a> {
                 .contains(&index)
                 .then(|| index - base)
         });
-        crate::search::searchable_label(ui, job, self.search_query, local, self.search_jump, sense)
+        crate::search::searchable_label(
+            ui,
+            job,
+            self.search_query,
+            local,
+            self.search_jump,
+            sense,
+            true,
+        )
     }
 
     fn push_text(&mut self, text: &str) {
@@ -791,9 +799,7 @@ impl<'a> RenderContext<'a> {
         if !has_hyperlinks && !has_emojis {
             let mut job = LayoutJob::default();
             for (idx, span) in spans.into_iter().enumerate() {
-                let color = if is_list_item && idx == 0 {
-                    self.theme.accent_color()
-                } else if span.code {
+                let color = if (is_list_item && idx == 0) || span.code {
                     self.theme.accent_color()
                 } else {
                     self.theme.text_primary()
@@ -827,9 +833,7 @@ impl<'a> RenderContext<'a> {
                 for (idx, span) in spans.into_iter().enumerate() {
                     let is_link = span.link_url.is_some();
 
-                    let color = if is_list_item && idx == 0 {
-                        self.theme.accent_color()
-                    } else if span.code || is_link {
+                    let color = if (is_list_item && idx == 0) || span.code || is_link {
                         self.theme.accent_color()
                     } else {
                         self.theme.text_primary()
@@ -1451,6 +1455,7 @@ pub fn render_csv_table(
                             local,
                             search_jump,
                             Sense::hover(),
+                            true,
                         );
                     });
             }
@@ -1502,6 +1507,7 @@ pub fn render_csv_table(
                                 local,
                                 search_jump,
                                 Sense::hover(),
+                                true,
                             );
                         });
                 }
