@@ -16,7 +16,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - Outline, preview and mindmap anchors use the same heading IDs, including headings with images and automatic IDs that would otherwise collide with explicit IDs. UTF-8 BOM files keep their first Markdown heading and slide frontmatter; JSON formatting preserves the original BOM when saving.
 - Fast navigation during a cross-folder load cannot reuse the previous folder's entries. Directory changes scan on a background worker, discard stale results and choose the correct neighbor if the current file was deleted. Pending loads also respect search input and settings keyboard focus.
 - Switching from slides to editing, search, outline or mindmap consistently exits presentation fullscreen. The outline stays hidden in the editor and slides. The toolbar Close button uses the Save / Discard / Cancel flow.
-- GIF previews retain animation instead of decoding only the first frame. Explorer selection excludes directories and supports ZIP entries inside folders whose names end in `.zip`. Format / Minify is offered for standard `.json` files; JSON5, JSONC and JSON Lines remain available for preview and editing.
+- GIF previews retain animation instead of decoding only the first frame, and TIFF decoding is explicitly enabled for the image viewer. Explorer selection excludes directories and supports ZIP entries inside folders whose names end in `.zip`. Format / Minify is offered for standard `.json` files; JSON5, JSONC and JSON Lines remain available for preview and editing.
 - Regression checks exercise real search keys, painted table visibility, heading scroll offsets, toolbar clicks, two GIF frames, BOM roundtrips and asynchronous navigation. Native Windows checks also open JPEG, GIF, BMP, TIFF, BOM Markdown and an archive beneath a `.zip` folder.
 
 ## v1.0.106 Responsiveness and verification
@@ -68,7 +68,7 @@ Simply select any `.md` file in **Windows File Explorer** or on the **Desktop** 
 - 📊 **CSV / TSV Zebra-Striped Data Tables**: Automatically renders structured tabular data with zebra striping, search highlighting, and smooth scrolling!
 - ⚡ **Validated JSON Format & Minify**: One-click beautify (2-space indent) or compress minified JSON files directly in the toolbar.
 - 📁 **Locate in Windows File Explorer (Ctrl + Shift + O)**: Instantly reveals and highlights the currently previewed file in Windows File Explorer.
-- 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, GIF, WEBP, BMP, ICO and SVG formats with smooth mouse wheel zooming, panning, and auto-fit to window!
+- 🖼️ **Instant Image & SVG Vector Preview**: Supports PNG, JPG, JPEG, animated GIF, WEBP, BMP, ICO, TIFF and SVG formats with smooth mouse wheel zooming, panning, and auto-fit to window!
 - 💻 **100+ Formats & Syntax Highlighting**: Supports Markdown, Rust, Python, TypeScript, JavaScript, HTML, CSS, C++, Go, JSON, TOML, YAML, CSV, SQL, Dockerfile, and more!
 - 📝 **Multi-Track Mode Switching**: Automatically routes Markdown, Source Code, Plain Text, and Images to their optimal viewers, with instant cycling via `Ctrl + M`.
 - 🎨 **Modern Dark & Light Themes**: Seamlessly toggle between dark and light modes with GitHub-style typography and clean borders.
