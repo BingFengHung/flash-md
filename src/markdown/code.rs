@@ -382,16 +382,12 @@ pub fn render_code_viewer(
                 Vec2::new(width, layout.lines.len() as f32 * layout.row_height),
                 Sense::hover(),
             );
-            let clip = ui.clip_rect().intersect(ui.ctx().screen_rect());
+            let clip = ui.clip_rect();
             let first = (((clip.top() - rect.top()).max(0.0) / layout.row_height).floor() as usize)
                 .min(layout.lines.len());
             let end = (((clip.bottom() - rect.top()).max(0.0) / layout.row_height).ceil() as usize)
                 .min(layout.lines.len());
             let code_x = rect.left() + layout.gutter_width + 18.0;
-            #[cfg(test)]
-            if end.saturating_sub(first) > 50 {
-                println!("CODE viewport first={first} end={end} clip={clip:?} rect={rect:?} row_height={}", layout.row_height);
-            }
             for line in first..end {
                 let y = rect.top() + line as f32 * layout.row_height;
                 let number = ui.fonts(|fonts| {

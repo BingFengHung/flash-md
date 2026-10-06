@@ -656,6 +656,15 @@ fn virtual_code_search_reveals_a_distant_unicode_match_on_both_axes() {
     let (mut app, ctx) = model();
     setup_system_cjk_fonts(&ctx);
     ctx.set_pixels_per_point(1.25);
+    // A zoom change rescales the previous screen rectangle for one pass.
+    // Settle that DPI event before supplying the resized viewport below.
+    let _ = ctx.run(
+        RawInput {
+            time: Some(0.0),
+            ..Default::default()
+        },
+        |_| {},
+    );
     app.font_scale = 1.35;
     let source = "let value = 1;\r\n".repeat(5000) + &"padding ".repeat(400) + "目的NEEDLE\r\n";
     content(
@@ -670,11 +679,12 @@ fn virtual_code_search_reveals_a_distant_unicode_match_on_both_axes() {
         let output = frame(
             &mut app,
             &ctx,
-            index as f64 * 0.1,
+            (index + 1) as f64 * 0.1,
             Vec::new(),
             Modifiers::NONE,
         );
         assert_eq!(app.search_match_count, 1);
+        assert_eq!(ctx.screen_rect().size(), egui::vec2(940.0, 700.0));
         assert!(app.current_scroll_offset > 90_000.0);
         let body_count = texts(&output)
             .iter()
